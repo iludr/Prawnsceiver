@@ -352,7 +352,12 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None):
             argv = ['unshare', '-rn'] + argv
         cmd = argv
         state.log_console(f"🛰 SatDump decode started ({label}): {pipeline}")
-        subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        # satdump's console output goes to a log file, NOT capture_output:
+        # a 12-min 2.4 Msps decode prints gigabytes of progress text and
+        # subprocess.run(capture_output=True) buffers ALL of it in this
+        # process's RAM (the 6 GB OOM kill on prawntenna2, 2026-10-11)
+        with open(os.path.join(out_dir, 'satdump.log'), 'wb') as slog:
+            subprocess.run(cmd, stdout=slog, stderr=slog, timeout=3600)
     except subprocess.TimeoutExpired:
         state.log_console(f"SatDump decode timed out ({label})", "warn")
         return

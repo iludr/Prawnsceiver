@@ -727,7 +727,7 @@ def ais_capture_thread(did):
     """
     from ..sdr.dsp import iq_to_complex, frequency_shift
     from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
-                        _rtl_tcp_connect, _spawn_rtl_sdr,
+                        _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                         RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
     from ..config import FFT_SIZE, IQ_BLOCK
 
@@ -872,12 +872,7 @@ def ais_capture_thread(did):
                 sock.close()
             except Exception:
                 pass
-        proc = entry.pop("proc", None)
-        if proc is not None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+        _kill_rtl_sdr(entry.pop("proc", None))
         if entry.get("closed") or not entry.get("ais") or entry.get("paused"):
             ais_reception_off()
             return

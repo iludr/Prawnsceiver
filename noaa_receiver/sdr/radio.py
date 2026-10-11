@@ -21,6 +21,7 @@ strength, so receive quality can be compared on the dashboard.
 """
 import json
 import os
+import re
 import shutil
 import socket
 import struct
@@ -195,6 +196,60 @@ def _spawn_rtl_sdr(entry, tune_hz, gain_db):
         state.log_console(f"Cannot start rtl_sdr for USB dongle {idx}: {e}", "warn")
         return None
 
+def _kill_rtl_sdr(proc):
+    """Stop an rtl_sdr child for good. A bare terminate() is NOT enough:
+    a healthy rtl_sdr exits on SIGTERM, but one blocked writing to a
+    full pipe (its reader stalled or gone) never rechecks the exit
+    flag and survives SIGTERM forever while holding the USB device -
+    observed live 2026-10-11: the role-switched dongle stayed hostage
+    to its old rtl_sdr until SIGKILL. Grace first (clean exit), then
+    an untrappable SIGKILL; wait() also reaps the zombie.
+    """
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+    except Exception:
+        pass
+    try:
+        proc.kill()
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+
+
+def usb_dongles():
+    """Enumerate the USB dongles on this host exactly the way rtl_sdr
+    itself sees them (name + serial per device index): rtl_sdr is run
+    with an out-of-range -d index, so it prints the "Found N device(s)"
+    list and exits without touching any device. The indexes shown here
+    are the very ones the capture threads use (rtl_sdr -d / "usb:<i>").
+    Returns [] when rtl_sdr is missing or the list cannot be parsed.
+    """
+    exe = shutil.which('rtl_sdr')
+    if not exe:
+        return []
+    try:
+        out = subprocess.run([exe, '-d', '99', '-f', '100000000',
+                              '-s', '240000', '-'],
+                             capture_output=True, text=True, timeout=10)
+        text = (out.stderr or '') + (out.stdout or '')
+    except Exception:
+        return []
+    dongles = []
+    for m in re.finditer(r'^\s*(\d+):\s*(.+),\s*SN:\s*(\S+)\s*$',
+                         text, re.M):
+        dongles.append({'index': int(m.group(1)),
+                        'name': m.group(2).strip(),
+                        'serial': m.group(3).strip()})
+    return dongles
+
+
 def _stop_capture(entry):
     """Close a dongle's IQ source under its capture thread (remove,
     pause, role switch): the rtl_tcp socket and/or the spawned
@@ -205,12 +260,7 @@ def _stop_capture(entry):
             sock.close()
         except OSError:
             pass
-    proc = entry.get('proc')
-    if proc is not None:
-        try:
-            proc.terminate()
-        except Exception:
-            pass
+    _kill_rtl_sdr(entry.get('proc'))
 
 # ---------- dongle registry (add/remove at runtime, persisted) ----------
 
@@ -243,7 +293,8 @@ def _persist_dongles():
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
 
-def _new_entry(did, host, port, primary, usb_idx=None):
+def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
+               usb_serial=None):
     """Fresh state.sdrs entry for one dongle address (shared by load and
     add_dongle). The primary dongle aliases the legacy waterfall globals so
     the rest of the system (status, live audio, recording) keeps working."""
@@ -256,6 +307,7 @@ def _new_entry(did, host, port, primary, usb_idx=None):
         'id': did, 'host': host, 'port': int(port),
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
         'ais': did == AIS_DONGLE, 'usb_idx': usb_idx, 'proc': None,
+        'usb_name': usb_name, 'usb_serial': usb_serial,
         'paused': False,
         'waterfall': waterfall, 'lock': lock,
         'signal': 0.0, 'last_mag': None, 'connected': False,
@@ -276,7 +328,7 @@ def add_dongle(host, port):
     Returns (did, created): the dongle id and whether it was newly added.
     """
     host = (host or '').strip().rstrip(':')
-    usb_idx = None
+    usb_idx = usb_name = usb_serial = None
     if host.lower() == 'usb':
         # Local USB dongle: "port" is the rtl_sdr device index. The id
         # stays "usb:<index>" so calibration and pinning survive
@@ -289,6 +341,13 @@ def add_dongle(host, port):
             raise ValueError('USB device index must be 0-31')
         did = f'usb:{usb_idx}'
         host = 'usb'
+        # Identity for the dashboard (waterfall titles, dongle cards):
+        # name + serial as rtl_sdr itself reports them
+        usb_name = usb_serial = None
+        for u in usb_dongles():
+            if u['index'] == usb_idx:
+                usb_name, usb_serial = u['name'], u['serial']
+                break
     else:
         try:
             port = int(port)
@@ -309,10 +368,12 @@ def add_dongle(host, port):
             if did != PRIMARY_DONGLE and PRIMARY_DONGLE is not None:
                 state.log_console(f"Configured primary dongle {PRIMARY_DONGLE} not added — using {did}", "warn")
         primary = (did == state.primary_dongle)
-        state.sdrs[did] = _new_entry(did, host, port, primary, usb_idx)
+        state.sdrs[did] = _new_entry(did, host, port, primary, usb_idx,
+                                    usb_name, usb_serial)
     if state.sdrs[did]['ais']:
         state.log_console(f"Dongle {did} dedicated to AIS (ship traffic) — excluded from satellite tracking")
-    state.log_console(f"🔌 Dongle added: {did}" + (" — primary" if primary else ""))
+    _name = f" ({usb_name}, SN {usb_serial})" if usb_idx is not None and usb_name else ""
+    state.log_console(f"🔌 Dongle added: {did}{_name}" + (" — primary" if primary else ""))
     _persist_dongles()
     return did, True
 
@@ -832,10 +893,7 @@ def sdr_capture_thread(did):
         if sock is not None:
             try: sock.close()
             except Exception: pass
-        proc = entry.pop('proc', None)
-        if proc is not None:
-            try: proc.terminate()
-            except Exception: pass
+        _kill_rtl_sdr(entry.pop('proc', None))
         close_wav()
         if entry.get('closed') or entry.get('ais') or entry.get('paused'):
             # a removed/role-switched/paused dongle never reconnects;

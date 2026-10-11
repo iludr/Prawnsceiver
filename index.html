@@ -155,7 +155,10 @@
                 </select>
                 <input id="add-dongle-host" type="text" placeholder="192.168.3.65" class="num-input" style="width:110px;" title="rtl_tcp server IP / hostname">
                 <input id="add-dongle-port" type="number" placeholder="1234" min="1" max="65535" class="num-input" style="width:64px;" title="rtl_tcp port">
-                <input id="add-dongle-usb" type="number" placeholder="0" min="0" max="31" class="num-input" style="width:44px;display:none;" title="USB device index on the receiver host (rtl_sdr -d)">
+                <select id="add-dongle-usb" class="band-select" style="display:none;max-width:230px;" title="USB dongles on the receiver host (rtl_sdr device index)">
+                    <option value="">…</option>
+                </select>
+                <button id="add-dongle-refresh" class="btn-solid" style="display:none;" onclick="fetchUsbDongles(true)" title="Re-check the USB dongles">🔄</button>
                 <button class="btn-solid" onclick="addDongle()">➕ Add</button>
             </div>
         </div>
@@ -164,6 +167,7 @@
             <div style="color:#888;" id="sat-current">idle</div>
             <div id="band-current"></div>
             <select id="band-jump" class="band-select" aria-label="Jump to a band / typical use case"></select>
+            <div id="power-status" style="font-size:0.85em;color:#888;margin-top:4px;display:none;"></div>
         </div>
     </div>
     <div id="pass-banner" class="pass-idle">Checking pass schedule...</div>
@@ -473,7 +477,8 @@
             const idx = meta.id;
             let b = wfBlocks[idx];
             if (b) {
-                b.title.textContent = `Dongle ${meta.index}${meta.primary ? ' ★' : ''} — ${meta.label} (${meta.tuner})`
+                const dname = meta.usb_name ? `${meta.usb_name}${meta.usb_serial ? ' (SN ' + meta.usb_serial + ')' : ''}` : meta.label;
+                b.title.textContent = `Dongle ${meta.index}${meta.primary ? ' ★' : ''} — ${dname} (${meta.tuner})`
                     + (meta.ais ? ' — 🚢 AIS 161.975/162.025 MHz (Danube ships)'
                         : (meta.manual_frequency_mhz ? ` — ${meta.manual_frequency_mhz.toFixed(4)} MHz` : ''));
                 b.led.className = 'indicator ' + (meta.connected ? 'green' : 'red');
@@ -790,14 +795,42 @@
             document.getElementById('add-dongle-host').style.display = usb ? 'none' : '';
             document.getElementById('add-dongle-port').style.display = usb ? 'none' : '';
             document.getElementById('add-dongle-usb').style.display = usb ? '' : 'none';
+            document.getElementById('add-dongle-refresh').style.display = usb ? '' : 'none';
+            if (usb && document.getElementById('add-dongle-usb').options.length <= 1) fetchUsbDongles(false);
+        }
+
+        async function fetchUsbDongles(force) {
+            const sel = document.getElementById('add-dongle-usb');
+            try {
+                const res = await fetch('/usb_dongles.json');
+                const data = await res.json();
+                const dongles = data.dongles || [];
+                const prev = sel.value;
+                sel.innerHTML = '';
+                if (!dongles.length) {
+                    sel.innerHTML = '<option value="">no USB dongles found</option>';
+                } else {
+                    for (const u of dongles) {
+                        const o = document.createElement('option');
+                        o.value = u.index;
+                        o.textContent = u.index + ' · ' + (u.name || '?')
+                                        + (u.serial ? ' (SN ' + u.serial + ')' : '');
+                        sel.appendChild(o);
+                    }
+                    if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+                }
+                if (force) toast(dongles.length + ' USB dongle(s) found');
+            } catch (e) {
+                sel.innerHTML = '<option value="">enumeration failed</option>';
+            }
         }
 
         async function addDongle() {
             const mode = document.getElementById('add-dongle-mode').value;
             let q;
             if (mode === 'usb') {
-                const idx = document.getElementById('add-dongle-usb').value.trim();
-                if (idx === '') { toast('Enter the USB device index (0 = first dongle, per rtl_sdr -d)', true); return; }
+                const idx = document.getElementById('add-dongle-usb').value;
+                if (idx === '') { toast('Pick a USB dongle (refresh re-checks the ports)', true); return; }
                 q = 'host=usb&port=' + encodeURIComponent(idx);
             } else {
                 const host = document.getElementById('add-dongle-host').value.trim();
@@ -811,7 +844,6 @@
                 if (data.success) {
                     document.getElementById('add-dongle-host').value = '';
                     document.getElementById('add-dongle-port').value = '';
-                    document.getElementById('add-dongle-usb').value = '';
                     toast(data.created ? ('Dongle ' + data.id + ' added — connecting...') : ('Dongle ' + data.id + ' is already registered'));
                 } else {
                     toast('Add failed: ' + (data.error || 'unknown error'), true);
@@ -2443,6 +2475,20 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
             liSstv();
         }
 
+        async function fetchPower() {
+            // Notebook power state: hidden on hosts without batteries
+            try {
+                const res = await fetch('/power.json');
+                const data = await res.json();
+                const el = document.getElementById('power-status');
+                const bats = (data.supplies || []).filter(s => s.type === 'Battery');
+                if (!bats.length) { el.style.display = 'none'; return; }
+                const batTxt = bats.map(b => `🔋 ${b.name}: ${b.capacity !== null && b.capacity !== undefined ? b.capacity + '%' : '?'} (${b.status})`).join(' · ');
+                el.textContent = (data.ac ? '⚡ AC power' : '🔌 on battery') + ' · ' + batTxt;
+                el.style.display = '';
+            } catch (e) { document.getElementById('power-status').style.display = 'none'; }
+        }
+
         async function fetchAIS() {
             try {
                 const res = await fetch('/ais.json');
@@ -2491,6 +2537,7 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
         setInterval(fetchTrack, 2000);
         setInterval(fetchCrabCount, 10000);
         setInterval(fetchAIS, 10000);
+        setInterval(fetchPower, 15000); fetchPower();
         setInterval(updateUptime, 1000);
         setInterval(liveImgTick, 250);
         document.getElementById('tune-freq').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tuneManual(); } });

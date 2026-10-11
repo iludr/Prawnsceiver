@@ -20,7 +20,8 @@ from .pages import AIS_HTML, CONSOLE_HTML, HISTORY_HTML
 from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
-from ..sdr.radio import add_dongle, remove_dongle, set_dongle_ais, set_dongle_paused
+from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_ais,
+                        set_dongle_paused, usb_dongles)
 
 def _dongle_list():
     """Dongle descriptors for status/dongles.json: primary first, then stable
@@ -39,6 +40,8 @@ def _dongle_list():
                 "port": e["port"],
                 "label": e["label"],
                 "tuner": e["tuner"],
+                "usb_name": e.get("usb_name"),
+                "usb_serial": e.get("usb_serial"),
                 "primary": e["primary"],
                 "ais": bool(e.get("ais")),
                 "paused": bool(e.get("paused")),
@@ -124,6 +127,54 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps(get_status()).encode())
+        elif self.path == '/usb_dongles.json':
+            # USB dongles on this host as rtl_sdr itself sees them
+            # (device index + name + serial) - feeds the header's
+            # add-dongle picker and its refresh button
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'dongles': usb_dongles()}).encode())
+        elif self.path == '/power.json':
+            # Host power state (notebooks): every battery with capacity
+            # and status, plus whether an external supply (AC adapter,
+            # USB-C dock, ...) is online. A machine without batteries
+            # (desktop/container) returns an empty list and the
+            # dashboard hides the display.
+            supplies = []
+            ac = False
+            pbase = '/sys/class/power_supply'
+            if os.path.isdir(pbase):
+                for pname in sorted(os.listdir(pbase)):
+                    pdir = os.path.join(pbase, pname)
+                    def rd(f, _d=pdir):
+                        try:
+                            with open(os.path.join(_d, f)) as fh:
+                                return fh.read().strip()
+                        except OSError:
+                            return ''
+                    ptype = rd('type')
+                    if ptype in ('Mains', 'USB'):
+                        online = rd('online') == '1'
+                        ac = ac or online
+                        supplies.append({'name': pname, 'type': ptype,
+                                         'online': online})
+                    elif ptype == 'Battery':
+                        status = rd('status')
+                        ac = ac or status == 'Charging'
+                        try:
+                            cap = int(rd('capacity'))
+                        except ValueError:
+                            cap = None
+                        supplies.append({'name': pname, 'type': 'Battery',
+                                         'capacity': cap, 'status': status})
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'ac': ac,
+                                        'supplies': supplies}).encode())
         elif self.path.startswith('/waterfall.json'):
             # Optional ?d=<dongle serial> (default: primary) and last=1 for
             # the newest row only (the dashboard scrolls client-side)
