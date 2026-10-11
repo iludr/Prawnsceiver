@@ -1165,20 +1165,28 @@
                     b.centerMHz = d.ais ? 162.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
                         ? d.manual_frequency_mhz : lastSharedMHz);
                     updateDongleCard(d);
-                    if (wfWsLive()) continue;   // the WebSocket pushes rows
-                    try {
-                        // last=1: only the newest row — the waterfall scrolls
-                        // client-side, the full buffer need not be transferred
-                        const r = await fetch('/waterfall.json?d=' + encodeURIComponent(d.id) + '&last=1');
-                        const data = await r.json();
-                        if (data.length > 0)
-                            wfRowIn(b, { db: null, norm: data[data.length - 1] });
-                    } catch(e) {}
                 }
                 // the overlay follows per-dongle geometry (recorded
                 // bandwidth, override frequencies) — redraw with the poll
                 if (wfOverlayOn) drawWfOverlay();
             } catch(e) { /* dongles.json unreachable — cards keep last state */ }
+        }
+
+        // Polling-fallback row fetch (only while the WebSocket is down):
+        // last=1 per dongle — the waterfall scrolls client-side, the full
+        // buffer need not be transferred. Runs at 200 ms so the fallback
+        // keeps its old ~5 rows/s rate without dragging dongles.json along.
+        async function fetchWaterfallRows() {
+            for (const idx in wfBlocks) {
+                const b = wfBlocks[idx];
+                if (b.centerMHz === null || b.centerMHz === undefined) continue;
+                try {
+                    const r = await fetch('/waterfall.json?d=' + encodeURIComponent(idx) + '&last=1');
+                    const data = await r.json();
+                    if (data.length > 0)
+                        wfRowIn(b, { db: null, norm: data[data.length - 1] });
+                } catch(e) {}
+            }
         }
 
         // ---------- Per-dongle status cards (right of the waterfalls) ----------
@@ -2669,7 +2677,11 @@
 
         // Init
         connectWaterfallWS();
-        setInterval(fetchWaterfall, 200);
+        // dongle/card state (dongles.json) at 1 Hz — the card signal
+        // history samples at 1 Hz anyway; rows come off the WebSocket,
+        // with the 200 ms /waterfall.json polling only as WS fallback
+        setInterval(fetchWaterfall, 1000);
+        setInterval(() => { if (!wfWsLive()) fetchWaterfallRows(); }, 200);
         setInterval(fetchStatus, 3000);
         setInterval(fetchPasses, 30000);
         setInterval(fetchTrack, 2000);
