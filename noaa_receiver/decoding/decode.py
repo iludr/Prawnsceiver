@@ -114,7 +114,11 @@ def _centered_cf32(iq_path, shift_hz):
     import numpy as np
     tmp = iq_path + '.centered.c32'
     st = new_state()
-    chunk = SDR_RATE * 10
+    # 100 ms of IQ per chunk: the phase-continuity state makes any chunk
+    # size correct, and this keeps every per-chunk array small. The old
+    # 10 s chunk at 2.4 Msps built a 7.7 GB rolled phasor LUT inside
+    # frequency_shift and OOM-killed the 7.2 GB notebook twice
+    chunk = SDR_RATE // 10
     with open(iq_path, 'rb') as fin, open(tmp, 'wb') as fout:
         while True:
             raw = fin.read(chunk * 2)

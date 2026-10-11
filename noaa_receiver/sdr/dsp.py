@@ -52,6 +52,13 @@ def iq_to_complex(iq_bytes):
 # back to a one-period LUT with modulo indexing.
 _phasor_luts = {}
 _MAX_ROLLED_ROWS = 64
+# Rolled-LUT element cap: the 2-D LUT holds period * n complex64
+# samples (8 bytes each), cached forever by (offset, rate, n). For the
+# 512-sample capture blocks that is nothing, but a 10 s decode chunk at
+# 2.4 Msps / 60 kHz offset stacked 40 x 24M = 7.7 GB and OOM-killed the
+# 7.2 GB notebook server twice (2026-10-11). Above this many elements
+# the one-period LUT with modulo indexing is used instead.
+_MAX_ROLLED_ELEMENTS = 4_000_000
 
 
 def frequency_shift(c, offset_hz, fs, st=None):
@@ -71,7 +78,7 @@ def frequency_shift(c, offset_hz, fs, st=None):
     if lut is None:
         period = int(fs) // gcd(int(offset_hz), int(fs))
         w = TWO_PI * offset_hz / fs
-        if period <= _MAX_ROLLED_ROWS:
+        if period <= _MAX_ROLLED_ROWS and period * n <= _MAX_ROLLED_ELEMENTS:
             base = np.exp(1j * w * np.arange(period + n)).astype(np.complex64)
             lut = np.stack([base[r:r + n] for r in range(period)])
         else:
