@@ -1,8 +1,9 @@
 """Web pages (debug console, pass history), loaded from HTML files.
 
 The markup lives in real .html files under html/ — no Python string
-escaping is involved, so JavaScript quotes are written exactly as the
-browser expects them.
+escaping is involved. The scripts live as served .js files in the
+project root (dashboard.js / console.js / history.js / ais.js); the
+HTML files carry no inline JavaScript.
 """
 import os
 
