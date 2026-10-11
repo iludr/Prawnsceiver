@@ -384,8 +384,22 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None):
         # a 12-min 2.4 Msps decode prints gigabytes of progress text and
         # subprocess.run(capture_output=True) buffers ALL of it in this
         # process's RAM (the 6 GB OOM kill on prawntenna2, 2026-10-11)
+        #
+        # Its TLE self-update is another trap: satdump curls
+        # celestrak.org on EVERY run, that host is unreachable from the
+        # station network, and libcurl waits out its full ~135 s timeout
+        # PER RETRY - observed looping there for 13+ minutes without
+        # ever starting the demodulation (2026-10-11). unshare -rn used
+        # to isolate that, but unprivileged user namespaces are denied
+        # on Ubuntu 26.04. Fix for all hosts: libcurl honors the proxy
+        # env vars, and a dead LOCAL port fails the connect in ~0 s -
+        # satdump gives up on the update instantly and proceeds with
+        # the TLEs _seed_satdump_tles wrote for it.
+        env = dict(os.environ)
+        env['http_proxy'] = env['https_proxy'] = 'http://127.0.0.1:1'
         with open(os.path.join(out_dir, 'satdump.log'), 'wb') as slog:
-            subprocess.run(cmd, stdout=slog, stderr=slog, timeout=3600)
+            subprocess.run(cmd, stdout=slog, stderr=slog, timeout=3600,
+                           env=env)
     except subprocess.TimeoutExpired:
         state.log_console(f"SatDump decode timed out ({label})", "warn")
         return
