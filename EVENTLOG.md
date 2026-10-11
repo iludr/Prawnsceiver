@@ -1460,3 +1460,45 @@ new station. AIS frames 0 so far (bad-burst triggers ticking -
 the R820T front-end story, see the 2026-10-10 overload notes).
 Band-switch restart behavior of the rtl_sdr source gets its first
 live exercise on the next ISS pass (437.55 MHz).
+
+
+### 2026-10-11 ~15:40 CEST — 🔊 Live-audio hang diagnosis: pipeline, not dongles
+
+Operator report: regular audio hangs while listening live, on the
+new USB-direct station. Diagnosis chain (all repro'd on the host):
+
+1. ROOT CAUSE of both the hangs and the 15:02 + 15:18 OOM kills:
+   frequency_shift caches a ROLLED 2-D phasor LUT of period * n
+   complex64 samples keyed by (offset, rate, n). Harmless for the
+   512-sample capture blocks; _centered_cf32's 10 s decode chunks
+   at 2.4 Msps / 60 kHz stacked 40 x 24M = 7.7 GB - cached forever.
+   The server ballooned to 6+ GB on a 7.2 GB notebook (Firefox +
+   GNOME alongside): OOM-killed mid-pass and mid-decode, and the
+   GB-scale numpy work held the GIL in long bursts - capture
+   threads stalled, live-edge listeners heard the stalls as hangs.
+   FIX: rolled LUT capped at 4M elements (else the one-period LUT
+   with modulo indexing), decode chunks 10 s -> 100 ms. Verified:
+   same decode now runs at 102-140 MB server RSS.
+2. Role-switch dongle hostage: an rtl_sdr blocked writing to a
+   full pipe (reader gone) SURVIVES SIGTERM - do_exit is never
+   rechecked - and holds the USB device forever; every respawn
+   died instantly ("Connected ... IQ stream ended" loop). Only
+   SIGKILL frees it. FIX: _kill_rtl_sdr (SIGTERM, 2 s, SIGKILL,
+   reap) used by stop/pause/role-switch and both thread cleanups.
+3. unshare -rn (SatDump network isolation) is DENIED on Ubuntu
+   26.04 ("write failed /proc/self/uid_map") - satdump never
+   started; decodes produced nothing. FIX: one-time probe, direct
+   run where denied. Consequence: satdump's celestrak.org:80
+   fetch blocks 135 s per retry here (its HTTP is blocked while
+   the station's own TLE fetch works) - decodes work, just slow;
+   the TLE seed covers geo-referencing.
+4. SatDump stdout/stderr now goes to <out>/satdump.log instead of
+   capture_output=True (which buffered GBs of decode text in the
+   server process).
+Also delivered: header add-dongle picker enumerates real USB
+dongles (rtl_sdr's own list: index + name + serial) with a
+refresh button; waterfall block titles show the dongle name/serial;
+notebook battery status (every battery + AC state) in the header.
+NOTE: prawntenna2 currently runs ON BATTERY (BAT0 79% / BAT1 52%,
+AC offline) - a station notebook should probably stay plugged in.
+Audio-hang fix wants a real re-listen during the next pass.
