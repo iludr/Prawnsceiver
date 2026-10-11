@@ -555,6 +555,17 @@ def handle_frames(payloads, channel, ch_st):
                 del reg["recent"][:len(reg["recent"]) - AIS_RECENT_MSGS]
         ch_st["frames"] += 1
         ch_st["last_frame"] = now
+        # Waterfall mark: a decoded frame on this channel becomes a
+        # red box on the dongle's scrolling waterfall (shipped to the
+        # dashboard as a type=3 WebSocket frame). Offset is the
+        # channel frequency relative to the 162.000 MHz display
+        # center: ch A = -25 kHz, ch B = +25 kHz.
+        de = state.sdrs.get(ch_st.get("dongle") or "")
+        if de is not None:
+            khz = (AIS_CHANNEL_HZ[1 if channel == "B" else 0]
+                   - AIS_CENTER_HZ) / 1000.0
+            with de["lock"]:
+                de.setdefault("wf_marks", deque(maxlen=64)).append(khz)
         log_message(entry)
         _maybe_save_ships()
 

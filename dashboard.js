@@ -964,6 +964,29 @@
                         } catch (e) { console.error('WS topic ' + topic + ' failed:', e); }
                         return;
                     }
+                    if (u[0] === 3) {
+                        // AIS frame mark: a decoded frame on this dongle -
+                        // bake a small red box at the channel frequency
+                        // into the canvas TOP, where it scrolls down with
+                        // the rows exactly like the signal itself. Baked
+                        // pixels do not survive a zoom/contrast replay.
+                        if (u.length < 3 + nlen + 2) return;
+                        const did = new TextDecoder().decode(u.subarray(3, 3 + nlen));
+                        const b = wfBlocks[did];
+                        if (!b) return;
+                        const mk = new Int16Array(ev.data.slice(3 + nlen))[0] / 10;
+                        // the box spans the 25 kHz AIS channel
+                        const x1 = wfKhzToPct(b, mk - 12) / 100 * WF_WIDTH;
+                        const x2 = wfKhzToPct(b, mk + 12) / 100 * WF_WIDTH;
+                        const xa = Math.min(x1, x2);
+                        const w = Math.max(2, Math.abs(x2 - x1));
+                        const x0 = Math.max(0, xa);
+                        if (x0 >= WF_WIDTH || xa + w <= 0) return;
+                        b.wfCtx.fillStyle = 'rgba(231, 76, 60, 0.95)';
+                        b.wfCtx.fillRect(x0, 0,
+                            Math.min(WF_WIDTH, xa + w) - x0, 3);
+                        return;
+                    }
                     if (u[0] !== 1) return;
                     if (u.length < 3 + nlen + 1024) return;
                     const did = new TextDecoder().decode(u.subarray(3, 3 + nlen));

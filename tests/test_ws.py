@@ -180,6 +180,45 @@ assert topic == "dongles", topic
 assert isinstance(payload, list) and payload and payload[0]["id"] == DID, payload[:1]
 print("5b. 'sub=dongles': immediate type=2 JSON push with the dongle list: ok")
 
+# --- 5c. AIS frame marker: type=3 frame with the kHz offset ---
+with entry['lock']:
+    entry.setdefault('wf_marks', deque(maxlen=64)).append(-25.0)
+feed(1)
+time.sleep(0.1)
+buf5c = b""
+mark = None
+deadline = time.time() + 5
+while time.time() < deadline and mark is None:
+    try:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        buf5c += chunk
+    except socket.timeout:
+        break
+    while len(buf5c) >= 2 and mark is None:
+        ln, off = buf5c[1] & 0x7F, 2          # minimal length forms
+        if ln == 126:
+            if len(buf5c) < 4:
+                break
+            ln = int.from_bytes(buf5c[2:4], 'big'); off = 4
+        elif ln == 127:
+            if len(buf5c) < 10:
+                break
+            ln = int.from_bytes(buf5c[2:10], 'big'); off = 10
+        if len(buf5c) < off + ln:
+            break
+        f5 = buf5c[off:off + ln]
+        buf5c = buf5c[off + ln:]
+        if f5[0] == 3:
+            nl5 = int.from_bytes(f5[1:3], 'big')
+            mark = (f5[3:3 + nl5].decode(),
+                    int.from_bytes(f5[3 + nl5:5 + nl5], 'little', signed=True))
+        # type=1 rows and type=2 topics: skipped
+assert mark is not None, 'no type=3 mark frame'
+assert mark[0] == DID and mark[1] == -250, mark
+print("5c. AIS marker: type=3 frame, -25.0 kHz on the dongle: ok")
+
 # --- 6. close frame terminates the server side cleanly ---
 s.sendall(bytes([0x88, 2]) + b"\x03\xe8")
 time.sleep(0.3)

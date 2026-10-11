@@ -392,9 +392,26 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 if now - tick >= 1.0 / rate:
                     tick = now
                     for did, e in list(state.sdrs.items()):
+                        marks = []
                         with e['lock']:
                             seq = e.get('wf_db_seq', 0)
                             row = e['wf_db'][-1] if len(e['wf_db']) else None
+                            if e.get('wf_marks'):
+                                # AIS frame markers: drained with the row
+                                # tick so the client can bake the red box
+                                # into the canvas top, on the matching line
+                                marks = list(e['wf_marks'])
+                                e['wf_marks'].clear()
+                        if marks:
+                            did_m = did.encode()
+                            for khz in marks:
+                                try:
+                                    conn.sendall(self._ws_frame(2,
+                                        bytes([3]) + len(did_m).to_bytes(2, 'big')
+                                        + did_m + int(round(khz * 10)).to_bytes(2,
+                                            'little', signed=True)))
+                                except (BlockingIOError, OSError):
+                                    break
                         if row is None or seq <= last_seq.get(did, 0):
                             continue
                         last_seq[did] = seq
