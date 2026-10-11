@@ -342,7 +342,12 @@
             gutter.appendChild(dbScale);
             const wrap = document.createElement('div');
             wrap.className = 'wf-wrap';
-            wrap.style.cssText = 'position:relative;flex:1;min-width:0;';
+            // display:flex: the panes are otherwise INLINE canvases, whose
+            // line boxes add a baseline descender gap between waterfall
+            // and spectrum -- the dB scale gutter could never match that.
+            // As flex items they stack exactly 300 + 4 + 110 px, like the
+            // gutter column beside them.
+            wrap.style.cssText = 'position:relative;flex:1;min-width:0;display:flex;flex-direction:column;';
             const wfCanvas = document.createElement('canvas');
             wfCanvas.width = WF_WIDTH; wfCanvas.height = WF_HEIGHT;
             wfCanvas.className = 'wf-canvas';
