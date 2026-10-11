@@ -789,9 +789,9 @@
                 ctx.setLineDash([]);
                 const delta = (mhz - b.centerMHz) * 1000;
                 let label = `${mhz.toFixed(4)} MHz (${delta >= 0 ? '+' : ''}${delta.toFixed(1)} kHz)`;
-                if (b.dbLatest) {
+                if (b.dbLatest && b.dbLatest.db) {
                     const sBin = wfSrcBin(b)(Math.min(511, Math.max(0, Math.round(frac * WF_WIDTH))));
-                    label += ` \u00b7 ${(b.dbLatest[sBin] / 10).toFixed(1)} dBFS`;
+                    label += ` \u00b7 ${(b.dbLatest.db[sBin] / 10).toFixed(1)} dBFS`;
                 }
                 ctx.font = '12px monospace';
                 const tw = ctx.measureText(label).width;
@@ -1090,6 +1090,23 @@
         // sets its own row rate with a text frame ('rate=60'). Whenever the
         // socket is not open, fetchWaterfall falls back to the
         // /waterfall.json polling (normalized rows through mapNormRow).
+        // One retained INPUT row: { db: Int16Array | null, norm: array | null }
+        // - dB rows off the WebSocket, normalized rows off the polling
+        // fallback. The ring keeps the raw input (NOT the mapped palette
+        // levels), so every control or zoom change can re-map the whole
+        // retained history via replayWaterfall - on both feed paths.
+        function wfRowIn(b, entry) {
+            b.dbRing.push(entry);
+            if (b.dbRing.length > 600) b.dbRing.shift();
+            b.dbLatest = entry;
+            if (!b.drawPending) {
+                b.drawPending = requestAnimationFrame(() => {
+                    b.drawPending = 0;
+                    const e = b.dbLatest;
+                    drawWaterfall(b, e.db ? mapDbRow(b, e.db) : mapNormRow(b, e.norm), e.db);
+                });
+            }
+        }
         let wfSocket = null, wfWsBackoff = 5000;
         function wfWsLive() { return wfSocket && wfSocket.readyState === 1; }
         function connectWaterfallWS() {
@@ -1111,15 +1128,7 @@
                     // slice(): the payload offset is byte-aligned, Int16Array
                     // needs an aligned buffer - the copy also detaches it
                     const row = new Int16Array(ev.data.slice(3 + nlen));
-                    b.dbRing.push(row);
-                    if (b.dbRing.length > 600) b.dbRing.shift();
-                    b.dbLatest = row;
-                    if (!b.drawPending) {
-                        b.drawPending = requestAnimationFrame(() => {
-                            b.drawPending = 0;
-                            drawWaterfall(b, mapDbRow(b, b.dbLatest), b.dbLatest);
-                        });
-                    }
+                    wfRowIn(b, { db: row, norm: null });
                 };
                 // back off 5 -> 10 -> 20 -> 40 -> 60 s while the socket
                 // stays unavailable (e.g. nginx not proxying it yet -
@@ -1144,7 +1153,8 @@
             b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
             if (b.timeCtx) { b.timeCtx.fillStyle = '#000'; b.timeCtx.fillRect(0, 0, 54, WF_HEIGHT); }
             b.lastTickTs = 0;
-            for (const row of b.dbRing) drawWaterfall(b, mapDbRow(b, row), row);
+            for (const e of b.dbRing)
+                drawWaterfall(b, e.db ? mapDbRow(b, e.db) : mapNormRow(b, e.norm), e.db);
         }
 
         function updateFreqLabels(freqMHz) {
@@ -1315,7 +1325,7 @@
                         const r = await fetch('/waterfall.json?d=' + encodeURIComponent(d.id) + '&last=1');
                         const data = await r.json();
                         if (data.length > 0)
-                            drawWaterfall(b, mapNormRow(b, data[data.length - 1]), null);
+                            wfRowIn(b, { db: null, norm: data[data.length - 1] });
                     } catch(e) {}
                 }
                 // the overlay follows per-dongle geometry (recorded
