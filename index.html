@@ -1090,13 +1090,14 @@
         // sets its own row rate with a text frame ('rate=60'). Whenever the
         // socket is not open, fetchWaterfall falls back to the
         // /waterfall.json polling (normalized rows through mapNormRow).
-        let wfSocket = null;
+        let wfSocket = null, wfWsBackoff = 5000;
         function wfWsLive() { return wfSocket && wfSocket.readyState === 1; }
         function connectWaterfallWS() {
             try {
                 const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
                 const ws = new WebSocket(proto + location.host + '/waterfall.ws');
                 wfSocket = ws;
+                ws.onopen = () => { wfWsBackoff = 5000; };   // reset after a good run
                 ws.binaryType = 'arraybuffer';
                 ws.onopen = () => { try { ws.send('rate=60'); } catch (e) {} };
                 ws.onmessage = ev => {
@@ -1120,9 +1121,21 @@
                         });
                     }
                 };
-                ws.onclose = () => { wfSocket = null; setTimeout(connectWaterfallWS, 5000); };
+                // back off 5 -> 10 -> 20 -> 40 -> 60 s while the socket
+                // stays unavailable (e.g. nginx not proxying it yet -
+                // browsers log one console error per attempt, a 5 s loop
+                // was noisy); reset on the first successful open
+                ws.onclose = () => {
+                    wfSocket = null;
+                    setTimeout(connectWaterfallWS, wfWsBackoff);
+                    wfWsBackoff = Math.min(60000, wfWsBackoff * 2);
+                };
                 ws.onerror = () => { try { ws.close(); } catch (e) {} };
-            } catch (e) { wfSocket = null; }
+            } catch (e) {
+                wfSocket = null;
+                setTimeout(connectWaterfallWS, wfWsBackoff);
+                wfWsBackoff = Math.min(60000, wfWsBackoff * 2);
+            }
         }
         // redraw the retained dB history: zoom and dB control changes take
         // effect on the whole waterfall immediately (SDR# behaviour)
