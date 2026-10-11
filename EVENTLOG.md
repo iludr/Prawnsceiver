@@ -1502,3 +1502,48 @@ notebook battery status (every battery + AC state) in the header.
 NOTE: prawntenna2 currently runs ON BATTERY (BAT0 79% / BAT1 52%,
 AC offline) - a station notebook should probably stay plugged in.
 Audio-hang fix wants a real re-listen during the next pass.
+
+
+### 2026-10-11 ~16:10 CEST — ⚡ Capture pipeline redesign: the real audio-hang fix
+
+The operator still heard regular audio hangs after the LUT fix,
+so the pipeline got re-measured end to end. Numbers first:
+- the Meteor recording holds 409 s of audio for a 625 s pass
+  (65%) - the CAPTURE THREAD itself was under-delivering
+- per-thread CPU: sdr-usb:0 at 83%, ais-usb:1 at 79% - both
+  threads together saturated the GIL on the 2-core i5-7200U,
+  and each only reached ~65-72% of real time; the pipes
+  back-pressured, the audio rings under-filled, and the
+  live-edge listener heard the stalls as constant stutter
+- cause: per-512-sample-block processing - ~25 numpy calls x
+  4700 blocks/s per dongle, plus 250/610-tap FIRs run as direct
+  np.convolve (0.6-1.5 GMAC/s per dongle)
+
+Redesign (both capture threads):
+- process 64 blocks (one 64 kB pipe chunk, ~13.6 ms) per
+  iteration: one iq_to_complex / offset shift / Doppler / demod
+  per batch, one audio push, one WAV write, one scheduler-state
+  snapshot (73/s instead of 4700/s lock takes). The DSP states
+  carry filter tails and phase across calls of ANY length -
+  verified sample-identical (test_dsp: batched chain within
+  1 LSB; test_ais 14: batched channel demod matches per-block)
+- dsp.convolve_valid: FFT-based FIR for inputs >= 4096 samples,
+  segmented overlap-save (~12x tap count -> 4-8k FFTs, cached
+  per-taps FFT): one big 64k FFT pair costs ~9 ms under load on
+  this CPU, segments are ~2.3x cheaper; direct loop stays for
+  small inputs
+- AIS: demod_channel_batch (one filter/discriminator/decimation
+  pass per batch, keep-mask reshape splits freq48 per sub-block)
+  preserves collect_bursts' block-granular energy model exactly
+
+Measured after (settled server, live):
+- satellite thread 83% -> 27% CPU, AIS 79% -> 75%
+- live audio delivery 99.95% of real time, ZERO gaps > 150 ms
+  (was ~65-72% with constant sub-150 ms stutter)
+Remaining: the AIS thread at ~75% is still the hottest part -
+the principled fix is a lower capture rate for the AIS dongle
+ (it only needs +/-25 kHz around 162 MHz; 2.4 Msps is 20x
+ oversampled), deliberately NOT done now (touches AIS_DEC,
+ taps, burst-block constants, rtl_sdr -s, test fixtures).
+Also: the notebook runs on battery at powersave - plugging it
+ in is recommended for pass headroom.
