@@ -1547,3 +1547,20 @@ the principled fix is a lower capture rate for the AIS dongle
  taps, burst-block constants, rtl_sdr -s, test fixtures).
 Also: the notebook runs on battery at powersave - plugging it
  in is recommended for pass headroom.
+
+
+### 2026-10-11 ~16:10 CEST — 🚢 AIS back on the R820T: the +80 ppm fallback's sign flip
+
+Outcome of the calibration review: the generic R820T's ppm
+fallback was +80 ppm while its OWN measured entries are
+-79.6 ppm (-10977 Hz @ 137.9 MHz, -34827 Hz @ 437.55 MHz). At
+the 162 MHz AIS band the fallback applied +12960 Hz where the
+truth is ~-12960 Hz - the channels sat ~26 kHz off their demod
+windows, which explains years of zero AIS frames on this dongle
+independent of the antenna/overload experiments (the 2026-10-10
+A/B blamed the front end; that A/B was run WITH the bad
+fallback active, so its conclusion needs revisiting). Fallback
+now -80 ppm -> -12960 Hz at the AIS band; the generic dongle
+immediately decodes live ship traffic again (operator-confirmed
+2026-10-11). A direct 162 MHz measurement can replace the
+fallback with an exact entry anytime.
