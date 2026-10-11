@@ -533,7 +533,10 @@
                         ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
                     }
                     const s = spanOf(drag.x0, drag.x1);
-                    const bw = Math.max(1, Math.min(120, s.bwKhz));
+                    // half the dragged width: the demod bandwidth is a
+                    // HALF-width (low-pass cutoff, the band shows ±bw)
+                    // so the label shows exactly what the drag will set
+                    const bw = Math.max(0.5, Math.min(120, s.bwKhz / 2));
                     const label = `→ ${s.center.toFixed(4)} MHz ± ${bw.toFixed(1)} kHz`;
                     ctx.font = '12px monospace';
                     const tw = ctx.measureText(label).width;
@@ -570,7 +573,10 @@
             // a band whose CENTER becomes the tune frequency and whose WIDTH
             // becomes the recorded (demod) bandwidth — one request, f + bw.
             const applyTune = (center, bwKhz) => {
-                const bw = bwKhz ? Math.max(1, Math.min(120, bwKhz)) : 0;
+                // bwKhz is the FULL dragged span; the demod bandwidth is
+                // a HALF-width (cutoff) - sending the span whole made the
+                // recorded band twice the selection
+                const bw = bwKhz ? Math.max(1, Math.min(120, bwKhz / 2)) : 0;
                 fetch('/tune_dongle?d=' + encodeURIComponent(b.serial)
                         + '&f=' + center.toFixed(4) + (bw ? '&bw=' + bw.toFixed(1) : ''))
                     .then(r => r.json())
