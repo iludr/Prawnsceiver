@@ -351,6 +351,18 @@
             const wfCanvas = document.createElement('canvas');
             wfCanvas.width = WF_WIDTH; wfCanvas.height = WF_HEIGHT;
             wfCanvas.className = 'wf-canvas';
+            // opaque from the start (a fresh canvas is transparent);
+            // the scroll buffers below break the self-referential
+            // drawImage(canvas, 0, 1) — the classic source of fixed
+            // flickering raster lines on some GPU/driver stacks,
+            // while the backing store reads back clean
+            const wfCtx0 = wfCanvas.getContext('2d');
+            wfCtx0.fillStyle = '#000';
+            wfCtx0.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
+            const wfBuf = document.createElement('canvas');
+            wfBuf.width = WF_WIDTH; wfBuf.height = WF_HEIGHT;
+            const timeBuf = document.createElement('canvas');
+            timeBuf.width = 54; timeBuf.height = WF_HEIGHT;
             const specCanvas = document.createElement('canvas');
             specCanvas.width = WF_WIDTH; specCanvas.height = SPEC_HEIGHT;
             specCanvas.className = 'wf-spec';
@@ -426,6 +438,7 @@
                 wfCtx: wfCanvas.getContext('2d'),
                 specCtx: specCanvas.getContext('2d'),
                 timeCtx, dbScaleCtx, overlay, hover, title, led, selHl, selLbl,
+                wfBufCtx: wfBuf.getContext('2d'), timeBufCtx: timeBuf.getContext('2d'),
                 block, collapseBtn, cardHolder, freqLabels,
                 serial: meta.id, centerMHz: null,
                 zoom: 1, zoomOffKHz: 0, recHl: hl, zoomBadge, satLine, satLineLbl,
@@ -775,9 +788,14 @@
         }
         function drawWaterfall(b, mappedRow, dbRow) {
             if (!mappedRow) return;
-            // scroll one row down; self-drawImage stays on the GPU — no
-            // getImageData/putImageData pixel readback every frame
-            b.wfCtx.drawImage(b.wfCtx.canvas, 0, 1);
+            // scroll one row down via the offscreen buffer: still all
+            // GPU-side (no getImageData/putImageData readback), but
+            // never self-referential — drawing a canvas onto itself
+            // rasterizes with stale-tile seams on some GPU stacks
+            // (fixed flickering lines that the backing store never
+            // shows)
+            b.wfBufCtx.drawImage(b.wfCtx.canvas, 0, 0);
+            b.wfCtx.drawImage(b.wfBufCtx.canvas, 0, 1);
             const srcBin = wfSrcBin(b);
             for (let x = 0; x < WF_WIDTH; x++) {
                 const [r, g, b2] = magnitudeToColor(mappedRow[srcBin(x)]);
@@ -787,7 +805,8 @@
             // Time gutter: scroll in lockstep; timestamp by wall clock (the
             // row rate varies with the capture rate / feed rate)
             if (b.timeCtx) {
-                b.timeCtx.drawImage(b.timeCtx.canvas, 0, 1);
+                b.timeBufCtx.drawImage(b.timeCtx.canvas, 0, 0);
+                b.timeCtx.drawImage(b.timeBufCtx.canvas, 0, 1);
                 const now = Date.now();
                 if (now - (b.lastTickTs || 0) > wfTickSec(b) * 1000) {
                     b.lastTickTs = now;
