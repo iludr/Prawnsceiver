@@ -1333,3 +1333,24 @@ capture rate went up.
 Deploy with the next restart (checked: no active pass, next NOAA 18
 13:54); verify dongles.json both connected, ais.json decoding, clean
 console, and the first 2.4 Msps pass.
+
+
+### 2026-10-11 13:30 CEST — 🔧 Dongle registry follows the notebook move (found live at the 2.4 Msps deploy restart)
+
+The deploy restart exposed that calibration.py still pointed every
+dongle constant at the dead Pi: PRIMARY_DONGLE / AIS_DONGLE /
+DEFAULT_DONGLES / both correction-dict keys were 192.168.3.245:*, so
+the boot restored ONLY the DB-registered AIS dongle (192.168.3.65:1235)
+and promoted IT to primary — no satellite dongle existed until it was
+re-added by hand, and the AIS connect ran with correction +0 Hz
+('unmeasured') because the measured-correction keys no longer matched
+the host:port. All six addresses now say 192.168.3.65 — same physical
+dongles behind the same ports, so the measured corrections carry over
+unchanged (generic R820T +80 ppm, NESDR v5 0). This also closes the
+'unmeasured dongle' regression noted when the notebook first appeared:
+the R820T gets its ~+12.9 kHz at 162 MHz back, which should cut the
+AIS bad-frame rate (was ~7-8/min/channel with the dongle 80 ppm off).
+Tests: test_radio (run twice — one earlier run tripped on port 1299
+still held by the previous suite instance, both reruns clean) and
+test_db pass. Deploy: pull + restart; expect 1234 primary on
+satellites, AIS pinned to 1235, both correction_src measured.
