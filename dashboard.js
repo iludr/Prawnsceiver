@@ -317,6 +317,21 @@
             const timeCtx = timeCanvas.getContext('2d');
             timeCtx.fillStyle = '#000';
             timeCtx.fillRect(0, 0, 54, WF_HEIGHT);
+            // dB scale gutter under the time gutter: same width and
+            // look, vertically aligned with the spectrum pane (the
+            // 4 px spacer mirrors .wf-spec margin-top)
+            const dbScale = document.createElement('canvas');
+            dbScale.width = 54; dbScale.height = SPEC_HEIGHT;
+            dbScale.className = 'wf-time';
+            dbScale.title = 'dBFS scale — Offset sets the center, Range the height';
+            const dbScaleCtx = dbScale.getContext('2d');
+            const gutter = document.createElement('div');
+            gutter.style.cssText = 'display:flex;flex-direction:column;flex-shrink:0;';
+            gutter.appendChild(timeCanvas);
+            const specGap = document.createElement('div');
+            specGap.style.height = '4px';
+            gutter.appendChild(specGap);
+            gutter.appendChild(dbScale);
             const wrap = document.createElement('div');
             wrap.className = 'wf-wrap';
             wrap.style.cssText = 'position:relative;flex:1;min-width:0;';
@@ -371,7 +386,7 @@
             wrap.appendChild(hover);
             const controls = document.createElement('div');
             controls.className = 'wf-controls';
-            row.appendChild(timeCanvas); row.appendChild(wrap); row.appendChild(controls);
+            row.appendChild(gutter); row.appendChild(wrap); row.appendChild(controls);
             // Per-block frequency labels under this dongle's waterfall
             // (each dongle can be tuned independently via overrides)
             const labels = document.createElement('div');
@@ -397,7 +412,7 @@
             b = wfBlocks[idx] = {
                 wfCtx: wfCanvas.getContext('2d'),
                 specCtx: specCanvas.getContext('2d'),
-                timeCtx, overlay, hover, title, led, selHl, selLbl,
+                timeCtx, dbScaleCtx, overlay, hover, title, led, selHl, selLbl,
                 block, collapseBtn, cardHolder, freqLabels,
                 serial: meta.id, centerMHz: null,
                 zoom: 1, zoomOffKHz: 0, recHl: hl, zoomBadge, satLine, satLineLbl,
@@ -410,6 +425,7 @@
                 accSum: null, accN: 0, rowTs: [],
             };
             controls.replaceWith(buildWfControls(b, meta));
+            drawDbScale(b);   // initial paint before the first row arrives
             wireWfInteractions(b, wrap, wfCanvas, meta);
             zoomBadge.onclick = ev => {
                 ev.stopPropagation();
@@ -770,6 +786,38 @@
             }
             drawSpectrum(b, dbRow, mappedRow, srcBin);
         }
+        // dB scale gutter left of the spectrum pane (mirrors the time
+        // gutter left of the waterfall): the dB numbers moved out of the
+        // diagram onto it; redrawn only when Offset/Range change
+        function drawDbScale(b) {
+            if (!b.dbScaleCtx) return;
+            const key = b.dbOffset + '/' + b.dbRange;
+            if (b.dbScaleKey === key) return;
+            b.dbScaleKey = key;
+            const ctx = b.dbScaleCtx;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, 54, SPEC_HEIGHT);
+            const top = b.dbOffset + b.dbRange / 2, bot = b.dbOffset - b.dbRange / 2;
+            ctx.font = '9px monospace';
+            ctx.textBaseline = 'middle';
+            for (let db = Math.ceil(bot / 20) * 20; db <= top; db += 20) {
+                const y = (top - db) / (top - bot) * SPEC_HEIGHT;
+                // number + tick, right-aligned against the spectrum pane
+                ctx.fillStyle = '#5c7290';
+                ctx.textAlign = 'right';
+                ctx.fillText(String(db), 47, Math.max(5, Math.min(SPEC_HEIGHT - 5, y)));
+                ctx.fillRect(50, Math.round(y), 3, 1);
+            }
+            // unit, rotated along the left edge
+            ctx.save();
+            ctx.translate(6, SPEC_HEIGHT / 2);
+            ctx.rotate(-Math.PI / 2);
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#5c7290';
+            ctx.fillText('dBFS', 0, 0);
+            ctx.restore();
+        }
+
         // SDR#-style spectrum pane: dBFS Y axis scaled by the same
         // offset/range view as the waterfall palette, grid + trace + the
         // green tuning line at the tracked center
@@ -779,14 +827,12 @@
             ctx.fillRect(0, 0, WF_WIDTH, SPEC_HEIGHT);
             const top = b.dbOffset + b.dbRange / 2, bot = b.dbOffset - b.dbRange / 2;
             const dbToY = db => (top - db) / (top - bot) * SPEC_HEIGHT;
-            // grid + dB labels
-            ctx.font = '9px monospace';
+            drawDbScale(b);
+            // grid lines only — the dB numbers live on the left scale
             for (let db = Math.ceil(bot / 20) * 20; db <= top; db += 20) {
                 const y = dbToY(db);
                 ctx.strokeStyle = 'rgba(15, 52, 96, 0.9)';
                 ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WF_WIDTH, y); ctx.stroke();
-                ctx.fillStyle = '#5c7290';
-                ctx.fillText(db + ' dBFS', 3, y - 1);
             }
             // trace (the palette color, so the pane reads at a glance)
             ctx.strokeStyle = '#53d769';
@@ -916,6 +962,7 @@
             b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
             if (b.timeCtx) { b.timeCtx.fillStyle = '#000'; b.timeCtx.fillRect(0, 0, 54, WF_HEIGHT); }
             b.lastTickTs = 0;
+            drawDbScale(b);
             // restart the live decimator from a clean slate
             if (b.accSum) b.accSum.fill(0);
             b.accN = 0; b.pxCarry = 0;
