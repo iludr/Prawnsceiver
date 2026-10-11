@@ -21,8 +21,12 @@ recalibrating a dongle (or plugging in a new one) never touches config.py.
 # GIL saturation + decode memory bugs, both fixed and host-independent);
 # the notebook serves both dongles again via the prawntenna manager,
 # pinned by serial: v5 48263793 -> rtl_tcp :1234 (satellites), generic
-# R820T 77771111153705700 -> :1235 (AIS).
-PRIMARY_DONGLE = "192.168.3.65:1234"
+# R820T 77771111153705700 -> :1235 (AIS). Wired Ethernet since
+# 2026-10-11 evening (192.168.3.35): WiFi could not carry 2x2.4 Msps
+# (76.8 Mbit/s over 2.4 GHz = link saturation, 50-375 ms RTT to the VM
+# and starved capture streams - THAT was the original "flaky
+# connection"; wired: 0.7 ms).
+PRIMARY_DONGLE = "192.168.3.35:1234"
 
 # AIS dongle: id of a dongle dedicated to ship-traffic reception
 # (161.975/162.025 MHz, Danube vessels -- see noaa_receiver/ais.py). AIS
@@ -30,15 +34,15 @@ PRIMARY_DONGLE = "192.168.3.65:1234"
 # excluded from satellite tracking and never becomes the primary. The
 # generic R820T (serial 77771111153705700) is rtl_tcp 192.168.3.65:1235.
 # None = off.
-AIS_DONGLE = "192.168.3.65:1235"
+AIS_DONGLE = "192.168.3.35:1235"
 
 # Dongles registered at startup when no persisted list exists yet (the
 # dashboard's "Add dongle" persists runtime additions in station.db's
 # dongles table; that table then wins over this default). One (host,
 # port) per rtl_tcp server published by the prawntenna manager.
 DEFAULT_DONGLES = [
-    ("192.168.3.65", 1234),   # NESDR SMArt v5 (serial 48263793, primary)
-    ("192.168.3.65", 1235),   # generic R820T (serial 77771111153705700, AIS)
+    ("192.168.3.35", 1234),   # NESDR SMArt v5 (serial 48263793, primary)
+    ("192.168.3.35", 1235),   # generic R820T (serial 77771111153705700, AIS)
 ]
 
 
@@ -71,7 +75,7 @@ SDR_DONGLE_CORRECTIONS = {
     # misread as the satellite: with +21600 applied, neither dongle showed
     # any APT ridge anywhere in the +/-120 kHz window during the 18:00 and
     # 19:38 NOAA 15 passes (58 deg max elevation).
-    "192.168.3.65:1235": {
+    "192.168.3.35:1235": {
         "freqs": {
             137912500: -10977,  # Meteor LRPT band (79.6 ppm x 137.91 MHz)
             437550000: -34827,  # ISS (Zarya) (79.6 ppm x 437.55 MHz)
@@ -102,7 +106,7 @@ SDR_DONGLE_CORRECTIONS = {
     # 137 MHz) is two orders of magnitude below the narrowest demodulator
     # here (DSB, 6 kHz). The 0 entries mark the dongle as measured so the
     # dashboard stops showing 'unmeasured dongle'.
-    "192.168.3.65:1234": {
+    "192.168.3.35:1234": {
         "freqs": {
             137912500: 0,   # Meteor-M 2-3 / 2-4 LRPT
             162000000: 0,   # AIS center (161.975 / 162.025 channels)
