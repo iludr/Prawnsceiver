@@ -239,14 +239,18 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
     @staticmethod
     def _ws_frame(opcode, payload):
         """One RFC 6455 server frame: FIN + opcode, unmasked (server
-        frames never are). 16-bit extended length for the dB rows
-        (~1 kB, always over the 125-byte inline limit); 64-bit length
-        for large JSON topic payloads (aislog/ais_ships/pass_history
-        can exceed 64 kB - a 16-bit length would overflow and kill
-        the socket)."""
-        if len(payload) <= 0xFFFF:
-            return bytes([0x80 | opcode, 126]) + len(payload).to_bytes(2, 'big') + payload
-        return bytes([0x80 | opcode, 127]) + len(payload).to_bytes(8, 'big') + payload
+        frames never are), MINIMAL length encoding - inline up to 125
+        bytes, 16-bit for the dB rows (~1 kB), 64-bit for large JSON
+        topic payloads (aislog/ais_ships/pass_history exceed 64 kB).
+        The minimal form is not cosmetic: RFC 6455 5.2 requires it and
+        Chromium/Edge reject non-minimal lengths as "Invalid frame
+        header", dropping the connection mid-stream."""
+        ln = len(payload)
+        if ln <= 125:
+            return bytes([0x80 | opcode, ln]) + payload
+        if ln <= 0xFFFF:
+            return bytes([0x80 | opcode, 126]) + ln.to_bytes(2, 'big') + payload
+        return bytes([0x80 | opcode, 127]) + ln.to_bytes(8, 'big') + payload
 
     def _waterfall_websocket(self):
         """WebSocket push of dBFS spectrum rows: replaces the dashboard's

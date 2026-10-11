@@ -134,10 +134,10 @@ while time.time() < deadline:
         break
     if len(buf3) >= 6 and buf3[0] == 0x8a:
         break
-# server frames always use the 16-bit extended length (126 prefix):
-# [0x8a, 126, len_hi, len_lo, payload]
-assert len(buf3) >= 8 and buf3[0] == 0x8a and buf3[1] == 126, buf3[:8]
-assert buf3[4:8] == b"ping", buf3[:8]
+# server frames use the MINIMAL length form (RFC 6455 5.2): a 4-byte
+# pong is inline - [0x8a, 4, payload]
+assert len(buf3) >= 6 and buf3[0] == 0x8a and buf3[1] == 4, buf3[:6]
+assert buf3[2:6] == b"ping", buf3[:6]
 print("4. ping answered with pong: ok")
 
 # --- 5. status.json carries the span field ---
