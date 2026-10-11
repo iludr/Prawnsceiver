@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from .. import db
 from .. import state
 from .plan import receive_plan, transmitter_status
-from ..config import LAT, LON, TRACKED_SATS, PASS_MIN_ALT, SAT_DSB_FREQ, TLE_USER_AGENT, UTC_OFFSET
+from ..config import LAT, LON, TRACKED_SATS, PASS_MIN_ALT, TLE_USER_AGENT, UTC_OFFSET
 
 try:
     from skyfield.api import load, wgs84, EarthSatellite
@@ -198,7 +198,7 @@ def passes_to_json(passes):
     """Convert pass list to JSON-serializable format for the API."""
     result = []
     for p in passes:
-        tuned = SAT_DSB_FREQ.get(p["catnr"], p["frequency"])
+        tuned = p["frequency"]
         mode, plan, demod_bw_khz, iq = receive_plan(p["catnr"], p["sat_name"])
         entry = {
             "sat_name": p["sat_name"],

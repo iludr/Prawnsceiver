@@ -39,7 +39,7 @@ def main():
     # receive plans (never on the request path — see plan.py)
     prime_transmitters()
 
-    state.log_console(f"NOAA Receiver started (Regensburg {LAT}N {LON}E)")
+    state.log_console(f"CrabArk receiver started (Regensburg {LAT}N {LON}E)")
     state.log_console(f"Auto pass tracking enabled, recording only during passes (>{PASS_MIN_ALT}°)")
     with socketserver.ThreadingTCPServer(("0.0.0.0", PORT), NOAAHandler) as httpd:
         state.log_console(f"Server running on port {PORT}")

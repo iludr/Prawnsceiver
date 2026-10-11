@@ -1,6 +1,6 @@
 """JPEG thumbnails for decoded pass images, generated on first request.
 
-Full APT decodes are ~10 MB PNGs — the pass history page loading dozens of
+Full LRPT decodes are ~10 MB PNGs — the pass history page loading dozens of
 them crawls, especially over the internet. The /thumbs/ endpoint serves a
 small preview (height 400 px, JPEG) and caches it next to the original as
 <name>.thumb.jpg; the history page shows the preview and opens the full
@@ -10,7 +10,7 @@ import os
 import tempfile
 
 THUMB_SUFFIX = '.thumb.jpg'
-THUMB_HEIGHT = 400  # px; APT previews stay readable at this height
+THUMB_HEIGHT = 400  # px; image previews stay readable at this height
 
 
 def thumb_path(png_path):

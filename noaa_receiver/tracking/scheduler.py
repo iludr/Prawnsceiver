@@ -5,13 +5,12 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .. import state
-from ..config import LAT, LON, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_DIR, RECORD_ISS, SAT_DSB_FREQ, TLE_REFRESH_HOURS, UTC_OFFSET
+from ..config import LAT, LON, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_DIR, RECORD_ISS, TLE_REFRESH_HOURS, UTC_OFFSET
 
 from ..decoding.decode import decode_recording, read_decode_marker, sat_short_name
 from ..web.history import log_pass
 from .passes import HAS_SKYFIELD, load, load_tles_from_cache, predict_passes, refresh_tles, wgs84
 from .satnogs import satellite_info
-from ..decoding.quality import estimate_quality
 
 def _doppler_hz(sat, freq_hz):
     """Live Doppler shift of the satellite's carrier at the site (Hz).
@@ -61,9 +60,8 @@ def _same_pass(p, q):
 
 def _tune_freq(p):
     """Frequency the receiver actually tunes for a pass: the satellite's
-    DSB downlink when we receive DSB for it (APT transmitter off, see
-    SAT_DSB_FREQ), else its tracked band."""
-    return SAT_DSB_FREQ.get(p.get("catnr"), p["frequency"])
+    tracked band."""
+    return p["frequency"]
 
 def scheduler_thread():
     """Background thread: refresh TLEs, predict passes, trigger frequency switches."""
@@ -164,8 +162,8 @@ def scheduler_thread():
                         tune = _tune_freq(triggered)
                         # Reflect the actually-tuned frequency in the pass
                         # dict so banner, Doppler block and history logging
-                        # all agree (Doppler at the DSB frequency follows
-                        # automatically: the block below reads this field)
+                        # all agree (Doppler follows automatically:
+                        # the block below reads this field)
                         triggered["frequency"] = tune
                         state.current_pass = triggered
                         state.current_frequency = tune
@@ -174,8 +172,7 @@ def scheduler_thread():
                         with state.signal_lock:
                             state.pass_signal_peak = 0.0
                         local_rise = triggered["rise_utc"] + timedelta(hours=UTC_OFFSET)
-                        mode = " DSB" if SAT_DSB_FREQ.get(triggered.get("catnr")) else ""
-                        state.log_console(f"🔴 PASS START: {triggered['sat_name']} {round(tune/1e6,4)} MHz{mode}, max {triggered['max_alt']:.0f}° at {local_rise.strftime('%H:%M')}")
+                        state.log_console(f"🔴 PASS START: {triggered['sat_name']} {round(tune/1e6,4)} MHz, max {triggered['max_alt']:.0f}° at {local_rise.strftime('%H:%M')}")
                     elif not triggered and state.current_pass is not None:
                         finished_pass = state.current_pass
                         local_set = finished_pass["set_utc"] + timedelta(hours=UTC_OFFSET)
@@ -188,8 +185,8 @@ def scheduler_thread():
                             state.current_frequency = manual
                             state.current_sat_name = f"Manual {manual/1e6:.4f} MHz"
                         else:
-                            state.current_frequency = 137620000
-                            state.current_sat_name = "NOAA 15 (idle)"
+                            state.current_frequency = 137912500
+                            state.current_sat_name = "idle"
                         with state.signal_lock:
                             pass_peak = state.pass_signal_peak
                             state.pass_signal_peak = 0.0
@@ -254,9 +251,6 @@ def scheduler_thread():
                                     state.log_console(f"Auto-decode successful: {os.path.basename(png_path) if png_path else 'background decode started'}")
                                 else:
                                     state.log_console(f"Auto-decode failed for {wav_base}: {err}", "error")
-                        rec_quality = estimate_quality(latest)
-                        if rec_quality is not None:
-                            state.log_console(f"Reception quality for {wav_base}: {rec_quality}%")
                         # Comparison-dongle recordings (serial-suffixed) are
                         # decoded but not part of the pass history
                         if wav_base.endswith(dongle_suffixes):
@@ -270,7 +264,6 @@ def scheduler_thread():
                             decoded = bool(rec_decoded)
                             png_file = os.path.basename(png_path) if (png_path and os.path.exists(png_path)) else None
                             wav_name = wav_base
-                            quality = rec_quality
                     # Snapshot the SatNOGS DB record with the pass: the
                     # history page shows what was tracked (names, launch,
                     # transmitters) even long after the satellite changes

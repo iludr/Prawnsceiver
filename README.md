@@ -1,28 +1,32 @@
 # Prawnsceiver — NOAAh's CrabArk
 
-A Raspberry Pi and a cheap RTL-SDR dongle turned into a fully automated NOAA
+A Raspberry Pi and a cheap RTL-SDR dongle turned into a fully automated
 weather-satellite ground station. It predicts passes, tunes the SDR to the
-right satellite at the right time, records the APT signal, decodes it into
-weather images, and serves everything on a live web dashboard.
+right satellite at the right time, records the downlink, decodes it into
+weather images (Meteor-M LRPT, ISS SSTV), and serves everything on a live
+web dashboard.
+
+The NOAA POES satellites this station was originally built around (NOAA
+15/18/19) were decommissioned Jun-Aug 2025 - the last APT carrier went
+silent on NOAA-15 on 2025-08-19 15:26 UTC and DSB with it, so the NOAA
+receive/decode paths were removed from the code on 2026-10-11. APT-era
+passes, recordings and decoded images remain in the pass history.
 
 Live at: https://prawnceiver.derusi.de
 
 ## Features
 
-- 🛰️ Auto pass tracking — skyfield-based pass prediction for NOAA 15/18/19
-  and the Russian Meteor-M 2-3/2-4 weather satellites, with automatic
+- 🛰️ Auto pass tracking — skyfield-based pass prediction for the Russian
+  Meteor-M 2-3/2-4 weather satellites and the ISS, with automatic
   frequency switching and recording during passes (above 10°)
 - 📡 Live FFT waterfall — real-time RF spectrum from raw IQ samples, with a
-  frequency-feature overlay (APT band, demod filter, DC spike)
+  frequency-feature overlay (signal band, demod filter, DC spike)
 - 🔊 Live audio — software FM demodulation streams the downlink as a
   browser-playable WAV
-- 🖼️ APT decoding — recordings are decoded to weather images with SatDump
-  (wedge-calibrated channels, false-color composite, map overlay), one
-  click from the dashboard
-- 🛰 LRPT/DSB digital decoding — Meteor LRPT (OQPSK) and NOAA DSB
-  recordings cannot be FM-demodulated: their raw IQ is decoded with SatDump
-  (meteor_m2-x_lrpt / noaa_dsb) and the composite image lands next to the
-  recording like an APT PNG
+- 🖼️ LRPT digital decoding — Meteor LRPT (OQPSK) recordings cannot be
+  FM-demodulated: the raw IQ is decoded with SatDump (meteor_m2-x_lrpt)
+  and the composite image (wedge-calibrated channels, map overlay) lands
+  next to the recording, one click from the dashboard
 - 🛰️ ISS SSTV — ISS (Zarya) passes on 437.550 MHz are tracked and recorded;
   Robot 36 images from ARISS events are decoded automatically with the sstv
   tool (`RECORD_ISS` in config.py turns ISS recording off outside events)
@@ -60,7 +64,7 @@ Live at: https://prawnceiver.derusi.de
 - Python 3 + NumPy — FFT waterfall and software FM demodulation
 - Skyfield — TLE-based pass prediction (TLEs refreshed from SatNOGS with a
   Celestrak fallback every 3 h, plus a local cache)
-- SatDump — APT (NOAA), LRPT (Meteor-M) and DSB (NOAA) downlink decoding
+- SatDump — LRPT (Meteor-M) downlink decoding
 - SQLite (Python stdlib) — station database: passes, dongles, TLEs, decode
   markers, AIS ships/messages; one-click full backup download/restore
   from the dashboard
@@ -92,7 +96,8 @@ rtl_tcp (dongle host) ──TCP IQ──▶ capture thread ──▶ FFT ──�
 ```
 
 The scheduler tunes the dongle to the next satellite 60 s before each pass
-rise and records until 60 s after set. Between passes it parks on NOAA 15.
+rise and records until 60 s after set. Between passes it parks on the
+Meteor LRPT band (137.9125 MHz).
 
 ### Repo layout
 
@@ -103,8 +108,8 @@ noaa_receiver/
 ├── config.py, calibration.py, state.py   # station core: config, dongle calibration, shared state
 │              # db.py (SQLite catalog: passes, dongles, TLEs, decode markers,
 │              #  AIS ships/messages + full backup/restore)
-├── decoding/   # decode.py (dispatch: SatDump noaa_apt / meteor_m2-x_lrpt / noaa_dsb + sstv),
-│              # quality.py (reception scoring), ais.py (AIS demod + ship database)
+├── decoding/   # decode.py (dispatch: SatDump meteor_m2-x_lrpt + sstv),
+│              # ais.py (AIS demod + ship database)
 ├── sdr/         # radio.py (rtl_tcp capture + recording), dsp.py (per-block DSP chain),
 │              # scan.py (frequency scanner)
 ├── tracking/    # scheduler.py, passes.py (TLE prediction), plan.py, satnogs.py
@@ -119,7 +124,7 @@ noaa_receiver/
 sudo apt install rtl-sdr python3-numpy nginx
 pip install skyfield
 
-# SatDump (APT / LRPT / DSB decoder)
+# SatDump (LRPT decoder)
 sudo apt install satdump
 
 # sstv (ISS SSTV decoder)

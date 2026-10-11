@@ -1354,3 +1354,43 @@ Tests: test_radio (run twice — one earlier run tripped on port 1299
 still held by the previous suite instance, both reruns clean) and
 test_db pass. Deploy: pull + restart; expect 1234 primary on
 satellites, AIS pinned to 1235, both correction_src measured.
+
+
+### 2026-10-11 14:10 CEST — 🛰 End of APT/DSB: NOAA POES purge
+
+Fact check against NOAA OSPO bulletins and community recordings:
+NOAA-18 was decommissioned 2025-06-06 17:40 UTC (S-band transmitter
+failure), NOAA-19 was passivated 2025-08-13 16:55 UTC (battery
+failure, a week early), and NOAA-15 — the last APT/DSB transmitter
+in orbit — was decommissioned 2025-08-19: APT carrier off at
+15:26:07 UTC, spacecraft confirmed decommissioned 20:37 UTC. The
+POES constellation is dark for good; no US satellite transmits
+analog weather imagery anymore.
+
+Full purge on the receiver (nothing left to receive):
+- NOAA 15/18/19 removed from TRACKED_SATS; SAT_DSB_FREQ / DSB demod
+  width and the 137.35/137.77 DSB IQ-record entries removed; IQ
+  recording now keys on 137.9125 only (both Meteors)
+- decode.py: SatDump noaa_apt and noaa_dsb paths removed
+  (meteor_m2-x_lrpt + sstv remain); unknown/untracked recordings
+  now refuse to decode instead of guessing APT
+- decoding/quality.py (APT line-sync scorer) retired; scheduler and
+  /decode no longer compute reception quality (stored history
+  values are still served)
+- dashboard: browser-side APT live renderer removed (Robot 36
+  stays), DSB overlays and NOAA quick-tune/frequency labels gone;
+  LRPT pass shows a ±60 kHz signal band
+- idle park moved 137.62 -> 137.9125 MHz; state.current_sat_name
+  idle label is now plain "idle"
+- calibration.py: dead-frequency correction entries (137.62/
+  137.1/137.35/137.77) dropped; 137.9125 + 437.55 + AIS remain
+- tests: test_decode.py + test_quality.py retired (APT/DSB
+  dispatch and scoring); fixtures renamed to Meteor/ISS. Suite:
+  test_dsp/ais/history/db/scan/lrpt/radio all pass.
+Calibration reference note: the "live DSB pass" method (and the
+GSM BTS attempt before it) is closed — 137 MHz has no narrowband
+satellite telemetry left to calibrate against; the v5 keeps its
+measured 0 (±0.3 ppm).
+Deploy: pull + systemctl --user restart (check pass_active first).
+Old NOAA recordings, _apt/_dsb product dirs and their history
+entries stay untouched and keep serving.

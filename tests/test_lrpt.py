@@ -1,4 +1,4 @@
-"""LRPT/DSB decode chain: baseband-offset measurement gates and SatDump
+"""LRPT decode chain: baseband-offset measurement gates and SatDump
 product pickup.
 
 _measure_signal_offset must find real satellite signals (wide drifting
@@ -94,7 +94,7 @@ m = measure(plateau(120_000, -60_000, -59_000), 120_000)
 check("found", m is not None, f"got {m}")
 check("centered", abs(m - (-59_500)) < 5000, f"measured {m:.0f} Hz")
 
-print("3. drifting narrow carrier (DSB-like, Doppler-swept)")
+print("3. drifting narrow carrier (narrowband, Doppler-swept)")
 m = measure(carrier(0, lo_hz=-61_500, hi_hz=-58_500), 6_000)
 check("found", m is not None, f"got {m}")
 check("centered", abs(m - (-60_000)) < 3000, f"measured {m:.0f} Hz")
@@ -103,7 +103,7 @@ print("4. STATIONARY narrow carrier = local interferer -> rejected")
 m = measure(carrier(-67_300), 120_000)
 check("rejected (None)", m is None, f"got {m}")
 m = measure(carrier(-67_300), 6_000)
-check("rejected at DSB width too", m is None, f"got {m}")
+check("rejected at the narrow window too", m is None, f"got {m}")
 
 print("5. drifting plateau + stationary interferer -> plateau wins")
 m = measure(plateau(120_000, -63_000, -57_000) + carrier(-67_300, amp=60, seed=3), 120_000)

@@ -1,4 +1,4 @@
-"""Recording decoding: SatDump (APT/LRPT/DSB), sstv (ISS Robot 36)."""
+"""Recording decoding: SatDump (LRPT), sstv (ISS Robot 36)."""
 import os
 import re
 import shutil
@@ -10,25 +10,13 @@ from .. import db
 from .. import db
 from .. import state
 
-from datetime import datetime
-
-from ..config import (SATDUMP_TIMEOUT_SECS, SAT_DSB_FREQ, SDR_OFFSET_HZ, SDR_RATE,
-                     TRACKED_SATS)
+from ..config import SDR_OFFSET_HZ, SDR_RATE, TRACKED_SATS
 from ..sdr.dsp import frequency_shift, iq_to_complex, new_state
 
 # Recording names are '<sat>_<YYYYMMDD>_<HHMMSS>[-<n>][_<serial>].wav', written by
 # radio.sdr_capture_thread via sat_short_name(). The satellite part is
 # matched lazily up to the first timestamp, so names with underscores work.
 _RECORDING_RE = re.compile(r'^(?P<sat>.+?)_(?P<ts>\d{8}_\d{6})(?:-\d+)?(?:_(?P<serial>.+))?\.wav$', re.I)
-
-# SatDump noaa_apt satellite numbers (the map overlay / projection
-# needs the right orbit)
-_NOAA_APT_SATS = {"NOAA 15": "15", "NOAA 18": "18", "NOAA 19": "19"}
-
-# Satellites received via DSB (APT transmitter off): their recordings hold
-# the DSB instrument-data stream, which the APT pipeline cannot decode
-_DSB_RECEIVE_SATS = {name for catnr, (name, _f) in TRACKED_SATS.items()
-                     if catnr in SAT_DSB_FREQ}
 
 
 def sat_short_name(sat_name):
@@ -102,15 +90,6 @@ def forget_decode_marker(wav_path):
             cur.execute("DELETE FROM decodes WHERE base=?", (base,))
     except Exception:
         pass
-
-def _satellite_freq(sat_name):
-    """The receive frequency used for a satellite's passes (its DSB
-    downlink when we receive DSB for it)."""
-    for catnr, (name, freq) in TRACKED_SATS.items():
-        if name == sat_name:
-            return SAT_DSB_FREQ.get(catnr, freq)
-    return None
-
 
 def _serial_from_filename(wav_path):
     """The dongle serial suffix of a recording name, or None (primary)."""
@@ -425,11 +404,10 @@ def _decode_iq(wav_path, pipeline, suffix, force=False):
     # itself (the dongle error is modeled, transmitters can be off their
     # nominal frequency, Doppler shifts a few kHz — see
     # _measure_signal_offset). The tuner offset is the fallback.
-    # LRPT (Meteor M2-X: 80 kbaud OQPSK) fills roughly +/-60 kHz, the DSB
-    # telemetry ~6 kHz - the window width rejects narrowband spurs, and
-    # the measurement's drift/width gates reject local carriers (see
-    # _measure_signal_offset)
-    measured = _measure_signal_offset(iq_path, 120_000 if 'lrpt' in pipeline else 6_000)
+    # LRPT (Meteor M2-X: 80 kbaud OQPSK) fills roughly +/-60 kHz - the
+    # window width rejects narrowband spurs, and the measurement's
+    # drift/width gates reject local carriers (see _measure_signal_offset)
+    measured = _measure_signal_offset(iq_path, 120_000)
     # _measure_signal_offset returns the signal's POSITION in the baseband
     # (negative Hz, e.g. -71425 for a satellite 71.4 kHz below center);
     # frequency_shift rotates BY its argument (signal at f -> f + shift),
@@ -477,22 +455,17 @@ def decode_recording(wav_path, force=False):
     output_png = _png_path(wav_path)
     sat = satellite_from_filename(wav_path)
     if sat is None:
-        state.log_console(f"Decode: no tracked satellite in the name of {os.path.basename(wav_path)} — trying SatDump APT without orbit info", "warn")
-        result = _decode_apt(wav_path, output_png, sat)
+        state.log_console(f"Decode: no tracked satellite in the name of {os.path.basename(wav_path)}", "warn")
+        result = (False, None, 'no tracked satellite in the recording name - cannot decode')
     elif sat.startswith('ISS'):
         result = _decode_sstv(wav_path, output_png)
     elif sat.startswith('Meteor'):
-        # LRPT is a ~72 kHz wide OQPSK digital mode - the APT pipeline
-        # cannot decode it, but the raw IQ capture can (meteor_m2-x_lrpt)
+        # LRPT is a ~72 kHz wide OQPSK digital mode - the FM-demod audio
+        # cannot carry it, but the raw IQ capture can (meteor_m2-x_lrpt)
         started, msg = _decode_iq(wav_path, 'meteor_m2-x_lrpt', '_lrpt', force)
         result = (started, None, f'LRPT recording - {msg}')
-    elif sat in _DSB_RECEIVE_SATS:
-        # APT transmitter off: this satellite is received via its DSB
-        # downlink (instrument telemetry) - decodable from the raw IQ
-        started, msg = _decode_iq(wav_path, 'noaa_dsb', '_dsb', force)
-        result = (started, None, f'DSB recording - {msg}')
     else:
-        result = _decode_apt(wav_path, output_png, sat)
+        result = (False, None, f'{sat} has no decoder in this station')
     _write_decode_marker(wav_path, result[0], result[2] or 'decoded')
     return result
 
@@ -527,76 +500,4 @@ def _decode_sstv(wav_path, output_png):
             image.save(f'{base}_{i}.png')
     except Exception as e:
         return False, None, f'Cannot write SSTV image: {e}'
-    return True, output_png, None
-
-
-def _recording_start_ts(wav_path):
-    """Unix timestamp of a recording's start, from its filename
-    (<sat>_<YYYYMMDD>_<HHMMSS>.wav). The capture thread names files with
-    the HOST clock and decode runs on the same host, so parsing the naive
-    name with .timestamp() yields the correct instant on any host
-    timezone. None when the name carries no timestamp."""
-    m = _RECORDING_RE.match(os.path.basename(wav_path))
-    if not m:
-        return None
-    try:
-        dt = datetime.strptime(m.group('ts'), '%Y%m%d_%H%M%S')
-        return int(dt.timestamp())
-    except ValueError:
-        return None
-
-
-def _decode_apt(wav_path, output_png, sat):
-    """Decode NOAA APT weather images with SatDump (noaa_apt pipeline).
-
-    The recording WAV is the station's 48 kHz FM-demodulated audio; the
-    pipeline's audio_wav stage demodulates the 2.4 kHz APT subcarrier
-    itself. SatDump wedge-calibrates the channels, builds a false-color
-    composite (the avhrr_*_rgb_MCIR product) and draws the map overlay
-    from its own TLE file - seeded from the receiver's TLE cache by
-    _seed_satdump_tles - geo-referenced with the recording's start
-    timestamp. satellite_number selects the orbit (a wrong orbit draws
-    a wrong map), so it is only passed for a known satellite.
-
-    Replaced noaa-apt (overlay + rotation, no calibration) so all three
-    decodes - APT, DSB, LRPT - run through one decoder. Synchronous:
-    ~2.5 min for a 12-min pass on the container (the projection solve
-    dominates; measured 2026-10-10).
-
-    A stale PNG must not count as success, and neither must leftovers
-    of an earlier attempt in the product directory: both go first.
-    """
-    exe = shutil.which('satdump')
-    if not exe:
-        return False, None, 'SatDump is not installed - cannot decode APT'
-    base, _ = os.path.splitext(wav_path)
-    out_dir = base + '_apt'
-    shutil.rmtree(out_dir, ignore_errors=True)
-    _remove_quietly(output_png)
-    _seed_satdump_tles()
-    cmd = [exe, 'noaa_apt', 'audio_wav', wav_path, out_dir]
-    sat_arg = _NOAA_APT_SATS.get(sat)
-    if sat_arg:
-        cmd += ['--satellite_number', sat_arg]
-    start_ts = _recording_start_ts(wav_path)
-    if start_ts:
-        cmd += ['--start_timestamp', str(start_ts)]
-    # Network isolation (unshare) keeps SatDump's Celestrak TLE retries
-    # from stalling the decode on this network - same as the LRPT path
-    if shutil.which('unshare'):
-        cmd = ['unshare', '-rn'] + cmd
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True,
-                                timeout=SATDUMP_TIMEOUT_SECS)
-    except subprocess.TimeoutExpired:
-        return False, None, f'Decode timeout ({SATDUMP_TIMEOUT_SECS:.0f} s)'
-    except Exception as e:
-        return False, None, f'satdump could not be run ({exe}): {e}'
-    image = _pick_product_png(out_dir)
-    if image is None:
-        output = (result.stderr or result.stdout or '').strip()
-        last_line = output.splitlines()[-1] if output else ''
-        return False, None, last_line or f'satdump exited {result.returncode} without an image'
-    shutil.copyfile(image, output_png)
-    state.log_console(f"🖼 APT decode done ({os.path.basename(wav_path)}): {os.path.basename(image)}")
     return True, output_png, None

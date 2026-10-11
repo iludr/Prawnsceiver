@@ -72,9 +72,7 @@
         .pass-row.medium { border-left-color: #f39c12; }
         .pass-row.low { border-left-color: #e74c3c; }
         .pass-mode { display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid; border-radius: 3px; font-size: 0.8em; font-weight: bold; vertical-align: middle; }
-        .pass-mode.m-apt { color: #53d769; border-color: #53d769; }
         .pass-mode.m-lrpt { color: #f39c12; border-color: #f39c12; }
-        .pass-mode.m-dsb { color: #4da6ff; border-color: #4da6ff; }
         .pass-mode.m-sstv { color: #a8b8d8; border-color: #888; }
         .pass-mode.tx-dead { color: #e74c3c; border-color: #e74c3c; }
         .pass-sat { font-weight: bold; font-size:1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -149,8 +147,8 @@
             </div>
         </div>
         <div id="freq-display" style="text-align:right;font-size:1em;">
-            <div style="color:#53d769;font-weight:bold;" id="freq-current">137.620 MHz</div>
-            <div style="color:#888;" id="sat-current">NOAA 15 (idle)</div>
+            <div style="color:#53d769;font-weight:bold;" id="freq-current">137.9125 MHz</div>
+            <div style="color:#888;" id="sat-current">idle</div>
             <div id="band-current"></div>
             <select id="band-jump" class="band-select" aria-label="Jump to a band / typical use case"></select>
         </div>
@@ -171,7 +169,7 @@
                     <canvas id="liveimg-canvas" width="909" height="900" style="width:100%;display:block;image-rendering:pixelated;"></canvas>
                     <div id="liveimg-status" style="position:absolute;top:4px;left:6px;font-size:0.85em;color:#53d769;background:rgba(0,0,0,0.6);padding:1px 6px;border-radius:3px;white-space:nowrap;">—</div>
                 </div>
-                <div style="font-size:0.85em;color:#888;margin-top:3px;">Decoded live from the FM demod audio. APT: channel A (top) / channel B (bottom). Robot 36 image builds line by line.</div>
+                <div style="font-size:0.85em;color:#888;margin-top:3px;">Decoded live from the FM demod audio. Robot 36 image builds line by line.</div>
             </div>
         </div>
     </div>
@@ -268,9 +266,8 @@
             <div class="status-item">
                 <div class="status-label">Satellite Frequencies</div>
                 <div class="status-value" style="font-size:0.85em;">
-                    NOAA 15: 137.620 MHz<br>
-                    NOAA 18: 137.9125 MHz<br>
-                    NOAA 19: 137.100 MHz<br>
+                    Meteor-M 2-3 (LRPT): 137.9125 MHz<br>
+                    Meteor-M 2-4 (LRPT): 137.9125 MHz<br>
                     ISS (SSTV Robot 36): 437.550 MHz
                 </div>
             </div>
@@ -317,7 +314,7 @@
             { lo: 87.5,    hi: 108,     name: 'FM broadcast radio', desc: 'public FM radio, RDS, always busy' },
             { lo: 108,     hi: 117.975, name: 'Aviation navigation', desc: 'VOR/ILS beacons, Morse IDs' },
             { lo: 117.975, hi: 137,     name: 'Airband (aviation voice AM)', desc: 'towers & aircraft' },
-            { lo: 137,     hi: 138,     name: 'Weather satellites (APT/LRPT)', desc: 'NOAA/Meteor imagery — this station\'s home band' },
+            { lo: 137,     hi: 138,     name: 'Weather satellites (LRPT)', desc: 'Meteor-M imagery — this station\'s home band' },
             { lo: 138,     hi: 144,     name: 'Space research / satellite downlinks', desc: 'telemetry & data' },
             { lo: 144,     hi: 146,     name: '2 m amateur band', desc: 'APRS DL at 144.8, FM calling 145.5' },
             { lo: 146,     hi: 149.9,   name: 'Commercial PMR', desc: 'taxi, utilities, mostly digital now' },
@@ -371,7 +368,7 @@
             { label: '📻 FM broadcast radio → 98.0 MHz', f: 98.0 },
             { label: '🚒 BOS 4 m fire/police (analog) → 85.5 MHz', f: 85.5 },
             { label: '✈ Airband voice AM (guard) → 121.5 MHz', f: 121.5 },
-            { label: '🛰 Weather satellites APT → 137.62 MHz', f: 137.62 },
+            { label: '🛰 Meteor LRPT downlink → 137.9125 MHz', f: 137.9125 },
             { label: '📡 APRS packet radio (DL) → 144.8 MHz', f: 144.8 },
             { label: '📻 2 m amateur FM calling → 145.5 MHz', f: 145.5 },
             { label: '🚢 Marine VHF Ch 16 → 156.8 MHz', f: 156.8 },
@@ -946,11 +943,12 @@
                 bwKhz = autoDemodKhz(c);
             }
 
-            // Expected signal band at the target center: ±17.5 kHz APT FM
-            // deviation on image satellites; the DSB stream is narrowband
-            // (~2-3 kHz) on DSB-received satellites
-            const sigHalf = (satTrackInfo && satTrackInfo.dsb) ? 2.5 : 17.5;
-            const sigName = (satTrackInfo && satTrackInfo.dsb) ? 'DSB stream ~\u00b12.5 kHz' : 'APT signal \u00b117.5 kHz';
+            // Expected signal band at the target center: ±17.5 kHz FM
+            // deviation on the ISS SSTV downlink; the Meteor LRPT stream
+            // is wide OQPSK (~±60 kHz)
+            const lrpt = !!(satTrackInfo && /meteor/i.test(satTrackInfo.name || ''));
+            const sigHalf = lrpt ? 60 : 17.5;
+            const sigName = lrpt ? 'LRPT signal \u00b160 kHz' : 'SSTV/FM signal \u00b117.5 kHz';
             ctx.fillStyle = 'rgba(83, 215, 105, 0.08)';
             ctx.fillRect(x(-sigHalf), 0, x(sigHalf) - x(-sigHalf), h);
             ctx.strokeStyle = 'rgba(83, 215, 105, 0.5)';
@@ -1054,12 +1052,9 @@
         // the next upcoming one when idle (from status.json)
         let satTrackInfo = null;
         // Auto demod width for a dongle WITHOUT a manual override:
-        // 120 kHz on broadcast FM tunes, 6 kHz on a DSB receive frequency
-        // (narrowband digital stream), else the 22 kHz satellite default
+        // 120 kHz on broadcast FM tunes, else the 22 kHz satellite default
         function autoDemodKhz(centerMHz) {
             if (centerMHz !== null && centerMHz >= 87.5 && centerMHz <= 108) return 120;
-            if (satTrackInfo && satTrackInfo.dsb && centerMHz !== null
-                    && Math.abs(centerMHz - satTrackInfo.freqMHz) < 0.0005) return 6;
             return 22;
         }
         let satRecHighlight = false;  // recording-band label shown (dedupe)
@@ -1462,7 +1457,7 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
             // mode flips arrive through dongles.json (ais flag)
             if (c.aisLast !== !!d.ais) applyDongleAisMode(c, !!d.ais);
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
-            // Signal metric: ~150 = silence floor, 800+ = strong APT carrier
+            // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise
             // doesn't peg it at 100%
             const pct = Math.max(0, Math.min(100, ((d.signal || 0) - 150) / 7));
@@ -1701,9 +1696,9 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
                 // Satellite marker target: the active pass's downlink, or
                 // the next upcoming pass when idle
                 if (data.pass_active && data.current_pass) {
-                    satTrackInfo = { name: data.current_pass.sat_name, freqMHz: data.current_pass.frequency_mhz, active: true, dsb: !!data.current_pass.dsb };
+                    satTrackInfo = { name: data.current_pass.sat_name, freqMHz: data.current_pass.frequency_mhz, active: true };
                 } else if (data.next_pass) {
-                    satTrackInfo = { name: data.next_pass.sat_name, freqMHz: data.next_pass.frequency_mhz, active: false, dsb: !!data.next_pass.dsb };
+                    satTrackInfo = { name: data.next_pass.sat_name, freqMHz: data.next_pass.frequency_mhz, active: false };
                 } else {
                     satTrackInfo = null;
                 }
@@ -1711,7 +1706,7 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
 
                 // Live image renderer follows the active pass (can be
                 // disabled below with LIVE_IMAGE_ENABLED — the code stays)
-                const liMode = /iss/i.test(data.satellite || '') ? 'sstv' : 'apt';
+                const liMode = 'sstv';
                 if (LIVE_IMAGE_ENABLED) {
                     if (data.pass_active) {
                         if (!liveImg.active || liveImg.mode !== liMode) liveImgStart(liMode);
@@ -1825,7 +1820,7 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
                     // Receive plan: what this pass is listened to with and how
                     // the recording will be decoded (hover for details)
                     const txDead = p.tx && p.tx.alive === false;
-                    const modeCls = 'pass-mode m-' + (p.mode || 'apt').toLowerCase() + (txDead ? ' tx-dead' : '');
+                    const modeCls = 'pass-mode m-' + (p.mode || '').toLowerCase() + (txDead ? ' tx-dead' : '');
                     let planTip = p.plan || '';
                     if (p.tx) planTip += `\nSatNOGS: ${p.tx.description || '?'} [${p.tx.mode || '?'}] ${p.tx.alive === false ? 'inactive' : 'active'} · ${p.tx.downlink_mhz} MHz`;
                     const modeChip = p.mode ? `<span class="${modeCls}">${p.mode}</span>` : '';
@@ -2099,7 +2094,7 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
             }
         }
 
-        // Live image rendering is disabled (browser-side APT/SSTV decode
+        // Live image rendering is disabled (browser-side SSTV decode
         // of the /live.wav stream). Set to true to re-enable — all the
         // renderer code below stays functional.
         const LIVE_IMAGE_ENABLED = false;
@@ -2108,18 +2103,12 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
             if (lip) lip.style.display = 'none';
         }
 
-        // ---------- Live image renderer (NOAA APT / ISS Robot 36) ----------
+        // ---------- Live image renderer (ISS Robot 36) ----------
         // Decodes the /live.wav FM-demod audio in the browser and paints the
         // image as it arrives, next to the polar pass view.
-        //   APT: AM on a 2400 Hz subcarrier, one 2080-px row (channel A + B)
-        //        every 0.5 s, synced on the 1040 Hz sync frame
         //   Robot 36: 1500-2300 Hz frequency tones, 320x240, 150 ms/line,
         //        synced on the 1900/1200 Hz calibration header + VIS code
         const LI_RATE = 48000;
-        const APT = {
-            PX: 4160, ROW: 2080, IMG: 909, IMG_OFF: 86, CH_B: 1040,
-            TPL: (() => { const t = [-1, -1]; for (let k = 0; k < 7; k++) t.push(1, 1, -1, -1); for (let k = 0; k < 8; k++) t.push(-1); return t; })()
-        };
         const R36 = { W: 320, H: 240, LINE_MS: 150, SYNC_MS: 9, Y_OFF_MS: 12, Y_PX_MS: 0.275, Y_WIN_MS: 2.12, C_OFF_MS: 106, C_PX_MS: 0.1375, C_WIN_MS: 1.06 };
         const liveImg = { active: false, mode: null, streaming: false, gen: 0 };
 
@@ -2234,111 +2223,14 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
         }
 
         // ---- canvas ----
-        let liAptImgA = null, liAptImgB = null, liRowImg = null, liPairImg = null;
-        function liCanvasMode(mode) {
+        let liRowImg = null, liPairImg = null;
+        function liCanvasMode() {
             const c = document.getElementById('liveimg-canvas');
             const ctx = c.getContext('2d');
-            if (mode === 'sstv') { c.width = R36.W; c.height = R36.H; liRowImg = ctx.createImageData(R36.W, 1); liPairImg = ctx.createImageData(R36.W, 2); }
-            else { c.width = APT.IMG; c.height = 900; liAptImgA = ctx.createImageData(APT.IMG, 1); liAptImgB = ctx.createImageData(APT.IMG, 1); }
+            c.width = R36.W; c.height = R36.H;
+            liRowImg = ctx.createImageData(R36.W, 1); liPairImg = ctx.createImageData(R36.W, 2);
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, c.width, c.height);
-        }
-
-        // ---- APT decoder ----
-        const aptPx = new Float32Array(1 << 16);          // 64k px ≈ 15 s ring
-        const aptScratch = new Float32Array(LI_RATE * 5); // per-tick work buffer
-        let aptPxWritten = 0, aptSyncIdx = 0;
-        let aptCandIdx = 0, aptCandCorr = -1e18, aptLastCorr = 0;
-        let aptCandHist = [];
-        let aptQueue = [], aptScale = 1e-6, aptRowsA = 0, aptRowsB = 0;
-        const aptSt = { i: 0, q: 0, e: 0, ePrev: 0, consumed: 0, resPos: 0 };
-
-        function liAptPx(absIdx) { return aptPx[absIdx & (aptPx.length - 1)]; }
-        function liAptCorr(i) {
-            let c = 0;
-            for (let j = 0; j < APT.TPL.length; j++) c += APT.TPL[j] * liAptPx(i - APT.TPL.length + 1 + j);
-            return c;
-        }
-
-        function liApt() {
-            const absEnd = liBuf.abs + liAvail();
-            const A = 0.28; // one-pole low-pass ≈ 2.5 kHz @ 48 kHz
-            while (aptSt.consumed < absEnd) {
-                const len = Math.min(absEnd - aptSt.consumed, aptScratch.length);
-                if (!liWin(aptSt.consumed, len, aptScratch)) break;
-                const base = aptSt.consumed;
-                for (let k = 0; k < len; k++) {
-                    const x = aptScratch[k];
-                    const ph = 2 * Math.PI * 2400 * (base + k) / LI_RATE;
-                    aptSt.i += A * (x * Math.cos(ph) - aptSt.i);
-                    aptSt.q += A * (x * Math.sin(ph) - aptSt.q);
-                    const e0 = Math.sqrt(aptSt.i * aptSt.i + aptSt.q * aptSt.q);
-                    aptSt.e += A * (e0 - aptSt.e);
-                    // resample to the 4160 Hz pixel rate (interpolate between envelopes)
-                    while (aptSt.resPos <= base + k) {
-                        const frac = aptSt.resPos - (base + k - 1);
-                        const v = aptSt.ePrev + (aptSt.e - aptSt.ePrev) * Math.max(0, Math.min(1, frac));
-                        aptPx[aptPxWritten & (aptPx.length - 1)] = v;
-                        aptPxWritten++;
-                        aptSt.resPos += LI_RATE / APT.PX;
-                    }
-                    aptSt.ePrev = aptSt.e;
-                }
-                aptSt.consumed += len;
-            }
-            // sync correlation on the pixel stream
-            while (aptSyncIdx < aptPxWritten) {
-                const c = liAptCorr(aptSyncIdx);
-                if (aptSyncIdx - aptCandIdx > APT.ROW * 0.8) {
-                    aptQueue.push({ idx: aptCandIdx, corr: aptCandCorr });
-                    aptCandIdx = aptSyncIdx;
-                    aptCandCorr = c;
-                } else if (c > aptCandCorr) {
-                    aptCandIdx = aptSyncIdx;
-                    aptCandCorr = c;
-                }
-                aptSyncIdx++;
-            }
-            // paint confirmed rows (data fully written, not yet overwritten)
-            while (aptQueue.length) {
-                const cand = aptQueue[0];
-                if (cand.idx + APT.ROW > aptPxWritten) break;
-                aptQueue.shift();
-                if (cand.idx < aptPxWritten - aptPx.length + APT.ROW) continue; // already overwritten
-                liAptPaintRow(cand.idx, cand.corr);
-            }
-        }
-
-        const aptRowVals = new Float32Array(APT.ROW);
-        function liAptPaintRow(idx, corr) {
-            for (let j = 0; j < APT.ROW; j++) aptRowVals[j] = liAptPx(idx + j);
-            let rowMax = 0;
-            for (let j = APT.IMG_OFF; j < APT.IMG_OFF + APT.IMG; j++) if (aptRowVals[j] > rowMax) rowMax = aptRowVals[j];
-            for (let j = APT.CH_B + APT.IMG_OFF; j < APT.CH_B + APT.IMG_OFF + APT.IMG; j++) if (aptRowVals[j] > rowMax) rowMax = aptRowVals[j];
-            aptScale = Math.max(aptScale * 0.99, rowMax);
-            const da = liAptImgA.data, db = liAptImgB.data;
-            for (let x = 0; x < APT.IMG; x++) {
-                const va = Math.max(0, Math.min(255, 255 * aptRowVals[APT.IMG_OFF + x] / aptScale));
-                const vb = Math.max(0, Math.min(255, 255 * aptRowVals[APT.CH_B + APT.IMG_OFF + x] / aptScale));
-                da[4 * x] = da[4 * x + 1] = da[4 * x + 2] = va; da[4 * x + 3] = 255;
-                db[4 * x] = 0.8 * vb; db[4 * x + 1] = vb; db[4 * x + 2] = Math.min(255, 1.15 * vb); db[4 * x + 3] = 255;
-            }
-            const ctx = document.getElementById('liveimg-canvas').getContext('2d');
-            ctx.putImageData(liAptImgA, 0, aptRowsA % 450);
-            ctx.putImageData(liAptImgB, 0, 450 + (aptRowsB % 450));
-            aptRowsA++; aptRowsB++;
-            aptLastCorr = corr;
-            // Lock = recent sync candidates agree: a real APT sync is a
-            // near-constant correlation, noise candidates are erratic.
-            aptCandHist.push(corr);
-            if (aptCandHist.length > 8) aptCandHist.shift();
-            let locked = false;
-            if (aptCandHist.length >= 3) {
-                const mean = aptCandHist.reduce((a, b) => a + b, 0) / aptCandHist.length;
-                const vr = aptCandHist.reduce((a, b) => a + (b - mean) * (b - mean), 0) / aptCandHist.length;
-                locked = mean > 0 && Math.sqrt(vr) / mean < 0.6;
-            }
-            liStatus(`APT — ${aptRowsA} rows · sync ${locked ? 'locked' : 'searching'}`);
         }
 
         // ---- Robot 36 decoder ----
@@ -2497,19 +2389,15 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
         function liveImgStart(mode) {
             liveImg.active = true;
             liveImg.gen++;
-            liveImg.mode = mode;
-            document.getElementById('liveimg-mode').textContent = mode === 'sstv' ? 'ISS Robot 36' : 'NOAA APT';
-            liCanvasMode(mode);
+            liveImg.mode = 'sstv';
+            document.getElementById('liveimg-mode').textContent = 'ISS Robot 36';
+            liCanvasMode();
             // reset all decoder state
             liBuf.start = liBuf.end = 0; liBuf.abs = 0;
             liSkip = 44; liCarry = new Uint8Array(0); liLastData = Date.now();
-            Object.assign(aptSt, { i: 0, q: 0, e: 0, ePrev: 0, consumed: 0, resPos: 0 });
-            aptPxWritten = 0; aptSyncIdx = APT.TPL.length;
-            aptCandIdx = 0; aptCandCorr = -1e18; aptLastCorr = 0;
-            aptQueue = []; aptScale = 1e-6; aptRowsA = 0; aptRowsB = 0;
             Object.assign(sstv, { scan: 0, state: 'hdr', header: -1, imageStart: -1, lineStart: -1, y: 0, Y: null, C: null, hdrStart: 0, toneRef: 0 });
             liSstv.searchShown = false;
-            liStatus(mode === 'sstv' ? 'Robot 36 — waiting for transmission…' : 'APT — waiting for signal…');
+            liStatus('Robot 36 — waiting for transmission…');
             liStream();
         }
 
@@ -2526,8 +2414,7 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
                 try { liAbort.abort(); } catch (e) {}
                 liLastData = Date.now();
             }
-            if (liveImg.mode === 'sstv') liSstv();
-            else liApt();
+            liSstv();
         }
 
         async function fetchAIS() {

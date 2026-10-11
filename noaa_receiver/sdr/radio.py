@@ -32,8 +32,7 @@ from ..calibration import (AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMARY_DONGLE,
                           SDR_DONGLE_GAIN, correction_info, tuning_correction)
 from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION, DONGLES_FILE,
                      FFT_SIZE, IQ_BLOCK, IQ_RECORD_FREQS, LOGDIR, RECORD_DIR,
-                     SAT_DSB_DEMOD_BW_HZ, SAT_DSB_FREQ, SDR_GAIN,
-                     SDR_OFFSET_HZ, SDR_RATE, WATERFALL_ROWS)
+                     SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE, WATERFALL_ROWS)
 
 from ..decoding.decode import sat_short_name
 from .dsp import doppler_shift, fm_demodulate, frequency_shift, iq_to_complex, new_state
@@ -474,7 +473,7 @@ def sdr_capture_thread(did):
         entry['wav'] = wav
         entry['wav_path'] = path
         entry['is_recording'] = True
-        # Digital modes (DSB, LRPT) on this frequency also capture the raw
+        # Digital modes (LRPT) on this frequency also capture the raw
         # IQ baseband next to the audio — the demod audio cannot carry them
         entry['iq'] = None
         if tuned_freq in IQ_RECORD_FREQS:
@@ -646,8 +645,8 @@ def sdr_capture_thread(did):
                 # keeps flowing, so there is no restart gap and the live
                 # audio does not cut out. A running WAV is closed first so
                 # one file never spans two bands. A pass switch between two
-                # satellites SHARING a frequency (NOAA 19 / Meteor-M 2-3 at
-                # 137.1, NOAA 18 / Meteor-M 2-4 at 137.9125) needs no
+                # satellites SHARING a frequency (Meteor-M 2-3 / 2-4 at
+                # 137.9125) needs no
                 # retune, but the WAV is closed and reopened all the same so
                 # one file never spans two passes.
                 # Name for a (re)opened WAV: the tracked satellite during a
@@ -703,7 +702,7 @@ def sdr_capture_thread(did):
                 # live audio ring and its own WAV). Broadcast FM (manual radio
                 # test tunes) deviates ±75 kHz, so the whole ±120 kHz capture
                 # band is demodulated and only the audio is low-passed;
-                # satellite APT/SSTV keeps the narrow 22 kHz.
+                # satellite SSTV keeps the narrow 22 kHz.
                 # Demod channel width = what the WAV and live audio carry:
                 # the manual per-dongle override if set (bw_hz), else the
                 # mode default (full ±120 kHz on broadcast FM, 22 kHz on
@@ -713,11 +712,8 @@ def sdr_capture_thread(did):
                     if FM_BAND[0] <= freq_now <= FM_BAND[1]:
                         audio = fm_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz, audio_cutoff_hz=18000, st=dst)
                     else:
-                        # Auto demod width: DSB receive frequencies carry a
-                        # narrowband digital stream — 6 kHz instead of the
-                        # 22 kHz APT default tightens the recording SNR
-                        auto_bw = SAT_DSB_DEMOD_BW_HZ if freq_now in SAT_DSB_FREQ.values() else 22000
-                        audio = fm_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz or auto_bw, st=dst)
+                        # Auto demod width: the narrow 22 kHz satellite default
+                        audio = fm_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz or 22000, st=dst)
                 except Exception:
                     audio = b''
                 if audio:

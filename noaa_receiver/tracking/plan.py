@@ -10,8 +10,7 @@ import threading
 import time
 
 from . import satnogs
-from ..config import (RECORD_ISS, SAT_DSB_DEMOD_BW_HZ, SAT_DSB_FREQ,
-                     TRACKED_SATS)
+from ..config import RECORD_ISS, TRACKED_SATS
 
 # catnr -> matching transmitter dict (or None: fetched, no match / DB down).
 # Absent = not fetched yet — the pass list omits the tx details until then.
@@ -22,10 +21,6 @@ _loader_started = False
 def receive_plan(catnr, sat_name):
     """(mode, plan, demod_bw_khz or None, iq_recording) for a pass."""
     name = (sat_name or '').lower()
-    if catnr in SAT_DSB_FREQ:
-        return ('DSB',
-                'DSB instrument telemetry (APT transmitter off) — raw IQ recording, SatDump noaa_dsb',
-                SAT_DSB_DEMOD_BW_HZ // 1000, True)
     if 'meteor' in name:
         return ('LRPT',
                 'LRPT digital weather image — raw IQ recording, SatDump meteor_m2-x_lrpt',
@@ -38,12 +33,11 @@ def receive_plan(catnr, sat_name):
         return ('SSTV',
                 'SSTV Robot 36 (only during ARISS events) — audio recording, sstv decoder',
                 None, False)
-    return ('APT', 'APT analog weather image — audio recording, SatDump PNG',
-            None, False)
+    return (None, 'no receive plan for this satellite', None, False)
 
 
 def _tuned_freq(catnr):
-    return SAT_DSB_FREQ.get(catnr, TRACKED_SATS.get(catnr, (None, 0))[1])
+    return TRACKED_SATS.get(catnr, (None, 0))[1]
 
 
 def _match_transmitter(info, freq_hz):

@@ -126,7 +126,7 @@ def get_recordings():
                                             / (1024*1024), 1)}
                           if os.path.exists(path.replace('.wav', '.iq.u8')) else None,
                     # Every generated decode product (SatDump product
-                    # directories next to the recording, e.g. <base>_apt/):
+                    # directories next to the recording, e.g. <base>_lrpt/):
                     # the history page links them all instead of one image
                     "products": [
                         {"name": pname,

@@ -6,7 +6,7 @@ Run: python3 tests/test_scan.py (needs numpy). Asserts:
   window at +SDR_OFFSET_HZ (a spike there must never win the peak search)
 - _signal_width_hz measures a synthetic hump's occupied width and
   refuses to measure noise
-- fit_bw_hz maps width -> demod cutoff (APT-like signal -> ~22 kHz) and
+- fit_bw_hz maps width -> demod cutoff (wideband signal -> ~22 kHz) and
   clamps to the 1-120 kHz range
 - the scan thread end-to-end against a fake dongle entry whose feeder
   is TUNE-AWARE (signals sit at absolute frequencies and land at 0 Hz
@@ -74,11 +74,11 @@ assert scan._signal_width_hz(noise_row(5)) == 0.0, "noise must measure zero widt
 print(f"2. _signal_width_hz: hump {w/1000:.1f} kHz, noise refused: ok")
 
 # --- 3. fit_bw_hz ---
-apt = scan.fit_bw_hz(34000)          # APT-like: ~34 kHz occupied
-assert 21000 <= apt <= 24000, apt     # ... maps to the ~22 kHz demod default
+wide = scan.fit_bw_hz(34000)          # wideband: ~34 kHz occupied
+assert 21000 <= wide <= 24000, wide   # ... maps to the ~22 kHz demod default
 assert scan.fit_bw_hz(200) == 1000    # clamp at the bottom
 assert scan.fit_bw_hz(400000) == 120000  # clamp at the top (full band)
-print(f"3. fit_bw_hz: 34 kHz signal -> {apt/1000:g} kHz cutoff, clamps hold: ok")
+print(f"3. fit_bw_hz: 34 kHz signal -> {wide/1000:g} kHz cutoff, clamps hold: ok")
 
 # --- 4. scan thread end-to-end (fake dongle entry + tune-aware feeder) ---
 # Speed the dwell windows up: wrap _sample with a short-but-sufficient

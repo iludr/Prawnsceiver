@@ -70,9 +70,7 @@ SDR_DONGLE_CORRECTIONS = {
     # 19:38 NOAA 15 passes (58 deg max elevation).
     "192.168.3.65:1235": {
         "freqs": {
-            137620000: -10955,  # NOAA 15 (79.6 ppm x 137.62 MHz)
-            137912500: -10977,  # NOAA 18
-            137100000: -10913,  # NOAA 19
+            137912500: -10977,  # Meteor LRPT band (79.6 ppm x 137.91 MHz)
             437550000: -34827,  # ISS (Zarya) (79.6 ppm x 437.55 MHz)
         },
         "fm_band": -8200,  # VHF2: tunes ~8 kHz HIGH (carriers 6-11 kHz below nominal, measured on 89.7/93.0/95.0/99.6/103.0/105.0)
@@ -96,11 +94,7 @@ SDR_DONGLE_CORRECTIONS = {
     # dashboard stops showing 'unmeasured dongle'.
     "192.168.3.65:1234": {
         "freqs": {
-            137620000: 0,   # NOAA 15
-            137912500: 0,   # NOAA 18 / Meteor-M 2-4 LRPT
-            137100000: 0,   # NOAA 19 APT freq / Meteor-M 2-3 LRPT
-            137350000: 0,   # NOAA 18 DSB
-            137770000: 0,   # NOAA 19 DSB (the measured frequency: +0.3 ppm)
+            137912500: 0,   # Meteor-M 2-3 / 2-4 LRPT
             162000000: 0,   # AIS center (161.975 / 162.025 channels)
             437550000: 0,   # ISS (Zarya)
         },

@@ -85,8 +85,8 @@ manual_recording = {}
 # applies to; doppler_hz is 0 outside passes.
 doppler_hz = 0
 doppler_freq_hz = 0
-current_frequency = 137620000
-current_sat_name = "NOAA 15 (idle)"
+current_frequency = 137912500  # idle park: the Meteor LRPT band
+current_sat_name = "idle"
 is_recording = False
 is_pass_active = False
 # Global recording pause (dashboard switch): while set, the capture threads

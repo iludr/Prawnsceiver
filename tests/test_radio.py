@@ -138,17 +138,17 @@ def wavs(): return sorted(glob.glob(os.path.join(radio.RECORD_DIR, '*.wav')))
 wait_for(lambda: entry['last_data'] > 0 and len(entry['waterfall']) > 3, what='IQ flowing')
 wait_for(lambda: entry['la']['total'] > 10, what='live audio')
 assert entry['connected'] and not entry['is_recording']
-expect_cmd(137620000)   # explicit tune on connect (fresh daemons park at 137.68 MHz)
+expect_cmd(137912500)   # explicit tune on connect (state.current_frequency park)
 want_rate = (2, SDR_RATE)
 wait_for(lambda: want_rate in commands, what='sample-rate command on connect')
 commands.remove(want_rate)
 assert last_doppler['d'] == 0
 print("1 idle: streaming, waterfall rows, live audio, no retune OK")
 
-# 2. pass start NOAA 19 @137.1 + doppler
-set_sched(137100000, "NOAA 19", True)
+# 2. pass start Meteor-M 2-4 @137.1 + doppler
+set_sched(137100000, "Meteor-M 2-4", True)
 expect_cmd(137100000)
-wait_for(lambda: entry['is_recording'] and 'NOAA_19_' in os.path.basename(entry['wav_path'] or ''), what='NOAA 19 wav')
+wait_for(lambda: entry['is_recording'] and 'Meteor-M_2-4_' in os.path.basename(entry['wav_path'] or ''), what='Meteor-M 2-4 wav')
 assert state.is_recording and state.current_wav_path == entry['wav_path']
 with state.status_lock:
     state.doppler_hz, state.doppler_freq_hz = 2000, 137100000
@@ -183,7 +183,7 @@ wait_for(lambda: entry['is_recording'], what='recording resumes after override c
 print("5 dongle override: retune out/in, recording paused/resumed OK")
 
 # 6. pass end
-set_sched(137620000, "NOAA 15 (idle)", False)
+set_sched(137620000, "idle", False)
 expect_cmd(137620000)
 wait_for(lambda: not entry['is_recording'] and not state.is_recording and state.current_wav_path is None, what='pass end closes WAV')
 for p in wavs():
@@ -231,7 +231,7 @@ def failing_wave_open(path, mode='rb'):
     return real_wave_open(path, mode)
 wave.open = failing_wave_open
 sessions_before = srv.sessions
-set_sched(137912500, "NOAA 18", True)
+set_sched(137912500, "Meteor-M 2-4", True)
 expect_cmd(137912500)
 time.sleep(1.5)
 print("   7 diag: recording=", entry['is_recording'], "connected=", entry['connected'],
@@ -239,7 +239,7 @@ print("   7 diag: recording=", entry['is_recording'], "connected=", entry['conne
 assert not entry['is_recording'] and entry['connected'] and srv.sessions == sessions_before, "receiver reconnected on a WAV open failure"
 fail_wav_open['fail'] = False
 wait_for(lambda: entry['is_recording'], secs=3, what='WAV open retried')
-set_sched(137620000, "NOAA 15 (idle)", False); expect_cmd(137620000)
+set_sched(137620000, "idle", False); expect_cmd(137620000)
 wait_for(lambda: not entry['is_recording'], what='pass end')
 print("7 WAV open failure: no reconnect, retried after WAV_RETRY_SECS OK")
 
@@ -251,17 +251,17 @@ wait_for(lambda: entry['last_data'] > time.time() - 1, what='streaming again')
 print("8 network drop mid-stream: reconnected and streaming again OK")
 
 # 9. same satellite reopened within one second must not overwrite
-set_sched(137100000, "NOAA 19", True); expect_cmd(137100000)
+set_sched(137100000, "Meteor-M 2-4", True); expect_cmd(137100000)
 wait_for(lambda: entry['is_recording'], what='rec')
 set_sched(137100000, "Meteor-M 2-3", True)
-wait_for(lambda: entry['wav_path'] and 'Meteor' in entry['wav_path'], what='split')
-set_sched(137100000, "NOAA 19", True)
-wait_for(lambda: entry['wav_path'] and 'NOAA_19' in entry['wav_path'], what='split back')
-set_sched(137620000, "NOAA 15 (idle)", False); expect_cmd(137620000)
+wait_for(lambda: entry['wav_path'] and 'Meteor-M_2-3_' in entry['wav_path'], what='split')
+set_sched(137100000, "Meteor-M 2-4", True)
+wait_for(lambda: entry['wav_path'] and 'Meteor-M_2-4' in entry['wav_path'], what='split back')
+set_sched(137620000, "idle", False); expect_cmd(137620000)
 wait_for(lambda: not entry['is_recording'], what='end')
 names = [os.path.basename(p) for p in wavs()]
-assert len(names) == len(set(names)) and len([n for n in names if n.startswith('NOAA_19_')]) >= 3, names
-print("9 unique names on fast re-split:", [n for n in names if 'NOAA_19' in n])
+assert len(names) == len(set(names)) and len([n for n in names if n.startswith('Meteor-M_2-4_')]) >= 3, names
+print("9 unique names on fast re-split:", [n for n in names if 'Meteor-M_2-4' in n])
 
 # 9b. AIS switch (dashboard button): the capture thread role flips — the
 # satellite thread exits, the AIS thread tunes 162 MHz and marks the

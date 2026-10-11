@@ -1,1 +1,1 @@
-"""Decoders: recording decode dispatch, reception quality, AIS."""
+"""Decoders: recording decode dispatch, AIS."""

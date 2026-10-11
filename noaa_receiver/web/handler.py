@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .. import db
 from .. import state
-from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS, SAT_DSB_FREQ,
+from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    PASS_HISTORY_FILE, RECORD_DIR, UTC_OFFSET, WEBDIR)
 
 from ..decoding import ais
@@ -20,7 +20,6 @@ from .pages import AIS_HTML, CONSOLE_HTML, HISTORY_HTML
 from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
-from ..decoding.quality import estimate_quality
 from ..sdr.radio import add_dongle, remove_dongle, set_dongle_ais, set_dongle_paused
 
 def _dongle_list():
@@ -93,7 +92,6 @@ def get_status():
         status["current_pass"] = {
             "sat_name": cur_pass["sat_name"],
             "catnr": cur_pass["catnr"],
-            "dsb": cur_pass.get("catnr") in SAT_DSB_FREQ,
             "frequency_mhz": round(cur_pass["frequency"] / 1e6, 4),
             "max_alt": cur_pass["max_alt"],
             "set_local": (cur_pass["set_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%H:%M"),
@@ -107,8 +105,7 @@ def get_status():
         if p["rise_utc"] > now:
             status["next_pass"] = {
                 "sat_name": p["sat_name"],
-                "dsb": p.get("catnr") in SAT_DSB_FREQ,
-                "frequency_mhz": round(SAT_DSB_FREQ.get(p.get("catnr"), p["frequency"]) / 1e6, 4),
+                "frequency_mhz": round(p["frequency"] / 1e6, 4),
                 "rise_local": (p["rise_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%a %d.%m %H:%M"),
                 "max_alt": p["max_alt"],
                 "duration_min": p["duration_min"],
@@ -436,8 +433,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                     # During a pass the scheduler owns the frequency: parking
                     # here would record the idle band under the pass's name
                     if not state.is_pass_active:
-                        state.current_frequency = 137620000
-                        state.current_sat_name = "NOAA 15 (idle)"
+                        state.current_frequency = 137912500
+                        state.current_sat_name = "idle"
                 state.log_console("🛰 Manual tune off — satellite tracking resumed")
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -843,11 +840,9 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 return
             output_png = wav_path.replace('.wav', '.png')
             decoded, png_path, err = decode_recording(wav_path, force=force)
-            # Reception quality: reuse the pass-end value if present, otherwise
-            # analyze the recording now (takes a few seconds on a Pi)
+            # Reception quality: only the stored pass-end value remains
+            # (the APT sync-quality scorer was retired with APT)
             quality = quality_map().get(filename)
-            if quality is None:
-                quality = estimate_quality(wav_path)
             if quality is not None:
                 set_recording_quality(filename, quality)
             if decoded:
@@ -1003,7 +998,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(f.read())
         elif self.path.startswith('/products/'):
             # Decode products live in subdirectories next to their
-            # recording (<base>_apt/, _lrpt/, _dsb/). Serve exactly one
+            # recording (e.g. <base>_lrpt/; NOAA-era decodes left _apt/_dsb
+            # directories, still served). Serve exactly one
             # directory level, sanitized: the path must be
             # /products/<dir>/<file> with no traversal.
             from urllib.parse import unquote
