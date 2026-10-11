@@ -322,6 +322,30 @@ def _seed_satdump_tles():
         pass   # best effort - SatDump runs without TLEs, just without maps
 
 
+_UNSHARE_OK = None
+
+def _unshare_ok():
+    """unshare -rn (network namespace for the SatDump run, so its Celestrak
+    TLE retries cannot stall the decode - see _satdump_decode) is not
+    available everywhere: Ubuntu 26.04 restricts unprivileged user
+    namespaces ("write failed /proc/self/uid_map", observed on
+    prawntenna2). Probed once; a failing probe runs SatDump without
+    isolation (the TLEs are seeded by _seed_satdump_tles either way)."""
+    global _UNSHARE_OK
+    if _UNSHARE_OK is None:
+        exe = shutil.which('unshare')
+        if not exe:
+            _UNSHARE_OK = False
+        else:
+            try:
+                _UNSHARE_OK = subprocess.run([exe, '-rn', 'true'],
+                                             capture_output=True,
+                                             timeout=10).returncode == 0
+            except Exception:
+                _UNSHARE_OK = False
+    return _UNSHARE_OK
+
+
 def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None):
     """Decode a raw IQ recording with SatDump (runs minutes on the Pi — the
     caller spawns this detached so the scheduler never blocks on it). The
@@ -352,7 +376,7 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None):
         # come from _seed_satdump_tles instead.
         argv = [exe, pipeline, 'baseband', baseband, out_dir,
                 '--samplerate', str(SDR_RATE), '--baseband_format', fmt]
-        if shutil.which('unshare'):
+        if _unshare_ok():
             argv = ['unshare', '-rn'] + argv
         cmd = argv
         state.log_console(f"🛰 SatDump decode started ({label}): {pipeline}")
