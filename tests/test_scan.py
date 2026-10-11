@@ -165,7 +165,9 @@ assert abs(sc["found_hz"] - SIG_ABS) <= 2000, sc["found_hz"]   # re-centered on 
 assert abs(state.manual_dongle_freq[SERIAL] - SIG_ABS) <= 2000, "dongle not parked on the find"
 assert sc["found_ratio"] >= 3.0
 bw = state.manual_dongle_bw.get(SERIAL)
-assert bw and 14000 <= bw <= 24000, f"fitted bandwidth off: {bw}"
+# one BIN_HZ of slack: _signal_width_hz counts whole bins, so the fitted
+# BW quantizes a bin high when the bins get coarse (2.4 MHz capture)
+assert bw and 14000 <= bw <= 24000 + BIN_HZ, f"fitted bandwidth off: {bw}"
 snap = scan.scan_snapshot(SERIAL)
 assert abs(snap["found_mhz"] - 99.95) < 0.005 and snap["bw_khz"] == round(bw / 1000, 1)
 assert snap["active"] is False

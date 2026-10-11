@@ -184,7 +184,11 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
     Returns None when nothing passes the gates.
     """
     import numpy as np
-    n_fft = 4096
+    # ~234 Hz measurement bins at ANY capture rate (4096 at 960 kHz): the
+    # width gate below compares a bin-quantized width against absolute Hz,
+    # so coarse bins would pass a narrow stationary carrier as "wide" (its
+    # five-bin core measures 2.9 kHz at 2.4 MHz - over the 2.7 kHz DSB gate)
+    n_fft = 4096 * SDR_RATE // 960000
     bin_hz = SDR_RATE / n_fft
     # Hann-window the segments: a strong carrier under a boxcar FFT
     # splatters a sinc skirt above the noise test across tens of kHz,
@@ -224,7 +228,7 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
     # is receiver noise (the +SDR_OFFSET_HZ DC spike is a few bins and
     # cannot move a median). The full-spectrum median would sit ON a
     # plateau that fills half the capture - exactly the LRPT geometry
-    # (a 120 kHz signal in a 960 kHz recording) - and the score gate
+    # (a 120 kHz signal in a 2.4 MHz recording) - and the score gate
     # would reject the satellite it just found.
     med = float(np.median(avg[n_fft // 2:]))
     half = max(1, int(signal_bw_hz / 2 / bin_hz))

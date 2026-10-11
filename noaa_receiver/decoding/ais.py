@@ -4,7 +4,7 @@ The dongle at calibration.AIS_DONGLE (a remote rtl_tcp server) is
 dedicated to AIS (it does not join the satellite tracking). It is tuned
 to 162.000 MHz — the
 midpoint of the two AIS channels — so both channels land at +/-25 kHz
-inside one 960 kHz capture, and each is demodulated from the same IQ
+inside one 2.4 MHz capture, and each is demodulated from the same IQ
 stream: per-channel offset rotation -> 14 kHz low-pass -> FM
 discriminator -> 48 kHz (5 samples/bit at 9600 baud).
 
@@ -52,14 +52,22 @@ from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
 from ..config import (AIS_CENTER_HZ, AIS_CHANNEL_HZ, 
                      AIS_LOG_KEEP_HOURS, AIS_RECENT_MSGS, 
                      AIS_SHIPS_SAVE_SECS, AIS_SHIP_TTL_SECS,
-                     LOGDIR, SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE,
+                     FFT_SIZE, IQ_BLOCK, LOGDIR, SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE,
                      WATERFALL_ROWS)
 
-# Discriminator decimation: 960 kHz -> 48 kHz = 20 samples per AIS bit
+# Discriminator decimation: 2.4 MHz -> 48 kHz = 50x decimation
 AIS_BITRATE = 9600
 assert SDR_RATE % 48000 == 0, "AIS demod needs SDR_RATE to be a 48 kHz multiple"
 AIS_DEC = SDR_RATE // 48000
 AIS_FS = SDR_RATE // AIS_DEC
+# A demod block is IQ_BLOCK/2 complex samples, so its duration shrinks as
+# SDR_RATE rises; the thresholds below hold their absolute values (an AIS
+# slot is 26.7 ms of RF regardless of the capture rate) by scaling with it.
+_BLK_S = (IQ_BLOCK // 2) / SDR_RATE   # block duration, seconds
+AIS_MIN_BURST_BLOCKS = max(2, round(1.07e-3 / _BLK_S))   # ~1 ms shortest burst
+AIS_MAX_BURST_BLOCKS = max(48, round(25.6e-3 / _BLK_S))  # ~26 ms = one AIS slot
+AIS_WF_BLOCKS = max(8, round(4.27e-3 / _BLK_S))          # ~4 ms per waterfall row
+_SIG_BINS = max(1, round(39375 / (SDR_RATE / FFT_SIZE)))  # +/-39 kHz around the band center
 
 # ---------- HDLC / CRC primitives (transmitted-bit order) ----------
 
@@ -386,7 +394,7 @@ def _sinc_taps(cutoff_hz, numtaps, fs=SDR_RATE):
     h = np.sinc(2 * cutoff_hz / fs * m) * np.hamming(numtaps)
     return (h / h.sum()).astype(np.float64)
 
-# 244 taps at 960 kHz: -3 dB ~11 kHz, stopband by ~25 kHz — the same
+# 610 taps at 2.4 MHz: -3 dB ~11 kHz, stopband by ~25 kHz — the same
 # absolute selectivity 61 taps gave at 240 kHz; taps must scale with
 # SDR_RATE or the wider transition band floods the demod with adjacent
 # noise (measured 2026-10-10: 61 taps at 960 kHz ~1700 bad frames/min,
@@ -394,7 +402,7 @@ def _sinc_taps(cutoff_hz, numtaps, fs=SDR_RATE):
 # dongle's DC spike (60 kHz, offset-tuned) are far outside;
 # adjacent-channel 25 kHz marine voice would leak only at its edges.
 # 14 kHz design cutoff keeps the whole GMSK spectrum.
-_AIS_TAPS = _sinc_taps(14000, 244)
+_AIS_TAPS = _sinc_taps(14000, 610)
 
 def new_channel_state():
     """Fresh per-channel DSP state (one per AIS channel, per dongle)."""
@@ -437,13 +445,15 @@ def demod_channel_block(c, st):
     st["dec_pos"] = (st["dec_pos"] + len(freq)) % AIS_DEC
     return freq[start::AIS_DEC], energy
 
-def collect_bursts(freq48, energy, st, max_blocks=48):
+def collect_bursts(freq48, energy, st, max_blocks=AIS_MAX_BURST_BLOCKS):
     """Noise-floor tracking + burst assembly: append a channel block to
     the open burst while it is active; when it goes quiet again the
     closed burst (48 kHz freq samples) is returned for decoding.
 
     AIS slots are 26.7 ms with a >=3 ms quiet guard between them, so a
-    threshold on the block energy (2.13 ms resolution) separates bursts.
+    threshold on the block energy separates bursts (block counts scale
+    with SDR_RATE - see AIS_MIN/MAX_BURST_BLOCKS - so the burst
+    assembly holds the same absolute time at any capture rate).
     """
     if st["floor"] is None:
         st["floor"] = energy
@@ -459,8 +469,8 @@ def collect_bursts(freq48, energy, st, max_blocks=48):
             closed.append(np.concatenate(st["burst"]))
             st["burst"] = []
     elif st["burst_open"]:
-        # one quiet block ends the burst (guard 3 ms > one 2.13 ms block)
-        if len(st["burst"]) >= 2:
+        # one quiet block ends the burst (guard 3 ms spans several blocks)
+        if len(st["burst"]) >= AIS_MIN_BURST_BLOCKS:
             closed.append(np.concatenate(st["burst"]))
         st["burst"] = []
         st["burst_open"] = False
@@ -803,14 +813,14 @@ def ais_capture_thread(did):
                 # convention as the satellite cards (their thread shifts
                 # the baseband to the tracked frequency before the FFT).
                 block_count += 1
-                if block_count % 8 == 0 and len(c) >= FFT_SIZE:
+                if block_count % AIS_WF_BLOCKS == 0 and len(c) >= FFT_SIZE:
                     try:
                         window = _get_fft_window()
                         magnitude = np.abs(np.fft.fftshift(np.fft.fft(c[:FFT_SIZE] * window)))
                         center = len(magnitude) // 2
                         with entry["lock"]:
                             entry["signal"] = float(
-                                magnitude[center - 21:center + 21].mean())
+                                magnitude[center - _SIG_BINS:center + _SIG_BINS].mean())
                             peak = magnitude.max()
                             if peak > 0:
                                 magnitude *= 255.0 / peak

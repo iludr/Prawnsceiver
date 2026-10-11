@@ -1275,3 +1275,61 @@ MHz antenna plus a time-domain blink test (FCCH has 1.2% duty,
 spurs are continuous) would be the way; TETRA BOS 380-400 MHz
 (GPS-locked) remains untested. Operational: dongle unpaused after
 each sweep, receiver self-reconnected every time.
+
+
+### 2026-10-11 13:25 CEST — 🚀 High-rate mode x2.5: 2.4 Msps capture (prawntenna now on a notebook)
+
+The dongle host moved off the Pi: prawntenna runs on a notebook at
+192.168.3.65 now (same rtl_tcp ports 1234/1235, same two dongles).
+The Pi's hard limit was the shared USB bus; a live A/B on the notebook
+this morning (11:56-11:57, both dongles recording simultaneously at
+960 kHz for 66 s: WAVs 6771450 vs 6763820 bytes, 0.1% apart, no
+console errors) showed the host is no longer the bottleneck, so the
+capture rate went up.
+
+- SDR_RATE 960000 -> 2400000. 2.4 Msps = 48000 x 50, a 48 kHz
+  multiple — REQUIRED: the AIS demod asserts it at import, and both
+  demods decimate by SDR_RATE//48000. 2.56 Msps (the RTL-SDR
+  advertised max) is NOT a multiple and would need a 160:3 rational
+  resampler in both demod paths; user chose the clean 2.4.
+- FIR taps scaled with the rate (the 2026-10-10 selectivity rule):
+  satellite FIR_TAPS 100 -> 250, AIS _AIS_TAPS 244 -> 610. test_dsp
+  at 2.4 Msps: -3 dB ~19 kHz, -55.7 dB at 40 kHz — identical absolute
+  numbers to 960 kHz/100 taps.
+- What was silently block-count-based scaled to hold absolute time:
+  - AIS burst assembly (ais.py collect_bursts): min 2 -> 5 blocks
+    (~1.07 ms), max 48 -> 120 (~25.6 ms = one AIS slot). At 2.4 Msps a
+    demod block is 0.21 ms, so the old max_blocks=48 split every real
+    AIS frame into undecodable fragments — test_ais end-to-end
+    scenario caught it (decoded 0 frames), passes after the scaling.
+  - FFT cadence: FFT_EVERY 8 -> 20 blocks (~4 ms of RF between FFTs,
+    the CPU budget per its radio.py comment); AIS waterfall the same.
+  - Signal metrics hold their Hz width so history stays comparable:
+    satellite band window +/-10 bins -> +/-18.75 kHz constant,
+    AIS card +/-21 bins -> +/-39.375 kHz constant (both computed from
+    SDR_RATE now).
+- decode.py _measure_signal_offset: n_fft 4096 -> 4096 * SDR_RATE //
+  960000 (10240 at 2.4 Msps, ~234 Hz bins at any rate). With n_fft
+  fixed, the width gate compares a bin-quantized width against
+  absolute Hz: a stationary carrier's five-bin core measured 2.9 kHz
+  at 586 Hz bins — OVER the 2.7 kHz DSB gate, so the 137.905 land-
+  mobile interferer would have been mistaken for the satellite
+  (test_lrpt scenario 4 failed, passes after the scaling).
+- test_scan: fitted-BW bound gains one BIN_HZ of slack
+  (_signal_width_hz counts whole bins).
+- Tests at 2.4 Msps on the dev PC: test_dsp, test_ais, test_radio,
+  test_scan, test_quality, test_history, test_lrpt, test_db ALL PASS
+  (test_decode still fails on Windows — pre-existing, missing
+  noaa-apt wiring). CPU check: 610-tap AIS filter conv = 168 ms per
+  second of stream on the dev PC (was 24 ms at 100 taps/960 kHz);
+  the container has headroom, verify RSS/CPU on the console after
+  the first passes.
+- USB load ~4.8 MB/s per dongle (was 1.9); the "never record two
+  dongles at once" caution stands — the dual test above was at 960
+  kHz, the same test at 2.4 Msps is still pending.
+- Same caveat as the 960 kHz switch: decode assumes .iq.u8 recordings
+  were made at the CURRENT SDR_RATE — do not re-decode pre-2026-10-11
+  IQ recordings. Decode chunk memory ~192 MB transient (was 77).
+Deploy with the next restart (checked: no active pass, next NOAA 18
+13:54); verify dongles.json both connected, ais.json decoding, clean
+console, and the first 2.4 Msps pass.

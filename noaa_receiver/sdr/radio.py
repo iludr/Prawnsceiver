@@ -39,10 +39,10 @@ from ..decoding.decode import sat_short_name
 from .dsp import doppler_shift, fm_demodulate, frequency_shift, iq_to_complex, new_state
 
 # Waterfall/signal FFT cadence: compute the FFT only every Nth IQ block. The
-# dashboard draws ~5 rows/s, so ~234 rows/s (1875 blocks/s / 8) is still 40x
+# dashboard draws ~5 rows/s, so ~234 rows/s (960 kHz: 1875 blocks/s / 8) is still 40x
 # oversampled. At full block rate the FFT + row conversion (~1 ms/block on the
 # Pi) starved the demod once two dongles were attached.
-FFT_EVERY = 8
+FFT_EVERY = max(8, round(0.00427 * SDR_RATE / (IQ_BLOCK // 2)))  # ~4 ms of RF between FFTs at any SDR_RATE (8 blocks at 960 kHz)
 
 # Retry interval for a WAV that could not be opened/written (disk full etc.)
 WAV_RETRY_SECS = 10.0
@@ -602,7 +602,11 @@ def sdr_capture_thread(did):
                             fft_result = np.fft.fftshift(np.fft.fft(windowed))
                             magnitude = np.abs(fft_result)
                             center = len(magnitude) // 2
-                            band = float(magnitude[center-10:center+10].mean())
+                            # signal metric: ~+/-18.75 kHz around the tracked
+                            # carrier (constant Hz width, so signal peaks stay
+                            # comparable across SDR_RATE changes)
+                            half = max(1, round(18750 / (SDR_RATE / FFT_SIZE)))
+                            band = float(magnitude[center-half:center+half].mean())
                             with entry['lock']:
                                 entry['signal'] = band
                                 # Raw (pre-normalization) row for the scanner

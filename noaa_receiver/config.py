@@ -31,7 +31,7 @@ WATERFALL_ROWS = 120
 # Gain: 0 = auto (RTL-SDR AGC), or fixed dB like 35. Auto adapts to signal
 # strength during passes, which is better than a fixed value.
 SDR_GAIN = 0  # auto-gain
-SDR_RATE = 960000
+SDR_RATE = 2400000
 # Offset tuning: rtl_sdr tunes SDR_OFFSET_HZ above the target frequency and the
 # signal is shifted back to baseband in software. This moves the dongle's
 # inherent center DC spike off the satellite signal (it would otherwise sit
@@ -81,7 +81,7 @@ SAT_DSB_FREQ = {
 SAT_DSB_DEMOD_BW_HZ = 6000
 
 # Passes on these frequencies also record the RAW IQ stream (u8 complex,
-# 960 kHz -> ~1.9 MB/s per dongle) next to the demod audio WAV: DSB and
+# 2.4 MHz -> ~4.8 MB/s per dongle) next to the demod audio WAV: DSB and
 # Meteor LRPT are digital modes the FM-demod audio cannot carry — decoding
 # (SatDump) needs the baseband. APT/SSTV passes stay audio-only.
 IQ_RECORD_FREQS = {
@@ -117,7 +117,7 @@ DOPPLER_UPDATE_SECS = 10  # scheduler tick cadence; steps stay < ~1 kHz on ISS
 
 # AIS (ship traffic on the Danube; see noaa_receiver/ais.py): both AIS
 # channels (A: 161.975 MHz, B: 162.025 MHz) sit at +/-25 kHz around this
-# center, inside one 960 kHz capture - a dongle dedicated to AIS (pinned
+# center, inside one 2.4 MHz capture - a dongle dedicated to AIS (pinned
 # by calibration.AIS_DONGLE) demodulates both from the same IQ stream
 # and is excluded from satellite tracking.
 AIS_CENTER_HZ = 162000000

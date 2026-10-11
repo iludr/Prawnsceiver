@@ -39,7 +39,7 @@ def write_iq(path, c):
 
 
 def floor(seed):
-    """Broadband receiver noise floor (full 960 kHz capture)."""
+    """Broadband receiver noise floor (full 2.4 MHz capture)."""
     rng = np.random.default_rng(seed)
     n = int(DUR * FS)
     return (rng.standard_normal(n) + 1j * rng.standard_normal(n)) * 10.0
