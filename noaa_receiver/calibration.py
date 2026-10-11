@@ -75,14 +75,14 @@ SDR_DONGLE_CORRECTIONS = {
             437550000: -34827,  # ISS (Zarya) (79.6 ppm x 437.55 MHz)
         },
         "fm_band": -8200,  # VHF2: tunes ~8 kHz HIGH (carriers 6-11 kHz below nominal, measured on 89.7/93.0/95.0/99.6/103.0/105.0)
-        # ppm fallback REMOVED 2026-10-11, pending re-measurement on
-        # prawntenna2: the +80 entry contradicted this dongle's OWN
-        # measured values (-10977 Hz @ 137.9 MHz / -34827 Hz @ 437.55
-        # MHz, both -79.6 ppm) - at the 162 MHz AIS band it applied
-        # +12960 Hz where the measurements trend to ~-13 kHz, mistuning
-        # the AIS channels right out of their demod windows. Unlisted
-        # frequencies now get zero correction ("none" in the infobox).
-        "ppm": None,
+        # ppm fallback, correctly signed since 2026-10-11: the old +80
+        # entry contradicted this dongle's OWN measured values
+        # (-10977 Hz @ 137.9 MHz / -34827 Hz @ 437.55 MHz, both
+        # -79.6 ppm) and mistuned the 162 MHz AIS band by +26 kHz.
+        # -80 ppm follows the measurements' trend (-12960 Hz at the
+        # AIS band); a direct measurement on prawntenna2 would still
+        # be better than the fallback.
+        "ppm": -80,
     },
     # NESDR SMArt v5 (R820T2 + 0.5 ppm TCXO), measured 2026-10-10 during
     # high-rate mode (960 kHz capture, 1875 Hz FFT bins):

@@ -816,9 +816,9 @@ def ais_capture_thread(did):
             correction = tuning_correction(AIS_CENTER_HZ, did)
             tune = AIS_CENTER_HZ + SDR_OFFSET_HZ + correction
             # shown in the dongle card's tuning infobox, like the satellite
-            # capture threads (no ppm fallback since 2026-10-11: the R820T's
-            # +80 ppm entry contradicted its own measured -80 ppm values,
-            # mistuning the AIS band by +13 kHz; re-measure before re-adding)
+            # capture threads (the ppm fallback is -80 ppm since
+            # 2026-10-11, matching the measured values' sign: the old
+            # +80 entry mistuned the AIS band by +26 kHz)
             entry["correction"], entry["correction_src"] = correction_info(AIS_CENTER_HZ, did)
             gain_db = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
             if entry.get("usb_idx") is not None:
