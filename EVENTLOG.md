@@ -1593,3 +1593,22 @@ Everything from 2026-10-11 ships on both paths: the USB/rtl_sdr
 support stays in the code (usable if the station ever runs on a
 dongle host again), the batched pipeline and the decode fixes are
 host-independent.
+
+
+### 2026-10-11 ~17:10 CEST — 📶 Plot twist: WiFi was the flaky link all along
+
+Right after the move back to the VM the audio hangs RETURNED -
+localhost delivery was down to 35k B/s of 96k with 62 gaps per
+30 s, at ~0% receiver CPU and a clean console: the capture threads
+were starved by the DATA not arriving. Ping notebook -> VM:
+50-375 ms with 90 ms jitter on a "LAN" hop. Cause: the notebook
+was on 2.4 GHz WiFi (channel 6), and 2x2.4 Msps of rtl_tcp is
+76.8 Mbit/s - beyond what a 2.4 GHz link carries (40-60 Mbit/s
+real-world), so the two streams saturated and starved each other.
+THE ORIGINAL "FLAKY CONNECTION" PREMISE WAS RIGHT - at the network
+layer, not rtl_tcp: the old Pi was wired and ran 960 kHz (1/2.5x
+the data); the notebook on WiFi at 2.4 Msps never had a chance.
+Fix: wired Ethernet (192.168.3.35, WiFi off) - 0.7 ms RTT,
+live audio 95,945 B/s = 99.9% of real time, ZERO gaps.
+Dongle ids re-keyed to 192.168.3.35:1234/:1235 (dashboard runtime
+swap + calibration); corrections unchanged.
