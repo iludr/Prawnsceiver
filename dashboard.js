@@ -9,6 +9,16 @@
         let tleSyncClickAt = 0;
         let tleSyncWasActive = false;
         const WF_WIDTH = 512, WF_HEIGHT = 300, SPEC_HEIGHT = 110;
+        // Waterfall time axis: the canvas height is fixed; the per-dongle
+        // Time slider decides how much history those 300 px cover
+        // (2 s ... 2 min). Incoming rows are averaged into the pixel
+        // they land in, so a longer range lowers the line resolution,
+        // never the canvas height
+        const WF_TIME_MIN = 2, WF_TIME_MAX = 120, WF_TIME_DEFAULT = 5;
+        // dB row ring: long enough for the longest slider range at the
+        // WebSocket push rate (120 s x 60 rows/s = 7200 rows, ~7 MB per
+        // dongle) — replayWaterfall decimates from it on any change
+        const DB_RING_CAP = 7200;
         // Capture span (kHz covered by the 512-bin FFT = SDR_RATE).
         // Set from status.json's sdr_khz - NEVER hardcoded again: the
         // pre-WebSocket frontend assumed 240 kHz from the original
@@ -202,11 +212,13 @@
             b.dbContrast = saved.contrast !== undefined ? saved.contrast : 1;
             b.dbRange = saved.range !== undefined ? saved.range : 80;
             b.dbOffset = saved.offset !== undefined ? saved.offset : -70;
+            b.tRangeSec = saved.time !== undefined ? saved.time : WF_TIME_DEFAULT;
             const el = document.createElement('div');
             el.className = 'wf-controls';
             const save = () => { try {
                 localStorage.setItem('wfctl.' + meta.id, JSON.stringify(
-                    { contrast: b.dbContrast, range: b.dbRange, offset: b.dbOffset }));
+                    { contrast: b.dbContrast, range: b.dbRange, offset: b.dbOffset,
+                      time: b.tRangeSec }));
             } catch (e) {} };
             const mk = (label, min, max, step, value, fmt, oninput) => {
                 const wrap = document.createElement('div');
@@ -245,11 +257,18 @@
                 v => { b.dbRange = v; save(); replayWaterfall(b); });
             mk('Offset', -140, 0, 1, b.dbOffset, v => v.toFixed(0) + ' dB',
                 v => { b.dbOffset = v; save(); replayWaterfall(b); });
+            const tVal = v => Math.min(WF_TIME_MAX, Math.max(WF_TIME_MIN,
+                Math.round(WF_TIME_MIN * Math.pow(2, v / 100 * Math.log2(WF_TIME_MAX / WF_TIME_MIN)))));
+            const tRaw = t => Math.round(Math.log2(t / WF_TIME_MIN) / Math.log2(WF_TIME_MAX / WF_TIME_MIN) * 100);
+            mk('Time', 0, 100, 1, tRaw(b.tRangeSec || WF_TIME_DEFAULT),
+                v => { const t = tVal(v); return t < 60 ? t + ' s' : (t / 60).toFixed(1) + ' min'; },
+                v => { b.tRangeSec = tVal(v); save(); replayWaterfall(b); });
             const rst = document.createElement('button');
             rst.textContent = 'Reset view';
             rst.onclick = () => {
                 b.zoom = 1; b.zoomOffKHz = 0;
                 b.dbContrast = 1; b.dbRange = 80; b.dbOffset = -70;
+                b.tRangeSec = WF_TIME_DEFAULT;
                 save();
                 updateZoomBadge(b); updateFreqLabels(lastSharedMHz);
                 el.replaceWith(buildWfControls(b, meta));
@@ -383,8 +402,12 @@
                 serial: meta.id, centerMHz: null,
                 zoom: 1, zoomOffKHz: 0, recHl: hl, zoomBadge, satLine, satLineLbl,
                 // dB spectrum state: ring of recent int16 dB*10 rows,
-                // newest row, and the SDR#-style control values
+                // newest row, the SDR#-style control values, and the
+                // time-range decimation state (pxCarry/accSum/accN;
+                // rowTs feeds the row-rate estimate)
                 dbRing: [], dbLatest: null, drawPending: 0,
+                tRangeSec: WF_TIME_DEFAULT, pxCarry: 0,
+                accSum: null, accN: 0, rowTs: [],
             };
             controls.replaceWith(buildWfControls(b, meta));
             wireWfInteractions(b, wrap, wfCanvas, meta);
@@ -737,7 +760,7 @@
             if (b.timeCtx) {
                 b.timeCtx.drawImage(b.timeCtx.canvas, 0, 1);
                 const now = Date.now();
-                if (now - (b.lastTickTs || 0) > 10000) {
+                if (now - (b.lastTickTs || 0) > wfTickSec(b) * 1000) {
                     b.lastTickTs = now;
                     b.timeCtx.fillStyle = '#a8b8d8';
                     b.timeCtx.font = '11px monospace';
@@ -785,6 +808,26 @@
             }
         }
 
+        // Row-rate estimate: the WebSocket pushes ~60 rows/s, the polling
+        // fallback far less — the time-range decimation needs the actual
+        // rate. Rolling window over the last 240 row timestamps
+        // (= 4 s at the WebSocket rate)
+        function estRowsPerSec(b) {
+            const t = b.rowTs;
+            if (t.length < 12) return 60;
+            const dt = (t[t.length - 1] - t[0]) / 1000;
+            if (dt < 0.5) return 60;
+            return (t.length - 1) / dt;
+        }
+        // Time-gutter tick step: a nice round spacing that yields
+        // roughly 5 labels across the currently shown range
+        function wfTickSec(b) {
+            const want = (b.tRangeSec || WF_TIME_DEFAULT) / 5;
+            for (const sec of [1, 2, 5, 10, 15, 30, 60, 120, 300, 600])
+                if (sec >= want) return sec;
+            return 600;
+        }
+
         // ---------- WebSocket dB row push (/waterfall.ws) ----------
         // One socket for all dongles; binary frames
         // [type=1][u16be id_len][id utf8][512 x int16le dB*10]. The client
@@ -798,14 +841,32 @@
         // retained history via replayWaterfall - on both feed paths.
         function wfRowIn(b, entry) {
             if (!entry.db && entry.norm) entry.db = normToDb(entry.norm);
+            b.rowTs.push(performance.now());
+            if (b.rowTs.length > 240) b.rowTs.shift();
             b.dbRing.push(entry);
-            if (b.dbRing.length > 600) b.dbRing.shift();
+            if (b.dbRing.length > DB_RING_CAP) b.dbRing.shift();
             b.dbLatest = entry;
+            // Time-range decimation: the canvas height is fixed and the
+            // Time slider sets the covered span, so every incoming row
+            // advances pxPerRow pixel rows — rows landing in the same
+            // pixel are averaged into it. More range = coarser lines,
+            // never a taller canvas.
+            if (!b.accSum) b.accSum = new Float64Array(512);
+            for (let i = 0; i < 512; i++) b.accSum[i] += entry.db[i];
+            b.accN++;
+            b.pxCarry += WF_HEIGHT / Math.max(1, estRowsPerSec(b) * (b.tRangeSec || WF_TIME_DEFAULT));
             if (!b.drawPending) {
                 b.drawPending = requestAnimationFrame(() => {
                     b.drawPending = 0;
-                    const e = b.dbLatest;
-                    drawWaterfall(b, mapDbRow(b, e.db), e.db);
+                    let n = Math.floor(b.pxCarry);
+                    if (n <= 0) return;
+                    b.pxCarry -= n;
+                    if (n > WF_HEIGHT) n = WF_HEIGHT;
+                    const mean = new Int16Array(512);
+                    for (let i = 0; i < 512; i++) mean[i] = Math.round(b.accSum[i] / b.accN);
+                    b.accSum.fill(0); b.accN = 0;
+                    const mapped = mapDbRow(b, mean);
+                    for (let k = 0; k < n; k++) drawWaterfall(b, mapped, mean);
                 });
             }
         }
@@ -855,8 +916,32 @@
             b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
             if (b.timeCtx) { b.timeCtx.fillStyle = '#000'; b.timeCtx.fillRect(0, 0, 54, WF_HEIGHT); }
             b.lastTickTs = 0;
-            for (const e of b.dbRing)
-                drawWaterfall(b, mapDbRow(b, e.db), e.db);
+            // restart the live decimator from a clean slate
+            if (b.accSum) b.accSum.fill(0);
+            b.accN = 0; b.pxCarry = 0;
+            // redraw the retained history decimated to the CURRENT time
+            // range: rate x range rows (clamped to what the ring holds),
+            // averaged exactly like the live path so old and new lines
+            // end up with the same resolution
+            const want = Math.max(1, Math.round(estRowsPerSec(b) * (b.tRangeSec || WF_TIME_DEFAULT)));
+            const rows = b.dbRing.slice(-want);
+            const pxPerRow = WF_HEIGHT / Math.max(1, rows.length);
+            const sum = new Float64Array(512);
+            let n = 0, carry = 0;
+            for (const e of rows) {
+                for (let i = 0; i < 512; i++) sum[i] += e.db[i];
+                n++;
+                carry += pxPerRow;
+                let k = Math.floor(carry);
+                if (k > 0) {
+                    carry -= k;
+                    const mean = new Int16Array(512);
+                    for (let i = 0; i < 512; i++) mean[i] = Math.round(sum[i] / n);
+                    const mapped = mapDbRow(b, mean);
+                    for (let j = 0; j < k; j++) drawWaterfall(b, mapped, mean);
+                    sum.fill(0); n = 0;
+                }
+            }
         }
 
         function updateFreqLabels(freqMHz) {
