@@ -1306,6 +1306,7 @@
             c.scanRow.style.display = sat;
             c.scanRow2.style.display = sat;
             c.secTune.style.display = sat;
+            c.modeRow.style.display = sat;
             c.secBw.style.display = sat;
             c.secScan.style.display = sat;
             c.recBtn.style.display = sat;
@@ -1512,6 +1513,37 @@
                     .catch(() => { bwFit.disabled = false; toast('Bandwidth fit failed: receiver unreachable', true); });
             };
             bwRow.appendChild(bwInput); bwRow.appendChild(bwSet); bwRow.appendChild(bwFit); bwRow.appendChild(bwList);
+            // Demodulator mode: what the capture thread demodulates into
+            // the live audio and the WAV. Auto = FM everywhere except the
+            // airband (118-137 MHz) which demodulates AM.
+            const modeRow = document.createElement('div');
+            modeRow.style.cssText = 'display:flex;gap:4px;align-items:center;margin-top:4px;font-size:0.85em;';
+            const modeSel = document.createElement('select');
+            modeSel.style.cssText = 'flex:1;min-width:0;background:#0f3460;border:1px solid #53d769;color:#e0e0e0;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:0.9em;cursor:pointer;';
+            modeSel.title = 'Demodulator for live audio and recordings';
+            for (const [val, label] of [['auto', 'Auto'], ['fm', 'FM'], ['am', 'AM'],
+                                        ['usb', 'USB'], ['lsb', 'LSB'], ['cw', 'CW']]) {
+                const o = document.createElement('option');
+                o.value = val; o.textContent = label;
+                modeSel.appendChild(o);
+            }
+            const modeHint = document.createElement('span');
+            modeHint.style.cssText = 'flex:0 0 auto;color:#888;font-size:0.9em;';
+            modeRow.appendChild(modeSel); modeRow.appendChild(modeHint);
+            const sn_mode = d.id;
+            modeSel.addEventListener('change', () => {
+                const v = modeSel.value;
+                fetch('/tune_dongle?d=' + encodeURIComponent(sn_mode) + '&mode=' + v)
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(v === 'auto' ? '🎙 Demod back to auto' : '🎙 Demod mode: ' + v.toUpperCase());
+                        } else {
+                            toast('Mode change failed: ' + (data.error || 'unknown error'), true);
+                        }
+                    })
+                    .catch(() => toast('Mode change failed: receiver unreachable', true));
+            });
             // Frequency scan: sweep this dongle start\u2192end and park it
             // on the next strong signal (/scan_dongle; see scan.py). The
             // button doubles as Stop while a scan runs; the status line
@@ -1629,6 +1661,8 @@
             card.appendChild(secRec); card.appendChild(recRow);
             const secTune = mkSec('Tuning');
             card.appendChild(secTune); card.appendChild(tuneRow); card.appendChild(nudgeRow);
+            const secMode = mkSec('Demodulator');
+            card.appendChild(secMode); card.appendChild(modeRow);
             const secBw = mkSec('Recorded bandwidth');
             card.appendChild(secBw); card.appendChild(bwRow);
             const secScan = mkSec('Frequency scan');
@@ -1685,7 +1719,7 @@
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
                 hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
-                idLed, freqLine, secTune, secBw, secScan,
+                idLed, freqLine, secTune, secBw, secScan, modeRow, modeSel, modeHint,
             };
             applyDongleAisMode(c, !!d.ais);
             return c;
@@ -1754,6 +1788,17 @@
             // the input while this dongle overrides the shared frequency
             c.lastD = d;
             const eff = curDongleMHz(d.id);
+            // Demodulator: manual override or auto (AM on the airband
+            // 118-137 MHz, FM everywhere else)
+            const manualMode = d.manual_mode || 'auto';
+            if (c.modeSel._last !== manualMode && document.activeElement !== c.modeSel) {
+                c.modeSel._last = manualMode;
+                c.modeSel.value = manualMode;
+            }
+            const airband = eff !== null && eff >= 117.975 && eff < 136.975;
+            const hint = manualMode !== 'auto' ? ''
+                : 'auto \u2192 ' + (airband ? 'AM' : 'FM');
+            if (c.modeHint._last !== hint) { c.modeHint._last = hint; c.modeHint.textContent = hint; }
             // Identity: connection LED + the live tuned frequency —
             // orange while manually overridden, blue on the AIS channels
             c.idLed.className = 'indicator ' + (d.connected ? 'green' : 'red');

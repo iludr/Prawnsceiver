@@ -48,6 +48,9 @@ DEFAULT_DONGLES = [
 
 # FM broadcast band (VHF2) range definition
 FM_BAND = (87_500_000, 108_000_000)
+# Airband voice (AM): the auto demod mode switches to AM inside this
+# range. Stops below the 137-138 MHz weather-satellite segment.
+AIRBAND = (117_975_000, 136_975_000)
 
 # Tuning corrections per dongle (keyed by its id - rtl_tcp address or
 # "usb:<index>"; the physical dongle behind it is pinned). Every dongle mistsunes with its own

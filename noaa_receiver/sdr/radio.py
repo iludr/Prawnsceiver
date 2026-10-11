@@ -34,14 +34,15 @@ from datetime import datetime
 
 from .. import db
 from .. import state
-from ..calibration import (AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMARY_DONGLE,
+from ..calibration import (AIRBAND, AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMARY_DONGLE,
                           SDR_DONGLE_GAIN, correction_info, tuning_correction)
 from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION, DONGLES_FILE,
                      FFT_SIZE, IQ_BLOCK, IQ_RECORD_FREQS, LOGDIR, RECORD_DIR,
                      SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE, WATERFALL_ROWS)
 
 from ..decoding.decode import sat_short_name
-from .dsp import doppler_shift, fm_demodulate, frequency_shift, iq_to_complex, new_state
+from .dsp import (am_demodulate, doppler_shift, fm_demodulate, frequency_shift,
+                  iq_to_complex, new_state, ssb_demodulate)
 
 # Waterfall/signal FFT cadence: compute the FFT only every Nth IQ block. The
 # dashboard draws ~5 rows/s, so ~234 rows/s (960 kHz: 1875 blocks/s / 8) is still 40x
@@ -908,18 +909,28 @@ def sdr_capture_thread(did):
                 elif not should_record and entry['is_recording']:
                     close_wav()
 
-                # FM-demodulate the batch (every dongle: each feeds its own
-                # live audio ring and its own WAV). Broadcast FM (manual radio
-                # test tunes) deviates ±75 kHz, so the whole ±120 kHz capture
-                # band is demodulated and only the audio is low-passed;
-                # satellite SSTV keeps the narrow 22 kHz.
-                # Demod channel width = what the WAV and live audio carry:
-                # the manual per-dongle override if set (bw_hz), else the
-                # mode default (full ±120 kHz on broadcast FM, 22 kHz on
-                # satellite modes). fm_demodulate skips the filter for a
-                # falsy cutoff (full band).
+                # Demodulate the batch (every dongle: each feeds its own
+                # live audio ring and its own WAV). Mode dispatch:
+                # - manual per-dongle override (state.manual_dongle_mode),
+                #   else auto: AM on the airband voice segment, FM
+                #   everywhere else (broadcast FM and NFM satellites)
+                # - FM: broadcast tunes deviate ±75 kHz, so the whole ±120
+                #   kHz capture band is demodulated and only the audio is
+                #   low-passed; satellite SSTV keeps the narrow 22 kHz.
+                # - AM/SSB/CW: channel low-pass + demodulator (dsp.py);
+                #   demod channel width = the manual per-dongle override
+                #   (bw_hz) if set, else the mode default.
                 try:
-                    if FM_BAND[0] <= freq_now <= FM_BAND[1]:
+                    mode = state.manual_dongle_mode.get(did)
+                    if mode is None:
+                        mode = 'am' if AIRBAND[0] <= freq_now <= AIRBAND[1] else 'fm'
+                    if mode == 'am':
+                        audio = am_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz or 10000, st=dst)
+                    elif mode in ('usb', 'lsb', 'cw'):
+                        audio = ssb_demodulate(c, DECIMATION, mode,
+                                               iq_cutoff_hz=bw_hz or (4000 if mode == 'cw' else 6000),
+                                               st=dst)
+                    elif FM_BAND[0] <= freq_now <= FM_BAND[1]:
                         audio = fm_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz, audio_cutoff_hz=18000, st=dst)
                     else:
                         # Auto demod width: the narrow 22 kHz satellite default

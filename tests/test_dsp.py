@@ -131,3 +131,89 @@ _b = _struct.unpack(f"<{len(perblock)//2}h", perblock)
 _diff = max(abs(x - y) for x, y in zip(_a, _b))
 assert len(_a) == len(_b) and _diff <= 2, _diff
 print(f"batched DSP chain matches per-block (max {_diff} LSB): ok")
+
+# ---------- AM / SSB / CW demodulators ----------
+from noaa_receiver.config import AUDIO_RATE
+_fs = SDR_RATE
+_t = np.arange(int(0.25 * _fs)) / _fs
+
+def _fft_peak(x, fs):
+    x = np.asarray(x, dtype=np.float64)
+    w = x * np.hanning(len(x))
+    sp = np.abs(np.fft.rfft(w)) ** 2
+    i = int(np.argmax(sp))
+    return i * fs / len(x), 10 * np.log10(sp[i] + 1e-30)
+
+# AM: (1 + 0.5 cos(2pi 1k t)) carrier at 0 Hz, tone at 1 kHz in the audio
+_am = (1.0 + 0.5 * np.cos(2 * np.pi * 1000 * _t)).astype(np.float32)
+_amc = (_am * np.exp(1j * 0.0)).astype(np.complex64)
+_audio = np.frombuffer(dsp.am_demodulate(_amc, DECIMATION, st=dsp.new_state()), dtype=np.int16)
+_f, _db = _fft_peak(_audio, AUDIO_RATE)
+assert 900 < _f < 1100, f"AM tone not at 1 kHz: {_f}"
+assert _db > 30, f"AM tone too weak: {_db:.1f} dB"
+print(f"am: 1 kHz tone demodulated at {_f:.0f} Hz, {_db:.0f} dB: ok")
+
+# AM block-vs-whole must be identical (all state is filter/phase based)
+_stw, _stb = dsp.new_state(), dsp.new_state()
+_w = np.frombuffer(dsp.am_demodulate(_amc, DECIMATION, st=_stw), dtype=np.int16)
+_b = b''
+for k in range(0, len(_amc), 512):
+    _b += dsp.am_demodulate(_amc[k:k + 512], DECIMATION, st=_stb)
+_b = np.frombuffer(_b, dtype=np.int16)
+_d = int(np.abs(_w.astype(np.int32) - _b.astype(np.int32)).max())
+assert len(_w) == len(_b) and _d <= 2, (len(_w), len(_b), _d)
+print(f"am: block processing equals whole-signal (max {_d} LSB): ok")
+
+# SSB sideband selectivity: tone at +1.5 kHz -> loud in usb, rejected in lsb
+def _ssb_tone_amp(sideband, freq):
+    c = (0.5 * np.exp(2j * np.pi * freq * _t)).astype(np.complex64)
+    st = dsp.new_state()
+    out = np.frombuffer(dsp.ssb_demodulate(c, DECIMATION, sideband, st=st, agc=False), dtype=np.int16)
+    return np.abs(out).astype(np.float64).mean()
+
+_usb, _lsb = _ssb_tone_amp('usb', 1500), _ssb_tone_amp('lsb', 1500)
+assert _usb > 100, f"usb does not pass its own sideband: {_usb}"
+assert _usb / max(_lsb, 1) > 30, f"sideband rejection too low: usb {_usb} vs lsb {_lsb}"
+_msb, _mlsb = _ssb_tone_amp('lsb', -1500), _ssb_tone_amp('usb', -1500)
+assert _msb / max(_mlsb, 1) > 30, f"lsb rejection too low: {_msb} vs {_mlsb}"
+print(f"ssb: +1.5 kHz tone usb/lsb = {_usb / max(_lsb, 1):.0f}x, "
+      f"-1.5 kHz tone lsb/usb = {_msb / max(_mlsb, 1):.0f}x: ok")
+
+# SSB block-vs-whole (AGC off: everything is filter/phase state)
+_c = (0.5 * np.exp(2j * np.pi * 1500 * _t)).astype(np.complex64)
+_stw, _stb = dsp.new_state(), dsp.new_state()
+_w = np.frombuffer(dsp.ssb_demodulate(_c, DECIMATION, 'usb', st=_stw, agc=False), dtype=np.int16)
+_b = b''
+for k in range(0, len(_c), 512):
+    _b += dsp.ssb_demodulate(_c[k:k + 512], DECIMATION, 'usb', st=_stb, agc=False)
+_b = np.frombuffer(_b, dtype=np.int16)
+_d = int(np.abs(_w.astype(np.int32) - _b.astype(np.int32)).max())
+assert len(_w) == len(_b) and _d <= 2, (len(_w), len(_b), _d)
+print(f"ssb: block processing equals whole-signal (max {_d} LSB): ok")
+
+# CW: a carrier ON the tune must ring up as a ~700 Hz beat note
+_c = (0.5 * np.exp(1j * 0.0)).astype(np.complex64) * np.ones(len(_t), dtype=np.complex64)
+_out = np.frombuffer(dsp.ssb_demodulate(_c, DECIMATION, 'cw', st=dsp.new_state()), dtype=np.int16)
+_f, _db = _fft_peak(_out, AUDIO_RATE)
+assert 600 < _f < 800, f"cw beat note not ~700 Hz: {_f}"
+assert _db > 30, f"cw beat too weak: {_db:.1f}"
+print(f"cw: carrier rings up at {_f:.0f} Hz, {_db:.0f} dB: ok")
+
+# AGC: quiet signal gets lifted to roughly the target rms
+_c = (0.001 * np.exp(2j * np.pi * 1500 * _t)).astype(np.complex64)
+_out = np.frombuffer(dsp.ssb_demodulate(_c, DECIMATION, 'usb', st=dsp.new_state()), dtype=np.int16)
+_rms = float(np.sqrt(np.mean(_out.astype(np.float64) ** 2)))
+assert 2000 < _rms < 16000, f"AGC target rms off: {_rms:.0f}"
+print(f"agc: quiet ssb signal lifted to rms {_rms:.0f}: ok")
+
+# CPU: one realistic capture batch through the SSB chain
+import time as _time
+_c = (np.random.randn(32768) + 1j * np.random.randn(32768)).astype(np.complex64) * 0.01
+_t0 = _time.time()
+for _ in range(10):
+    dsp.ssb_demodulate(_c, DECIMATION, 'usb', st=dsp.new_state())
+_ms = (_time.time() - _t0) / 10 * 1000
+assert _ms < 150, f"SSB demod too slow: {_ms:.1f} ms per 32k batch"
+print(f"cpu: ssb batch (32768 samples) takes {_ms:.1f} ms: ok")
+
+print("all AM/SSB/CW demod tests passed")

@@ -27,6 +27,11 @@ def new_state():
         "nco_phase": 0.0,    # Doppler NCO phase in rad, kept in [0, 2*pi)
         "nco_key": None,     # (doppler_hz, fs) the cached ramp was built for
         "nco_ramp": None,    # exp(i*dphase*j), j < block length
+        "bpf_tail": None,    # audio-rate band-pass (SSB/CW sideband select)
+        "dcfir_tail": None,  # AM: carrier-DC estimator low-pass
+        "afir48_tail": None, # AM: 3.4 kHz audio low-pass at 48 kHz
+        "bfo_phase": 0.0,    # CW beat oscillator NCO phase
+        "agc_gain": None,    # SSB/CW AGC: current smoothed gain
     }
 
 
@@ -100,9 +105,9 @@ _real_taps = {}
 FIR_TAPS = 250
 
 
-def _windowed_sinc(cutoff_hz, numtaps):
+def _windowed_sinc(cutoff_hz, numtaps, fs=SDR_RATE):
     m = np.arange(numtaps) - (numtaps - 1) / 2.0
-    h = np.sinc(2 * cutoff_hz / SDR_RATE * m) * np.hamming(numtaps)
+    h = np.sinc(2 * cutoff_hz / fs * m) * np.hamming(numtaps)
     return (h / h.sum()).astype(np.float32)
 
 
@@ -285,3 +290,171 @@ def fm_demodulate(c, decimation=5, iq_cutoff_hz=22000.0, audio_cutoff_hz=None, s
         st["audio_pos"] = (st["audio_pos"] + len(audio)) % decimation
         audio = audio[(-phase) % decimation::decimation]
     return (audio * (32767.0 / np.pi)).astype(np.int16).tobytes()
+
+
+# ---------- AM / SSB / CW demodulators ----------
+#
+# All three decimate the channel-filtered IQ to the 48 kHz audio rate
+# FIRST (the +-bw IQ low-pass is the anti-alias), then do the mode
+# work there: a 2.7 kHz-sideband or 500 Hz-cw filter is impossible with
+# short FIRs at 2.4 Msps, but cheap at 48 kHz. Sideband selection uses
+# a COMPLEX-taps band-pass (a windowed-sinc low-pass rotated to the
+# band center): its response is asymmetric, so it passes [lo, hi] and
+# rejects the mirror band - which is exactly what taking the real
+# part afterwards needs, or the unwanted sideband would fold onto the
+# audio. Blocks carry state like the FM path: decimation phase, FIR
+# tails, the CW BFO phase and the AGC gain all live in st.
+
+
+def decimate_cont(a, decimation, st):
+    """Decimate keeping the phase across blocks (fm_demodulate logic,
+    shared): sample i of this block is kept when (i + audio_pos) %
+    decimation == 0, so block processing equals whole-signal [::n]."""
+    if decimation <= 1:
+        return a
+    phase = st["audio_pos"] % decimation
+    st["audio_pos"] = (st["audio_pos"] + len(a)) % decimation
+    return a[(-phase) % decimation::decimation]
+
+
+_bp_taps = {}
+
+
+def get_bandpass_taps(lo_hz, hi_hz, fs, numtaps=1024):
+    """Complex band-pass FIR taps for the 48 kHz audio path: windowed-
+    sinc low-pass of (hi-lo)/2 rotated to the band center, cached per
+    (lo, hi). numtaps=1024 at 48 kHz -> ~375 Hz main lobe: voice-
+    grade SSB selectivity and a soft but usable cw filter."""
+    key = (round(lo_hz, 1), round(hi_hz, 1), int(fs), int(numtaps))
+    if key not in _bp_taps:
+        center = (lo_hz + hi_hz) / 2.0
+        half = (hi_hz - lo_hz) / 2.0
+        h = _windowed_sinc(half, numtaps, fs).astype(np.complex64)
+        m = np.arange(numtaps) - (numtaps - 1) / 2.0
+        _bp_taps[key] = h * np.exp(1j * 2 * np.pi * center / fs * m).astype(np.complex64)
+    return _bp_taps[key]
+
+
+def bandpass(c, lo_hz, hi_hz, fs, st):
+    """Complex band-pass with the tail carried across blocks (the audio-
+    rate sibling of lowpass())."""
+    taps = get_bandpass_taps(lo_hz, hi_hz, fs)
+    tail = st["bpf_tail"]
+    if tail is None or len(tail) != len(taps) - 1:
+        tail = np.zeros(len(taps) - 1, dtype=np.complex64)
+    x = np.concatenate([tail, c])
+    st["bpf_tail"] = x[-(len(taps) - 1):].copy()
+    return convolve_valid(x, taps, f"bp{round(lo_hz)}:{round(hi_hz)}")
+
+
+def _real_lp(a, cutoff_hz, fs, st, tail_key, numtaps=512):
+    """Real low-pass at an arbitrary rate with its own tail slot in st
+    (lowpass_audio() assumes the 2.4 Msps capture rate)."""
+    key = (round(cutoff_hz, 1), int(fs), int(numtaps))
+    taps = _real_taps.get(key)
+    if taps is None:
+        taps = _real_taps[key] = _windowed_sinc(cutoff_hz, numtaps, fs)
+    tail = st[tail_key]
+    if tail is None or len(tail) != len(taps) - 1:
+        tail = np.zeros(len(taps) - 1, dtype=np.float32)
+    x = np.concatenate([tail, np.asarray(a, dtype=np.float32)])
+    st[tail_key] = x[-(len(taps) - 1):].copy()
+    return convolve_valid(x, taps, f"rl{tail_key}{round(cutoff_hz)}")
+
+
+def _bfo_shift(c, freq_hz, fs, st):
+    """Phase-continuous constant rotation (the CW beat oscillator)."""
+    n = len(c)
+    if freq_hz == 0 or n == 0:
+        return c
+    phase = st.get("bfo_phase", 0.0)
+    dphase = TWO_PI * freq_hz / fs
+    rot = (np.exp(1j * dphase * np.arange(n)) * np.complex64(np.exp(1j * phase))).astype(np.complex64)
+    st["bfo_phase"] = (phase + dphase * n) % TWO_PI
+    return c * rot
+
+
+def _agc(a, st, fs, target=0.25, att_secs=0.006, rel_secs=0.4, max_gain=3000.0):
+    """Feedforward AGC for the carrier-less modes: per-chunk target gain
+    from the chunk rms, one-pole smoothed (fast attack, slow release)
+    and linearly ramped across the chunk so the gain never steps -
+    a step is a click. Chunks are ~13 ms, so the smoothing runs at
+    chunk granularity: attack ~6 ms, release ~0.4 s."""
+    n = len(a)
+    if n == 0:
+        return a
+    rms = float(np.sqrt(np.mean(np.asarray(a, dtype=np.float64) ** 2)))
+    if rms < 1e-12:
+        rms = 1e-12
+    g_t = min(max_gain, target / rms)
+    g0 = st.get("agc_gain")
+    if g0 is None:
+        g0 = min(max_gain, target / max(rms, 1e-3))
+    tau = att_secs if g_t < g0 else rel_secs
+    a_e = np.exp(-n / (tau * fs))
+    g = g0 * a_e + g_t * (1 - a_e)
+    st["agc_gain"] = g
+    if n == 1:
+        return a * g
+    return a * np.linspace(g0, g, n).astype(np.float32)
+
+
+def am_demodulate(c, decimation, iq_cutoff_hz=10000.0, st=None):
+    """AM envelope detector: channel low-pass -> |.| envelope -> decimate
+    -> carrier-DC block (a 100 Hz low-pass subtracts the carrier level;
+    it doubles as a ~300 Hz high-pass, standard on airband audio) ->
+    3.4 kHz audio low-pass -> normalized by the carrier level (a weak
+    or absent carrier clamps the gain so band noise does not blast).
+
+    Output: int16 PCM at fs/decimation."""
+    st = st if st is not None else demod_state
+    if len(c) == 0:
+        return b''
+    if iq_cutoff_hz:
+        c = lowpass(c, iq_cutoff_hz, st)
+    env = np.abs(c).astype(np.float32)
+    env = decimate_cont(env, decimation, st)
+    fs = SDR_RATE // decimation
+    dc = _real_lp(env, 100.0, fs, st, "dcfir_tail")
+    audio = env - dc
+    audio = _real_lp(audio, 3400.0, fs, st, "afir48_tail")
+    carrier = max(float(np.mean(dc)), 6.0)
+    audio = audio * (0.75 * 32767.0 / carrier)
+    np.clip(audio, -32767, 32767, out=audio)
+    return audio.astype(np.int16).tobytes()
+
+
+# SSB/CW voice and cw filter bands in the 48 kHz audio path. The BFO
+# moves the cw carrier off 0 Hz into the band; usb/lsb need no BFO -
+# the suppressed carrier sits at 0 and the band IS the sideband.
+_SSB_BANDS = {
+    "usb": (0.0, 100.0, 3300.0),          # (bfo_hz, lo_hz, hi_hz)
+    "lsb": (0.0, -3300.0, -100.0),
+    "cw": (700.0, 500.0, 1000.0),          # beat note ~700 Hz
+}
+
+
+def ssb_demodulate(c, decimation, sideband="usb", iq_cutoff_hz=6000.0, st=None, agc=True):
+    """SSB/CW product detector: channel low-pass -> decimate to the audio
+    rate -> BFO shift (cw only) -> complex band-pass sideband select
+    -> Re{} -> AGC. The band-pass rejects the mirror sideband before
+    the real part folds it onto the audio; without it usb and lsb
+    would sound identical.
+
+    Output: int16 PCM at fs/decimation, AGC target rms ~0.25 FS."""
+    st = st if st is not None else demod_state
+    if len(c) == 0:
+        return b''
+    bfo, lo, hi = _SSB_BANDS[sideband]
+    if iq_cutoff_hz:
+        c = lowpass(c, iq_cutoff_hz, st)
+    c = decimate_cont(c, decimation, st)
+    fs = SDR_RATE // decimation
+    c = _bfo_shift(c, bfo, fs, st)
+    c = bandpass(c, lo, hi, fs, st)
+    audio = c.real.astype(np.float32)
+    if agc:
+        audio = _agc(audio, st, fs)
+    audio = audio * (0.9 * 32767.0)
+    np.clip(audio, -32767, 32767, out=audio)
+    return audio.astype(np.int16).tobytes()

@@ -54,6 +54,7 @@ def _dongle_list():
                 "correction_src": e.get("correction_src", "none"),
                 "manual_frequency_mhz": round(state.manual_dongle_freq[did] / 1e6, 4) if did in state.manual_dongle_freq else None,
                 "manual_bw_khz": round(state.manual_dongle_bw[did] / 1000.0, 3) if did in state.manual_dongle_bw else None,
+                "manual_mode": state.manual_dongle_mode.get(did),
                 "scan": scan.scan_snapshot(did),
             })
     return dongles
@@ -878,6 +879,29 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                         state.manual_dongle_bw.pop(dev, None)
                     else:
                         state.manual_dongle_bw[dev] = bw_hz
+            # Optional demod mode override: am/usb/lsb/cw/fm, auto clears
+            # (auto = FM everywhere except the airband, which is AM).
+            # A mode-only request leaves frequency and bandwidth untouched.
+            mode = (query.get('mode') or [''])[0].strip().lower()
+            if mode:
+                if mode not in ('auto', 'am', 'usb', 'lsb', 'cw', 'fm'):
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'success': False, 'error': 'Unknown mode (auto/am/usb/lsb/cw/fm)'}).encode())
+                    return
+                with state.status_lock:
+                    if mode == 'auto':
+                        state.manual_dongle_mode.pop(dev, None)
+                    else:
+                        state.manual_dongle_mode[dev] = mode
+                state.log_console(f"Dongle {dev} demod mode: {mode}")
+                if not f:
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({'success': True, 'mode': 'demod', 'demod_mode': mode}).encode())
+                    return
                 state.log_console(f"🎚 Dongle {dev} demod bandwidth: {bw_hz / 1000:g} kHz" if bw_hz else f"🎚 Dongle {dev} demod bandwidth back to auto")
                 if not f:
                     self.send_response(200)

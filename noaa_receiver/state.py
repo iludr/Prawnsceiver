@@ -74,6 +74,11 @@ manual_dongle_freq = {}
 # the live audio. None/auto = mode default (full band on broadcast FM,
 # 22 kHz on satellite modes). Cleared per dongle.
 manual_dongle_bw = {}
+# Per-dongle manual demod mode override (dongle id -> 'am'/'usb'/
+# 'lsb'/'cw'/'fm'): what the capture thread demodulates into the
+# live audio and WAV. No entry = auto: FM everywhere except the
+# airband voice segment (118-137 MHz), which demodulates AM.
+manual_dongle_mode = {}
 # Manual recording (dashboard Record button on a dongle card, dongle id ->
 # True): while set, that dongle's capture thread records its current tune
 # to WAV outside passes too. Named after the tune ("Manual_<freq>_MHz"), so
