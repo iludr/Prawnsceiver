@@ -1659,3 +1659,26 @@ passes:
   yet proxying it - the VM needs a WS location block with
   proxy_http_version 1.1 + Upgrade headers), the dashboard drops
   back to /waterfall.json automatically
+
+### 2026-10-11 ~19:45 CEST — 🕵️ Mystery signal 153.1126 MHz identified: DMR Tier III control channel (+ decoder in-repo)
+
+The strong 24/7 carrier the waterfall kept showing is a **DMR Tier III
+trunked control channel** (ETSI TS 102 361-4). Decoded from the station's
+own FM-demod recording with a hand-rolled chain (multimon-ng has no DMR):
+4FSK 4800 sym/s slicer -> sync words -> slot type Hamming(20,8) ->
+BPTC(196,96) -> CSBK CRC-16. Everything CRC-verified off air:
+- C_ALOHA beacon x446/30s, identical every time: **System ID 39**, color
+  code 1, registration required, backoff 5; alternating with Idle bursts
+- periodic C_BCAST local-time + vendor (CSBKO 07 / FID 07) telemetry
+  blocks, one short data transmission (DataHeader + 3 Rate-1/2 blocks)
+- explains ALL earlier observations: the 16.67 Hz comb = the 60 ms TDMA
+  frame; the "tones" (200 Hz pilot, 933/1033/1100/1600/1633) = Fourier
+  harmonics h12/h56/h62/h66/h96/h98 of the repeating Aloha/Idle pattern;
+  the CW-demod pulsation = Aloha/Idle slot alternation + CACH scrambling
+- 153.1125 MHz = German non-public land mobile 4m channel (pair with
+  148.5125 uplink); operator unknown, decode-for-personal-use covered by
+  TKG Par. 8 (unencrypted signaling; content stays private)
+Decoder saved as noaa_receiver/analysis/dmr.py (CLI: python -m
+noaa_receiver.analysis.dmr <recording.wav> [--json]), codec roundtrips
+and a synthetic end-to-end decode covered by tests/test_dmr.py — the
+encoder reproduces the on-air Aloha packet byte for byte.
