@@ -314,6 +314,10 @@
             const timeCanvas = document.createElement('canvas');
             timeCanvas.width = 54; timeCanvas.height = WF_HEIGHT;
             timeCanvas.className = 'wf-time';
+            // CSS height like .wf-canvas: border-box keeps the box at
+            // 300 px (attribute height + border would be 302 and drift
+            // the gutter off the waterfall it scrolls in sync with)
+            timeCanvas.style.height = WF_HEIGHT + 'px';
             const timeCtx = timeCanvas.getContext('2d');
             timeCtx.fillStyle = '#000';
             timeCtx.fillRect(0, 0, 54, WF_HEIGHT);
@@ -323,6 +327,10 @@
             const dbScale = document.createElement('canvas');
             dbScale.width = 54; dbScale.height = SPEC_HEIGHT;
             dbScale.className = 'wf-time';
+            // same border-box model as .wf-spec (110 px box, border
+            // inside): without this the scale sits 2 px lower than the
+            // spectrum pane and its 110 canvas px stretch over 112 px
+            dbScale.style.height = SPEC_HEIGHT + 'px';
             dbScale.title = 'dBFS scale — Offset sets the center, Range the height';
             const dbScaleCtx = dbScale.getContext('2d');
             const gutter = document.createElement('div');
