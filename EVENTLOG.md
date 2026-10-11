@@ -1422,3 +1422,41 @@ Tests: test_radio section 12 (registry, persistence,
 idempotency, validation); full suite green. No rtl_sdr on the
 dev PC or the container, so the live spawn path is untested
 here — needs a dongle on a host with the rtl-sdr package.
+
+
+### 2026-10-11 ~15:00 CEST — 🏠 Station moves to prawntenna2 (USB direct, no rtl_tcp)
+
+The receiver left the Proxmox container (192.168.2.73, now dark,
+no backup taken - FRESH START by operator decision: empty station
+db, no recordings, no history) and now runs on the notebook
+itself, Prawntenna2 (192.168.3.65, Ubuntu 26.04, user crustean1),
+with both dongles on its USB bus read DIRECTLY via rtl_sdr - the
+whole rtl_tcp/prawntenna-manager network hop is gone, which is
+the point (quality: no TCP link, no daemon in between).
+
+Executed:
+- prawntenna removed: service stopped/disabled/unit deleted,
+  install moved to ~/prawntenna.removed-20261011 (not deleted)
+- apt: python3-venv + satdump; venv with numpy/skyfield/sstv;
+  repo cloned at 6a8bb67; /var/log/noaa owned by crustean1
+- systemd SYSTEM unit prawnceiver.service (enabled, Restart=on-
+  failure) - not a user unit this time, the notebook may not be
+  logged in
+- calibration ids re-keyed: usb:0 = v5 (serial 48263793,
+  primary satellites), usb:1 = generic R820T (serial
+  77771111153705700, AIS); measured corrections carried over
+- nginx prawntenna2.derusi.de site repointed 8080 -> 8085
+  (certbot certs kept, proxy_buffering off for the live audio)
+- rtl_sdr probe: device 0 = NESDR v5, device 1 = generic R820T
+  (matches the serial map from prawntenna's dongles.json); user-
+  space USB claim works, no udev changes needed
+
+Live verification: both dongles streaming via rtl_sdr (usb:0 on
+137.9725 MHz tuned, usb:1 AIS with +12960 Hz correction), Celestrak
+reachable from this network (the VM's was not), first TLE sync
+immediate - and a Meteor-M 2-4 pass (59 deg) rose during setup:
+PASS START + IQ/WAV recording on usb:0, first recordings of the
+new station. AIS frames 0 so far (bad-burst triggers ticking -
+the R820T front-end story, see the 2026-10-10 overload notes).
+Band-switch restart behavior of the rtl_sdr source gets its first
+live exercise on the next ISS pass (437.55 MHz).
