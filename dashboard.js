@@ -264,12 +264,7 @@
             const idx = meta.id;
             let b = wfBlocks[idx];
             if (b) {
-                const dname = meta.usb_name ? `${meta.usb_name}${meta.usb_serial ? ' (SN ' + meta.usb_serial + ')' : ''}` : meta.label;
-                b.title.textContent = `Dongle ${meta.index}${meta.primary ? ' ★' : ''} — ${dname} (${meta.tuner})`
-                    + (meta.ais ? ' — 🚢 AIS 161.975/162.025 MHz (Danube ships)'
-                        : (meta.manual_frequency_mhz ? ` — ${meta.manual_frequency_mhz.toFixed(4)} MHz` : ''));
                 b.led.className = 'indicator ' + (meta.connected ? 'green' : 'red');
-                b.sig.textContent = 'signal ' + (meta.signal ? meta.signal.toFixed(1) : '—');
                 return b;
             }
             const list = document.getElementById('wf-list');
@@ -281,14 +276,16 @@
             const led = document.createElement('span');
             led.className = 'indicator yellow';
             const title = document.createElement('span');
-            const sig = document.createElement('span');
-            sig.style.cssText = 'margin-left:auto;color:#888;';
+            // Name, source and tuned frequency live on the control card —
+            // the head carries only the dongle number + connection LED
+            title.textContent = `Dongle ${meta.index}${meta.primary ? ' ★' : ''}`;
             const collapseBtn = document.createElement('button');
             collapseBtn.className = 'wf-collapse-btn';
             collapseBtn.textContent = '▾';
             collapseBtn.title = 'Collapse/expand this dongle (waterfall + card)';
             collapseBtn.onclick = () => toggleDongleCollapse(meta.id);
-            head.appendChild(led); head.appendChild(title); head.appendChild(sig); head.appendChild(collapseBtn);
+            collapseBtn.style.marginLeft = 'auto';
+            head.appendChild(led); head.appendChild(title); head.appendChild(collapseBtn);
             // Row: time gutter | waterfall+spectrum column. The overlays
             // (features, hover, highlight) sit inside the column only, so
             // the hover/click frequency mapping stays relative to the
@@ -381,7 +378,7 @@
             b = wfBlocks[idx] = {
                 wfCtx: wfCanvas.getContext('2d'),
                 specCtx: specCanvas.getContext('2d'),
-                timeCtx, overlay, hover, title, led, sig, selHl, selLbl,
+                timeCtx, overlay, hover, title, led, selHl, selLbl,
                 block, collapseBtn, cardHolder, freqLabels,
                 serial: meta.id, centerMHz: null,
                 zoom: 1, zoomOffKHz: 0, recHl: hl, zoomBadge, satLine, satLineLbl,
@@ -1078,6 +1075,9 @@
             c.bwRow.style.display = sat;
             c.scanRow.style.display = sat;
             c.scanRow2.style.display = sat;
+            c.secTune.style.display = sat;
+            c.secBw.style.display = sat;
+            c.secScan.style.display = sat;
             c.recBtn.style.display = sat;
             c.listenBtn.style.display = sat;
             const txt = ais ? '🛰 Back to satellites' : '🚢 Listen for AIS ships';
@@ -1100,6 +1100,40 @@
             // flex:1 stretches the card to line up with its waterfall block;
             // the border visually separates the dongles
             card.style.cssText = 'flex:1;display:flex;flex-direction:column;border-bottom:1px solid #0f3460;margin-bottom:8px;';
+            // Identity header: connection LED, dongle name (USB name +
+            // serial, else the rtl_tcp address), the source this dongle is
+            // fed from, and the live tuned frequency — the waterfall block
+            // head above only carries the dongle number
+            const idHead = document.createElement('div');
+            idHead.style.cssText = 'display:flex;align-items:center;gap:6px;';
+            const idLed = document.createElement('span');
+            idLed.className = 'indicator yellow';
+            idLed.title = 'green = capture streaming, red = disconnected';
+            const idName = document.createElement('span');
+            idName.style.cssText = 'font-weight:bold;color:#e0e0e0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            idName.textContent = (d.usb_name
+                ? `${d.usb_name}${d.usb_serial ? ' (SN ' + d.usb_serial + ')' : ''}`
+                : d.host) + (d.primary ? ' ★' : '');
+            idName.title = d.primary ? 'Primary dongle — live audio and pass recordings come from it'
+                                     : 'Secondary dongle';
+            idHead.appendChild(idLed); idHead.appendChild(idName);
+            const srcLine = document.createElement('div');
+            srcLine.style.cssText = 'font-size:0.75em;color:#888;margin-top:1px;';
+            srcLine.textContent = d.id.startsWith('usb:')
+                ? `🔌 USB device ${d.id.slice(4)} on the receiver host · rtl_sdr`
+                : `📡 TCP ${d.label} · rtl_tcp`;
+            const freqLine = document.createElement('div');
+            freqLine.style.cssText = 'margin-top:5px;font-size:1.05em;font-weight:bold;color:#53d769;';
+            freqLine.textContent = '—';
+            freqLine.title = 'This dongle\'s effective frequency: its manual override if set, else the shared satellite tune';
+            // Small section headers structure the card: identity → signal
+            // → recording → tuning → bandwidth → scan
+            const mkSec = (label) => {
+                const s = document.createElement('div');
+                s.style.cssText = 'font-size:0.7em;color:#666;text-transform:uppercase;letter-spacing:0.06em;margin:9px 0 3px 0;border-bottom:1px solid rgba(15,52,96,0.8);padding-bottom:1px;';
+                s.textContent = label;
+                return s;
+            };
             // Band allocation of this dongle's effective frequency (its
             // manual override if set, else the shared tune) — orientation
             // for what the waterfall is currently looking at
@@ -1178,15 +1212,12 @@
             // mode default (full band on FM broadcast, 22 kHz on satellites)
             const bwRow = document.createElement('div');
             bwRow.style.cssText = 'display:flex;gap:4px;align-items:center;margin-top:4px;font-size:0.8em;';
-            const bwLbl = document.createElement('span');
-            bwLbl.textContent = 'Recorded BW';
-            bwLbl.style.cssText = 'color:#888;flex:1;';
             // Free-entry field: any 1-120 kHz value (Enter or Set applies),
             // empty = auto. Datalist offers the log-scale presets.
             const bwInput = document.createElement('input');
             bwInput.type = 'text'; bwInput.inputMode = 'decimal';
             bwInput.placeholder = 'auto';
-            bwInput.style.cssText = 'flex:0 0 62px;min-width:0;background:#0f3460;border:1px solid #53d769;color:#e0e0e0;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:0.9em;text-align:center;';
+            bwInput.style.cssText = 'flex:1;min-width:0;background:#0f3460;border:1px solid #53d769;color:#e0e0e0;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:0.9em;text-align:center;';
             bwInput.setAttribute('list', 'bw-presets');
             const bwList = document.createElement('datalist');
             bwList.id = 'bw-presets';
@@ -1250,7 +1281,7 @@
                     })
                     .catch(() => { bwFit.disabled = false; toast('Bandwidth fit failed: receiver unreachable', true); });
             };
-            bwRow.appendChild(bwLbl); bwRow.appendChild(bwInput); bwRow.appendChild(bwSet); bwRow.appendChild(bwFit); bwRow.appendChild(bwList);
+            bwRow.appendChild(bwInput); bwRow.appendChild(bwSet); bwRow.appendChild(bwFit); bwRow.appendChild(bwList);
             // Frequency scan: sweep this dongle start\u2192end and park it
             // on the next strong signal (/scan_dongle; see scan.py). The
             // button doubles as Stop while a scan runs; the status line
@@ -1358,12 +1389,20 @@
             listenBtn.textContent = '🔊 Listen';
             const sn_card = d.id;
             listenBtn.onclick = () => toggleLiveAudio(sn_card);
+            card.appendChild(idHead);
+            card.appendChild(srcLine);
+            card.appendChild(freqLine);
             card.appendChild(bandTxt);
             card.appendChild(sigRow);
-            card.appendChild(tl); card.appendChild(recRow);
-            card.appendChild(tuneRow); card.appendChild(nudgeRow);
-card.appendChild(bwRow);
-card.appendChild(scanRow); card.appendChild(scanRow2);
+            card.appendChild(tl);
+            const secRec = mkSec('Recording');
+            card.appendChild(secRec); card.appendChild(recRow);
+            const secTune = mkSec('Tuning');
+            card.appendChild(secTune); card.appendChild(tuneRow); card.appendChild(nudgeRow);
+            const secBw = mkSec('Recorded bandwidth');
+            card.appendChild(secBw); card.appendChild(bwRow);
+            const secScan = mkSec('Frequency scan');
+            card.appendChild(secScan); card.appendChild(scanRow); card.appendChild(scanRow2);
             const removeBtn = document.createElement('button');
             removeBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:rgba(231,76,60,0.15);color:#e07890;border:1px solid #e07890;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
             removeBtn.textContent = '\u2715 Remove dongle';
@@ -1415,7 +1454,8 @@ card.appendChild(scanRow); card.appendChild(scanRow2);
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
                 hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
-bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
+                bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
+                idLed, freqLine, secTune, secBw, secScan,
             };
             applyDongleAisMode(c, !!d.ais);
             return c;
@@ -1484,6 +1524,17 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
             // the input while this dongle overrides the shared frequency
             c.lastD = d;
             const eff = curDongleMHz(d.id);
+            // Identity: connection LED + the live tuned frequency —
+            // orange while manually overridden, blue on the AIS channels
+            c.idLed.className = 'indicator ' + (d.connected ? 'green' : 'red');
+            let fTxt = '—', fCol = '#888';
+            if (d.ais) { fTxt = '🚢 AIS 161.975 / 162.025 MHz'; fCol = '#4da6ff'; }
+            else if (eff !== null) {
+                fTxt = eff.toFixed(4) + ' MHz' + (d.manual_frequency_mhz ? ' (manual)' : '');
+                fCol = d.manual_frequency_mhz ? '#f39c12' : '#53d769';
+            }
+            if (c.freqLine._last !== fTxt) { c.freqLine._last = fTxt; c.freqLine.textContent = fTxt; }
+            c.freqLine.style.color = fCol;
             // What this frequency is normally used for (band allocation)
             const bandHtml = d.ais
                 ? '🚢 AIS — Danube ship traffic · 161.975 / 162.025 MHz · <a href="/ais" style="color:#4da6ff;text-decoration:none;">→ full log</a> · <a href="/ais.json" target="_blank" rel="noopener" style="color:#4da6ff;text-decoration:none;">ais.json</a>'
@@ -1579,12 +1630,11 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
                     wfB.satLine.style.display = 'none';
                 }
             }
-            // Tuning infobox: this dongle's correction (value + source), the
-            // settings shared by all dongles, and any manual override
+            // Tuning infobox: this dongle's correction (value + source) and
+            // the settings shared by all dongles — the manual override
+            // state shows on the frequency line at the top of the card
             const cor = (d.correction_hz || 0) / 1000;
-            const infoHtml = `⚙ tune ${cor >= 0 ? '+' : ''}${cor.toFixed(1)} kHz <span style="color:#666">(${d.correction_src || 'n/a'})</span><br>` +
-                               `IF offset +60 kHz · gain auto` +
-                               (d.manual_frequency_mhz ? `<br>🎛 manual override ${d.manual_frequency_mhz.toFixed(4)} MHz` : '');
+            const infoHtml = `⚙ correction ${cor >= 0 ? '+' : ''}${cor.toFixed(1)} kHz <span style="color:#666">(${d.correction_src || 'n/a'})</span> · IF offset +60 kHz · gain auto`;
             if (c.info._last !== infoHtml) {
                 c.info._last = infoHtml;
                 c.info.innerHTML = infoHtml;
