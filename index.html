@@ -993,15 +993,16 @@
             return out;
         }
         // Fallback (polling) rows are per-row normalized 0..255 with no
-        // absolute level: feed them through the same controls as a linear
-        // dB ramp so the sliders still do something in degraded mode.
-        function mapNormRow(b, norm) {
-            const out = new Uint8ClampedArray(512);
-            const lo = b.dbOffset - b.dbRange / 2, hi = b.dbOffset + b.dbRange / 2;
-            for (let i = 0; i < 512; i++) {
-                const db10 = (lo + (norm[i] / 255) * (hi - lo)) * 10;
-                out[i] = dbToLevel(b, db10);
-            }
+        // absolute level. Converting them to a FIXED pseudo-dB scale
+        // (0..255 -> -130..-30 dBFS) gives every control real meaning on
+        // the degraded path - the previous mapping defined the pseudo-dB
+        // window RELATIVE to the controls, which made Offset (and Range)
+        // algebraically cancel themselves. The absolute anchors are a
+        // fabrication, but a consistent one: peaks read ~-30 dBFS.
+        function normToDb(norm) {
+            const out = new Int16Array(512);
+            for (let i = 0; i < 512; i++)
+                out[i] = Math.round(((norm[i] / 255) * 100 - 130) * 10);
             return out;
         }
         // srcBin: the visible slice of the 512-bin row is stretched across
@@ -1011,7 +1012,10 @@
             if (zoom <= 1.01) return x => x;
             const offKhz = b.zoomOffKHz || 0;
             const binKhz = SDR_KHZ / 512;
-            const zbin0 = (offKhz - wfSpanKhz(b) / 2) / binKhz;
+            // window centered on 0 kHz = bin 256, not bin 0: without
+            // the center the left half of a zoomed canvas clamps to
+            // bin 0 and only half the diagram shows
+            const zbin0 = 256 + (offKhz - wfSpanKhz(b) / 2) / binKhz;
             const zspan = wfSpanKhz(b) / binKhz;
             return x => {
                 const s = Math.floor(zbin0 + (x / WF_WIDTH) * zspan);
@@ -1067,9 +1071,7 @@
             ctx.lineWidth = 1;
             ctx.beginPath();
             for (let x = 0; x < WF_WIDTH; x++) {
-                const s = srcBin(x);
-                const db = dbRow ? dbRow[s] / 10
-                    : (bot + (mappedRow[s] / 255) * (top - bot));
+                const db = dbRow[srcBin(x)] / 10;
                 const y = Math.max(0, Math.min(SPEC_HEIGHT - 1, dbToY(db)));
                 if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             }
@@ -1089,13 +1091,14 @@
         // [type=1][u16be id_len][id utf8][512 x int16le dB*10]. The client
         // sets its own row rate with a text frame ('rate=60'). Whenever the
         // socket is not open, fetchWaterfall falls back to the
-        // /waterfall.json polling (normalized rows through mapNormRow).
+        // /waterfall.json polling (normalized rows -> normToDb).
         // One retained INPUT row: { db: Int16Array | null, norm: array | null }
         // - dB rows off the WebSocket, normalized rows off the polling
         // fallback. The ring keeps the raw input (NOT the mapped palette
         // levels), so every control or zoom change can re-map the whole
         // retained history via replayWaterfall - on both feed paths.
         function wfRowIn(b, entry) {
+            if (!entry.db && entry.norm) entry.db = normToDb(entry.norm);
             b.dbRing.push(entry);
             if (b.dbRing.length > 600) b.dbRing.shift();
             b.dbLatest = entry;
@@ -1103,7 +1106,7 @@
                 b.drawPending = requestAnimationFrame(() => {
                     b.drawPending = 0;
                     const e = b.dbLatest;
-                    drawWaterfall(b, e.db ? mapDbRow(b, e.db) : mapNormRow(b, e.norm), e.db);
+                    drawWaterfall(b, mapDbRow(b, e.db), e.db);
                 });
             }
         }
@@ -1154,7 +1157,7 @@
             if (b.timeCtx) { b.timeCtx.fillStyle = '#000'; b.timeCtx.fillRect(0, 0, 54, WF_HEIGHT); }
             b.lastTickTs = 0;
             for (const e of b.dbRing)
-                drawWaterfall(b, e.db ? mapDbRow(b, e.db) : mapNormRow(b, e.norm), e.db);
+                drawWaterfall(b, mapDbRow(b, e.db), e.db);
         }
 
         function updateFreqLabels(freqMHz) {
