@@ -1612,3 +1612,21 @@ Fix: wired Ethernet (192.168.3.35, WiFi off) - 0.7 ms RTT,
 live audio 95,945 B/s = 99.9% of real time, ZERO gaps.
 Dongle ids re-keyed to 192.168.3.35:1234/:1235 (dashboard runtime
 swap + calibration); corrections unchanged.
+
+
+### 2026-10-11 ~17:45 CEST — 📶 5 GHz WiFi (Crabwebski) carries the station
+
+The notebook (dongle host) moved onto the hidden 5 GHz network
+"Crabwebski" (Intel 8265, 802.11ac, 40 MHz, 300 Mbit/s tx, IP
+192.168.3.65; Ethernet unplugged). With BOTH dongle streams
+flowing over it: live audio 95,980 B/s = 99.98% of real time,
+8 short gaps (0.15-0.21 s, WiFi airtime jitter) per 30 s vs the
+2.4 GHz afternoon (35k B/s, 62 gaps, 135 ms ping); ping under
+load 6.4 ms avg. The live-edge listener passes every network
+hiccup straight through (no jitter buffer by design) - the tiny
+blips are the link's airtime scheduling, audible but rare.
+Wired (192.168.3.35, 0.7 ms) remains the desk setup; the 8265
+turns out to be WiFi 5 all along - the afternoon disaster was
+purely the 2.4 GHz band. Dongle registry/calibration re-keyed
+to 192.168.3.65:1234/:1235 (Interwebski profiles deleted from
+NetworkManager; Crabwebski profile stored, autoconnect).
