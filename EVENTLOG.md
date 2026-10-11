@@ -1630,3 +1630,32 @@ turns out to be WiFi 5 all along - the afternoon disaster was
 purely the 2.4 GHz band. Dongle registry/calibration re-keyed
 to 192.168.3.65:1234/:1235 (Interwebski profiles deleted from
 NetworkManager; Crabwebski profile stored, autoconnect).
+
+
+### 2026-10-11 ~18:30 CEST — 📡 SDR#-style waterfall: WebSocket dB push + real controls
+
+Long-planned dashboard upgrade, done while the station idles between
+passes:
+- Both capture threads now emit a dBFS row per waterfall row (int16
+  dB*10, pre-normalization - the display rows are max-normalized
+  and carry no level, useless for a spectrum display)
+- /waterfall.ws: stdlib RFC 6455 WebSocket pushing binary rows for
+  all dongles, client-set rate (default 60/s, natural max ~234/s);
+  test_ws.py covers handshake/frame/rate/pong/close. Verified live:
+  294 frames / 4 s on the VM, loudest bin -16.7 dBFS
+- BONUS BUG: the frontend still hardcoded the ORIGINAL 240 kHz
+  capture span - at 2.4 Msps the rows span 2.4 MHz, so every axis
+  label and click-to-tune has been 10x off since the high-rate
+  switch. Verified against a 99.6 MHz broadcast station at known
+  offsets (bin 361 at +600 kHz, bin 278 at +100 kHz - the 2.4 MHz
+  model). Frequency geometry is now driven by status.json sdr_khz
+- SDR#-style per-dongle sidebar: Zoom (mirrors Ctrl+wheel, recenters),
+  Contrast, Range, Offset sliders + reset, localStorage-persisted;
+  a 600-row client dB ring replays the history instantly on any
+  control change
+- 110px spectrum pane: dBFS grid, green trace, tuning line at the
+  tracked center, hover shows freq + dBFS
+- Polling fallback stays: if /waterfall.ws is down (e.g. nginx not
+  yet proxying it - the VM needs a WS location block with
+  proxy_http_version 1.1 + Upgrade headers), the dashboard drops
+  back to /waterfall.json automatically
