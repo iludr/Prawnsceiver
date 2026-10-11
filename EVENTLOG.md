@@ -1564,3 +1564,32 @@ now -80 ppm -> -12960 Hz at the AIS band; the generic dongle
 immediately decodes live ship traffic again (operator-confirmed
 2026-10-11). A direct 162 MHz measurement can replace the
 fallback with an exact entry anytime.
+
+
+### 2026-10-11 ~16:30 CEST — 🏠 Back to the VM: the rtl_tcp premise retracted
+
+The notebook move was motivated by the assumption that the
+rtl_tcp link was flaky. The 2026-10-11 diagnosis disproved that:
+the audio hangs were GIL saturation (per-block processing at
+2.4 Msps) and decode-path memory bugs - all fixed, all
+host-independent - and the rtl_tcp transport itself never showed
+up in any measurement. So the station moved BACK:
+- receiver on the VM (prawnsdr@192.168.2.73, 4x Xeon W-2133,
+  4 GB RAM - plenty now that the OOM bugs are fixed)
+- notebook (prawntenna2) back to dongle host: prawntenna manager
+  restored (its preserved copy shipped an unconfigured unit
+  template - "User=youruser" - rewritten for crustean1), both
+  dongles re-published pinned by serial (v5 :1234 satellites,
+  R820T :1235 AIS); prawnceiver fully removed from the notebook
+  (service + checkout deleted; /var/log/noaa data kept)
+- calibration re-keyed usb:N -> 192.168.3.65:1234/1235, values
+  unchanged (same physical dongles; the R820T keeps the
+  corrected -80 ppm fallback: AIS demod shows the pre-fix
+  false-burst storm GONE through rtl_tcp, just a quiet river
+  right now)
+- nginx prawntenna2.derusi.de repointed back to the manager UI
+  (:8080); the station dashboard is prawnceiver.derusi.de -> VM
+Everything from 2026-10-11 ships on both paths: the USB/rtl_sdr
+support stays in the code (usable if the station ever runs on a
+dongle host again), the batched pipeline and the decode fixes are
+host-independent.
