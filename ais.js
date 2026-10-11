@@ -27,11 +27,10 @@ function fmtDateTime(ts) {
     const d = new Date(ts * 1000);
     return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour12: false });
 }
-async function loadRegistry() {
-    try {
-        const res = await fetch('/ais_ships.json');
-        const ships = await res.json();
-        document.getElementById('regcount').textContent = ships.length;
+// Persistent ship registry render — shared by the /ais_ships.json
+// fallback poll and the WS 'ais_ships' topic push
+function applyRegistry(ships) {
+    document.getElementById('regcount').textContent = ships.length;
         registryShips = {};
         for (const s of ships) registryShips[s.mmsi] = s.name || ('MMSI ' + s.mmsi);
         const rows = document.getElementById('regrows');
@@ -70,6 +69,11 @@ async function loadRegistry() {
                 + '</details></td></tr>';
         }
         rows.innerHTML = html;
+}
+
+async function loadRegistry() {
+    try {
+        applyRegistry(await (await fetch('/ais_ships.json')).json());
     } catch (err) {
         console.error('Ship registry load failed:', err);
     }
@@ -133,7 +137,7 @@ async function drawTrack(mmsi) {
 function regToggle(mmsi, open) {
     if (open) regOpen.add(mmsi); else regOpen.delete(mmsi);
 }
-setInterval(loadRegistry, 30000);
+setInterval(() => { if (!aisWsLive()) loadRegistry(); }, 30000);
 loadRegistry();
 
 // ---------- live ship map (Leaflet + OpenStreetMap tiles) ----------
@@ -228,23 +232,24 @@ function updateMap(ships) {
 }
 initMap();
 
-async function load() {
-    try {
-        const n = document.getElementById('count').value;
-        const res = await fetch('/aislog.json?count=' + n);
-        const log = await res.json();
-        const sres = await fetch('/ais.json');
-        const s = await sres.json();
-        const ch = s.channels || {};
+// AIS status header + ship map — shared by the /ais.json fallback poll
+// and the WS 'ais' topic push
+function applyAisStatus(s) {
+    const ch = s.channels || {};
         const chA = ch.A ? ch.A.frames : 0, chB = ch.B ? ch.B.frames : 0;
         document.getElementById('stats').textContent =
             (s.enabled ? 'Receiver live on dongle ' + s.dongle
                         : 'AIS disabled (AIS dongle not added) — showing the persisted log')
             + ' · frames decoded: ch A ' + chA + ' + ch B ' + chB
             + ' (' + (chA + chB) + ' this run) · ships tracked: ' + s.ships.length;
-        document.getElementById('loadinfo').textContent = ' · showing ' + log.length + ' log lines';
-        updateMap(s.ships);
-        const rows = document.getElementById('rows');
+    updateMap(s.ships);
+}
+
+// Log tail render — shared by the /aislog.json fallback poll and the WS
+// 'aislog' topic push (the server pushes the subscribed count)
+function applyAisLog(log) {
+    document.getElementById('loadinfo').textContent = ' · showing ' + log.length + ' log lines';
+    const rows = document.getElementById('rows');
         if (!log.length) {
             rows.innerHTML = '<tr><td colspan="11" class="muted">No AIS frames decoded yet — the log fills as ships come into range.</td></tr>';
             return;
@@ -269,20 +274,75 @@ async function load() {
                 + cell(esc(e.nmea || ''), 'nmea')
                 + '</tr>';
         }
-        rows.innerHTML = html;
+    rows.innerHTML = html;
+}
+
+async function load() {
+    try {
+        const n = document.getElementById('count').value;
+        applyAisLog(await (await fetch('/aislog.json?count=' + n)).json());
+        applyAisStatus(await (await fetch('/ais.json')).json());
     } catch (err) {
         console.error('AIS log load failed:', err);
     }
 }
 
-document.getElementById('count').addEventListener('change', load);
+document.getElementById('count').addEventListener('change', () => {
+    // new tail length: re-subscribe (the server pushes the new count
+    // at once); without the socket the HTTP fallback loads it directly
+    if (aisWsLive()) sendAisSub(); else load();
+});
 let timer = null;
 function setTimer() {
     if (timer) clearInterval(timer);
-    if (document.getElementById('autorefresh').checked) timer = setInterval(load, 10000);
+    if (document.getElementById('autorefresh').checked)
+        timer = setInterval(() => { if (!aisWsLive()) load(); }, 10000);
 }
 document.getElementById('autorefresh').addEventListener('change', setTimer);
 load();
 setTimer();
+
+// ---------- WebSocket live updates (JSON topic push over /waterfall.ws) ----
+// Subscribes to the AIS topics; the HTTP polling above keeps running
+// as the fallback only while the socket is down.
+let aisSocket = null, aisWsBackoff = 2000;
+function aisWsLive() { return aisSocket && aisSocket.readyState === 1; }
+function sendAisSub() {
+    try { aisSocket.send('sub=ais,ais_ships,aislog=' + (document.getElementById('count').value || 200)); } catch (e) {}
+}
+function connectAisWs() {
+    try {
+        const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const ws = new WebSocket(proto + location.host + '/waterfall.ws');
+        aisSocket = ws;
+        ws.binaryType = 'arraybuffer';
+        ws.onopen = () => { aisWsBackoff = 2000; sendAisSub(); };
+        ws.onmessage = ev => {
+            if (typeof ev.data === 'string') return;
+            const u = new Uint8Array(ev.data);
+            if (u.length < 4 || u[0] !== 2) return;   // no waterfall rows here
+            const nlen = (u[1] << 8) | u[2];
+            if (u.length < 3 + nlen) return;
+            const topic = new TextDecoder().decode(u.subarray(3, 3 + nlen));
+            try {
+                const data = JSON.parse(new TextDecoder().decode(u.subarray(3 + nlen)));
+                if (topic === 'ais') applyAisStatus(data);
+                else if (topic === 'aislog') applyAisLog(data);
+                else if (topic === 'ais_ships') applyRegistry(data);
+            } catch (e) { console.error('WS topic ' + topic + ' failed:', e); }
+        };
+        ws.onclose = () => {
+            aisSocket = null;
+            setTimeout(connectAisWs, aisWsBackoff);
+            aisWsBackoff = Math.min(60000, aisWsBackoff * 2);
+        };
+        ws.onerror = () => { try { ws.close(); } catch (e) {} };
+    } catch (e) {
+        aisSocket = null;
+        setTimeout(connectAisWs, aisWsBackoff);
+        aisWsBackoff = Math.min(60000, aisWsBackoff * 2);
+    }
+}
+connectAisWs();
 
         document.getElementById('trackmode-btn').addEventListener('click', toggleTrackMode);

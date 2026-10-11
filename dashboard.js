@@ -936,13 +936,35 @@
                 const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
                 const ws = new WebSocket(proto + location.host + '/waterfall.ws');
                 wfSocket = ws;
-                ws.onopen = () => { wfWsBackoff = 5000; };   // reset after a good run
                 ws.binaryType = 'arraybuffer';
-                ws.onopen = () => { try { ws.send('rate=60'); } catch (e) {} };
+                // one open handler (the previous duplicate had silently
+                // disabled the backoff reset): request the row rate and
+                // subscribe to the JSON topics — every periodic fetch
+                // below goes silent while the socket is live
+                ws.onopen = () => {
+                    wfWsBackoff = 5000;   // reset after a good run
+                    try {
+                        ws.send('rate=60');
+                        ws.send('sub=dongles,status,passes,track,ais,power,recordings');
+                    } catch (e) {}
+                };
                 ws.onmessage = ev => {
+                    if (typeof ev.data === 'string') return;
                     const u = new Uint8Array(ev.data);
-                    if (u.length < 4 || u[0] !== 1) return;
+                    if (u.length < 4) return;
                     const nlen = (u[1] << 8) | u[2];
+                    if (u[0] === 2) {
+                        // JSON topic push: [type=2][u16be topic_len][topic][json]
+                        if (u.length < 3 + nlen) return;
+                        const topic = new TextDecoder().decode(u.subarray(3, 3 + nlen));
+                        const apply = WS_TOPICS[topic];
+                        if (!apply) return;
+                        try {
+                            apply(JSON.parse(new TextDecoder().decode(u.subarray(3 + nlen))));
+                        } catch (e) { console.error('WS topic ' + topic + ' failed:', e); }
+                        return;
+                    }
+                    if (u[0] !== 1) return;
                     if (u.length < 3 + nlen + 1024) return;
                     const did = new TextDecoder().decode(u.subarray(3, 3 + nlen));
                     const b = wfBlocks[did];
@@ -1144,8 +1166,15 @@
 
         async function fetchWaterfall() {
             try {
-                const res = await fetch('/dongles.json');
-                const dongles = await res.json();
+                applyDongles(await (await fetch('/dongles.json')).json());
+            } catch(e) { /* fetch failed — cards keep last state */ }
+        }
+
+        // Dongle state onto the waterfall blocks + control cards —
+        // shared by the /dongles.json fallback poll and the WS 'dongles'
+        // topic push
+        function applyDongles(dongles) {
+            try {
                 // prune blocks/cards of dongles removed at runtime
                 for (const rid of Object.keys(wfBlocks)) {
                     if (!dongles.some(d => d.id === rid)) {
@@ -1169,7 +1198,7 @@
                 // the overlay follows per-dongle geometry (recorded
                 // bandwidth, override frequencies) — redraw with the poll
                 if (wfOverlayOn) drawWfOverlay();
-            } catch(e) { /* dongles.json unreachable — cards keep last state */ }
+            } catch(e) { /* bad data — cards keep last state */ }
         }
 
         // Polling-fallback row fetch (only while the WebSocket is down):
@@ -1847,10 +1876,10 @@
         }
 
         let statusFails = 0;
-        async function fetchStatus() {
+        // Station status onto the header/banner/passes UI — shared by
+        // the /status.json fallback poll and the WS 'status' topic push
+        function applyStatus(data) {
             try {
-                const res = await fetch('/status.json');
-                const data = await res.json();
                 if (data.sdr_khz) {
                     SDR_KHZ = data.sdr_khz;
                     const sp = document.getElementById('wf-spankhz');
@@ -1953,6 +1982,14 @@
                     satnogsCatnr = null;
                 }
             } catch(e) {
+                console.error('Status apply failed:', e);
+            }
+        }
+
+        async function fetchStatus() {
+            try {
+                applyStatus(await (await fetch('/status.json')).json());
+            } catch(e) {
                 if (++statusFails >= 2) document.getElementById('conn-banner').style.display = 'block';
                 console.error('Status fetch failed:', e);
             }
@@ -2001,11 +2038,10 @@
             </div>`;
         }
 
-        async function fetchPasses() {
+        // Upcoming passes render — shared by the /passes.json fallback
+        // poll and the WS 'passes' topic push
+        function applyPasses(passes) {
             try {
-                if (tleInfo && tleInfo.active) { renderTleBar(); return; }
-                const res = await fetch('/passes.json');
-                const passes = await res.json();
                 const list = document.getElementById('passes-list');
                 if (passes.length === 0) {
                     list.innerHTML = '<div style="color:#666;padding:10px;">No passes found in next 24h.</div>';
@@ -2036,22 +2072,33 @@
                     </div>`;
                 });
                 list.innerHTML = html;
+            } catch(e) { console.error('Error applying passes:', e); }
+        }
+
+        async function fetchPasses() {
+            try {
+                if (tleInfo && tleInfo.active) { renderTleBar(); return; }
+                applyPasses(await (await fetch('/passes.json')).json());
             } catch(e) { console.error('Error fetching passes:', e); }
+        }
+
+        // Decoded-recording count — shared by the /recordings.json
+        // fallback poll and the WS 'recordings' topic push
+        function applyRecordings(recordings) {
+            const crabEl = document.getElementById('crab-count');
+            if (crabEl) crabEl.textContent = recordings.filter(r => r.decoded).length;
         }
 
         async function fetchCrabCount() {
             try {
-                const res = await fetch('/recordings.json');
-                const recordings = await res.json();
-                const crabEl = document.getElementById('crab-count');
-                if (crabEl) crabEl.textContent = recordings.filter(r => r.decoded).length;
+                applyRecordings(await (await fetch('/recordings.json')).json());
             } catch(e) { console.error('Error fetching recordings:', e); }
         }
 
-        async function fetchTrack() {
+        // Polar pass view — shared by the /track.json fallback poll and
+        // the WS 'track' topic push
+        function applyTrack(data) {
             try {
-                const res = await fetch('/track.json');
-                const data = await res.json();
                 const section = document.getElementById('track-section');
                 if (!data.active) {
                     section.style.display = 'none';
@@ -2060,6 +2107,12 @@
                 section.style.display = 'block';
                 document.getElementById('track-sat').textContent = `${data.sat_name} (az ${data.now ? data.now.az : '—'}° / el ${data.now ? data.now.alt : '—'}°)`;
                 drawTrack(data);
+            } catch(e) { console.error('Error applying track:', e); }
+        }
+
+        async function fetchTrack() {
+            try {
+                applyTrack(await (await fetch('/track.json')).json());
             } catch(e) { console.error('Error fetching track:', e); }
         }
 
@@ -2620,24 +2673,27 @@
             liSstv();
         }
 
-        async function fetchPower() {
-            // Notebook power state: hidden on hosts without batteries
-            try {
-                const res = await fetch('/power.json');
-                const data = await res.json();
+        // Notebook power state — shared by the /power.json fallback poll
+        // and the WS 'power' topic push; hidden on hosts without batteries
+        function applyPower(data) {
                 const el = document.getElementById('power-status');
                 const bats = (data.supplies || []).filter(s => s.type === 'Battery');
                 if (!bats.length) { el.style.display = 'none'; return; }
                 const batTxt = bats.map(b => `🔋 ${b.name}: ${b.capacity !== null && b.capacity !== undefined ? b.capacity + '%' : '?'} (${b.status})`).join(' · ');
                 el.textContent = (data.ac ? '⚡ AC power' : '🔌 on battery') + ' · ' + batTxt;
-                el.style.display = '';
+            el.style.display = '';
+        }
+
+        async function fetchPower() {
+            try {
+                applyPower(await (await fetch('/power.json')).json());
             } catch (e) { document.getElementById('power-status').style.display = 'none'; }
         }
 
-        async function fetchAIS() {
+        // Dashboard AIS section — shared by the /ais.json fallback poll
+        // and the WS 'ais' topic push (the full AIS page renders itself)
+        function applyAis(data) {
             try {
-                const res = await fetch('/ais.json');
-                const data = await res.json();
                 const title = document.getElementById('ais-title');
                 const section = document.getElementById('ais-section');
                 if (!data.enabled) { title.style.display = 'none'; section.style.display = 'none'; return; }
@@ -2672,22 +2728,37 @@
                 document.getElementById('ais-list').innerHTML = html ||
                     '<div style="color:#666;padding:10px;">No ships heard yet.</div>';
                 document.getElementById('ais-nmea').textContent = (data.nmea || []).slice(-20).join('\n');
+            } catch (e) { console.error('Error applying AIS:', e); }
+        }
+
+        async function fetchAIS() {
+            try {
+                applyAis(await (await fetch('/ais.json')).json());
             } catch (e) { console.error('Error fetching AIS:', e); }
         }
 
         // Init
         connectWaterfallWS();
-        // dongle/card state (dongles.json) at 1 Hz — the card signal
-        // history samples at 1 Hz anyway; rows come off the WebSocket,
-        // with the 200 ms /waterfall.json polling only as WS fallback
-        setInterval(fetchWaterfall, 1000);
+        // WebSocket JSON topics: while the socket is live these replace
+        // EVERY periodic fetch — the intervals below only run as the
+        // HTTP fallback (same data, same cadences as the pushes)
+        const WS_TOPICS = {
+            dongles: applyDongles,
+            status: applyStatus,
+            passes: applyPasses,
+            track: applyTrack,
+            ais: applyAis,
+            power: applyPower,
+            recordings: applyRecordings,
+        };
+        setInterval(() => { if (!wfWsLive()) fetchWaterfall(); }, 1000);
         setInterval(() => { if (!wfWsLive()) fetchWaterfallRows(); }, 200);
-        setInterval(fetchStatus, 3000);
-        setInterval(fetchPasses, 30000);
-        setInterval(fetchTrack, 2000);
-        setInterval(fetchCrabCount, 10000);
-        setInterval(fetchAIS, 10000);
-        setInterval(fetchPower, 15000); fetchPower();
+        setInterval(() => { if (!wfWsLive()) fetchStatus(); }, 3000);
+        setInterval(() => { if (!wfWsLive()) fetchPasses(); }, 30000);
+        setInterval(() => { if (!wfWsLive()) fetchTrack(); }, 2000);
+        setInterval(() => { if (!wfWsLive()) fetchCrabCount(); }, 10000);
+        setInterval(() => { if (!wfWsLive()) fetchAIS(); }, 10000);
+        setInterval(() => { if (!wfWsLive()) fetchPower(); }, 15000); fetchPower();
         setInterval(updateUptime, 1000);
         setInterval(liveImgTick, 250);
         document.getElementById('tune-freq').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tuneManual(); } });

@@ -147,6 +147,39 @@ st = _json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/status.json").
 assert st.get("sdr_khz") == 2400, st.get("sdr_khz")
 print("5. status.json sdr_khz = 2400: ok")
 
+# --- 5b. JSON topic subscription: 'sub=dongles' pushes immediately ---
+s.sendall(bytes([0x81, 11]) + b"sub=dongles")   # length MUST match the payload
+buf5 = b""
+topic = None
+payload = None
+deadline = time.time() + 5
+while time.time() < deadline and topic is None:
+    try:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        buf5 += chunk
+    except socket.timeout:
+        break
+    while len(buf5) >= 4 and topic is None:
+        if buf5[0] != 0x82:
+            buf5 = b""
+            break
+        ln = int.from_bytes(buf5[2:4], "big")
+        if len(buf5) < 4 + ln:
+            break
+        frame5 = buf5[4:4 + ln]
+        buf5 = buf5[4 + ln:]
+        if frame5[0] == 1:
+            continue           # dB row from the earlier tests: skip
+        if frame5[0] == 2:
+            nlen5 = int.from_bytes(frame5[1:3], "big")
+            topic = frame5[3:3 + nlen5].decode()
+            payload = _json.loads(frame5[3 + nlen5:].decode())
+assert topic == "dongles", topic
+assert isinstance(payload, list) and payload and payload[0]["id"] == DID, payload[:1]
+print("5b. 'sub=dongles': immediate type=2 JSON push with the dongle list: ok")
+
 # --- 6. close frame terminates the server side cleanly ---
 s.sendall(bytes([0x88, 2]) + b"\x03\xe8")
 time.sleep(0.3)

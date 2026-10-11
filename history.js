@@ -154,5 +154,47 @@ async function refresh() {
     } catch(e) { console.error('History refresh failed:', e); }
 }
 
+// ---------- WebSocket live updates (JSON topic push over /waterfall.ws) ----
+// Subscribes to the history topics; the HTTP refresh above keeps
+// running as the fallback only while the socket is down.
+let histSocket = null, histWsBackoff = 2000;
+function histWsLive() { return histSocket && histSocket.readyState === 1; }
+function connectHistWs() {
+    try {
+        const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        const ws = new WebSocket(proto + location.host + '/waterfall.ws');
+        histSocket = ws;
+        ws.binaryType = 'arraybuffer';
+        ws.onopen = () => { histWsBackoff = 2000; try { ws.send('sub=pass_history,recordings'); } catch (e) {} };
+        ws.onmessage = ev => {
+            if (typeof ev.data === 'string') return;
+            const u = new Uint8Array(ev.data);
+            if (u.length < 4 || u[0] !== 2) return;
+            const nlen = (u[1] << 8) | u[2];
+            if (u.length < 3 + nlen) return;
+            const topic = new TextDecoder().decode(u.subarray(3, 3 + nlen));
+            try {
+                const data = JSON.parse(new TextDecoder().decode(u.subarray(3 + nlen)));
+                if (topic === 'pass_history') historyData = data;
+                else if (topic === 'recordings') recordingsData = data;
+                else return;
+                render();
+            } catch (e) { console.error('WS topic ' + topic + ' failed:', e); }
+        };
+        ws.onclose = () => {
+            histSocket = null;
+            setTimeout(connectHistWs, histWsBackoff);
+            histWsBackoff = Math.min(60000, histWsBackoff * 2);
+        };
+        ws.onerror = () => { try { ws.close(); } catch (e) {} };
+    } catch (e) {
+        histSocket = null;
+        setTimeout(connectHistWs, histWsBackoff);
+        histWsBackoff = Math.min(60000, histWsBackoff * 2);
+    }
+}
+connectHistWs();
+
 refresh();
-setInterval(refresh, 8000);
+setInterval(() => { if (!histWsLive()) refresh(); }, 8000);
+

@@ -123,6 +123,116 @@ def get_status():
     return status
 
 
+def _passes_data():
+    """Upcoming passes for /passes.json and the WS 'passes' topic."""
+    with state.status_lock:
+        return passes_to_json(state.upcoming_passes)
+
+
+def _track_data():
+    """Polar (az/el) track of the currently active pass for /track.json
+    and the WS 'track' topic."""
+    with state.status_lock:
+        cur = state.current_pass
+    result = {"active": False, "sat_name": None, "track": [], "now": None}
+    if cur is not None:
+        result["active"] = True
+        result["sat_name"] = cur["sat_name"]
+        if HAS_SKYFIELD and cur.get("sat") is not None:
+            try:
+                ts = load.timescale()
+                site = wgs84.latlon(LAT, LON)
+                now = datetime.utcnow().replace(tzinfo=timezone.utc)
+                start, end = cur["rise_utc"], cur["set_utc"]
+                span = (end - start).total_seconds()
+                if span > 0:
+                    steps = max(int(span // 30), 1)
+                    times = [start + timedelta(seconds=span * k / steps) for k in range(steps + 1)]
+                    t = ts.from_datetimes(times)
+                    alt, az, _ = (cur["sat"] - site).at(t).altaz()
+                    result["track"] = [
+                        {"t": times[i].timestamp(),
+                         "alt": round(alt.degrees[i], 1),
+                         "az": round(az.degrees[i], 1)}
+                        for i in range(len(times))
+                    ]
+                tn = ts.from_datetime(now)
+                altn, azn, _ = (cur["sat"] - site).at(tn).altaz()
+                result["now"] = {"t": now.timestamp(), "alt": round(altn.degrees, 1), "az": round(azn.degrees, 1)}
+            except Exception as e:
+                state.log_console(f"Track computation failed: {e}", "error")
+    return result
+
+
+def _power_data():
+    """Host power state (notebooks) for /power.json and the WS 'power'
+    topic: every battery with capacity and status, plus whether an
+    external supply (AC adapter, USB-C dock, ...) is online. A machine
+    without batteries (desktop/container) returns an empty list and the
+    dashboard hides the display."""
+    supplies = []
+    ac = False
+    pbase = '/sys/class/power_supply'
+    if os.path.isdir(pbase):
+        for pname in sorted(os.listdir(pbase)):
+            pdir = os.path.join(pbase, pname)
+            def rd(f, _d=pdir):
+                try:
+                    with open(os.path.join(_d, f)) as fh:
+                        return fh.read().strip()
+                except OSError:
+                    return ''
+            ptype = rd('type')
+            if ptype in ('Mains', 'USB'):
+                online = rd('online') == '1'
+                ac = ac or online
+                supplies.append({'name': pname, 'type': ptype,
+                                 'online': online})
+            elif ptype == 'Battery':
+                status = rd('status')
+                ac = ac or status == 'Charging'
+                try:
+                    cap = int(rd('capacity'))
+                except ValueError:
+                    cap = None
+                supplies.append({'name': pname, 'type': 'Battery',
+                                 'capacity': cap, 'status': status})
+    return {'ac': ac, 'supplies': supplies}
+
+
+def _console_lines():
+    """Console ring for /console.json and the WS 'console' topic."""
+    with state.console_lock:
+        return list(state.console_buffer)
+
+
+def _aislog_count(param):
+    """Row count requested for the WS 'aislog' topic ('aislog=200')."""
+    try:
+        return max(1, min(2000, int(param)))
+    except (TypeError, ValueError):
+        return 200
+
+
+# WebSocket JSON topic push: one entry per pushable topic -
+# (cadence in seconds, payload builder taking the subscription
+# parameter). The builders are the same ones the HTTP endpoints serve,
+# so a push and a fetch always agree.
+_WS_TOPICS = {
+    'dongles':      (1.0,  lambda p: _dongle_list()),
+    'status':       (3.0,  lambda p: get_status()),
+    'passes':       (30.0, lambda p: _passes_data()),
+    'track':        (2.0,  lambda p: _track_data()),
+    'ais':          (10.0, lambda p: ais.ais_status()),
+    'power':        (15.0, lambda p: _power_data()),
+    'recordings':   (10.0, lambda p: get_recordings()),
+    'console':      (2.0,  lambda p: _console_lines()),
+    'aislog':       (10.0, lambda p: ais.ais_log(_aislog_count(p))),
+    'ais_ships':    (30.0, lambda p: ais.ships_registry()),
+    'pass_history': (8.0,  lambda p: _load_history()),
+}
+
+
 class NOAAHandler(http.server.SimpleHTTPRequestHandler):
     _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
@@ -146,6 +256,15 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         Per-connection thread (this handler thread lives until the
         socket closes); a slow client is simply skipped rows (the tick
         always sends the newest one - no backlog can build).
+
+        JSON topics: a client subscribes with a text frame
+        'sub=topic,topic=param' and receives
+        [type=2][u16be topic_len][topic utf8][json utf8] frames - each
+        topic immediately after subscribing, then on its own cadence
+        (see _WS_TOPICS). This moves ALL recurring page communication
+        (status, dongles, passes, track, AIS, power, recordings,
+        console, history) onto the socket; the HTTP endpoints remain
+        as the fallback while the socket is down.
         """
         import base64
         import hashlib
@@ -171,6 +290,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             return
         rate = 60.0          # rows/s per dongle until the client says otherwise
         last_seq = {}
+        subs = {}            # topic -> subscription parameter (or None)
+        last_topic = {}      # topic -> last push time (0 = push now)
         buf = bytearray()
         tick = 0.0
         try:
@@ -212,15 +333,49 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                             break
                         elif op == 9:        # ping -> pong
                             conn.sendall(self._ws_frame(10, payload))
-                        elif op == 1:        # text: 'rate=N'
-                            try:
-                                rate = max(5.0, min(234.0,
-                                        float(payload.decode().strip().split('=')[-1])))
-                            except ValueError:
-                                pass
+                        elif op == 1:        # text: 'rate=N' / 'sub=a,b=c'
+                            txt = payload.decode(errors='replace').strip()
+                            if txt.startswith('sub='):
+                                # (re)subscribe: the whole set at once;
+                                # last_topic = 0 pushes each immediately,
+                                # then on its own cadence
+                                subs.clear()
+                                for part in txt[4:].split(','):
+                                    part = part.strip()
+                                    if not part:
+                                        continue
+                                    topic, _, param = part.partition('=')
+                                    if topic in _WS_TOPICS:
+                                        subs[topic] = param or None
+                                        last_topic[topic] = 0.0
+                            else:
+                                try:
+                                    rate = max(5.0, min(234.0,
+                                            float(txt.split('=')[-1])))
+                                except ValueError:
+                                    pass
                 except BlockingIOError:
                     pass
                 now = time.time()
+                # JSON topic pushes: every subscribed topic on its own
+                # cadence, checked on each loop pass (~500 Hz) so they
+                # are independent of the row rate
+                for topic in list(subs):
+                    interval, build = _WS_TOPICS[topic]
+                    if now - last_topic.get(topic, 0.0) < interval:
+                        continue
+                    last_topic[topic] = now
+                    try:
+                        payload = build(subs[topic])
+                    except Exception:
+                        continue          # one bad topic never kills the socket
+                    tb = topic.encode()
+                    frame = (bytes([2]) + len(tb).to_bytes(2, 'big')
+                             + tb + json.dumps(payload).encode())
+                    try:
+                        conn.sendall(self._ws_frame(2, frame))
+                    except (BlockingIOError, OSError):
+                        break
                 if now - tick >= 1.0 / rate:
                     tick = now
                     for did, e in list(state.sdrs.items()):
@@ -265,44 +420,12 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({'dongles': usb_dongles()}).encode())
         elif self.path == '/power.json':
-            # Host power state (notebooks): every battery with capacity
-            # and status, plus whether an external supply (AC adapter,
-            # USB-C dock, ...) is online. A machine without batteries
-            # (desktop/container) returns an empty list and the
-            # dashboard hides the display.
-            supplies = []
-            ac = False
-            pbase = '/sys/class/power_supply'
-            if os.path.isdir(pbase):
-                for pname in sorted(os.listdir(pbase)):
-                    pdir = os.path.join(pbase, pname)
-                    def rd(f, _d=pdir):
-                        try:
-                            with open(os.path.join(_d, f)) as fh:
-                                return fh.read().strip()
-                        except OSError:
-                            return ''
-                    ptype = rd('type')
-                    if ptype in ('Mains', 'USB'):
-                        online = rd('online') == '1'
-                        ac = ac or online
-                        supplies.append({'name': pname, 'type': ptype,
-                                         'online': online})
-                    elif ptype == 'Battery':
-                        status = rd('status')
-                        ac = ac or status == 'Charging'
-                        try:
-                            cap = int(rd('capacity'))
-                        except ValueError:
-                            cap = None
-                        supplies.append({'name': pname, 'type': 'Battery',
-                                         'capacity': cap, 'status': status})
+            # Host power state (notebooks) - see _power_data()
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps({'ac': ac,
-                                        'supplies': supplies}).encode())
+            self.wfile.write(json.dumps(_power_data()).encode())
         elif self.path.split('?')[0] == '/waterfall.ws':
             # WebSocket push of dBFS spectrum rows (see _waterfall_websocket)
             self._waterfall_websocket()
@@ -333,8 +456,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(_dongle_list()).encode())
         elif self.path == '/passes.json':
-            with state.status_lock:
-                passes = passes_to_json(state.upcoming_passes)
+            passes = _passes_data()
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -362,36 +484,9 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(history).encode())
         elif self.path == '/track.json':
-            # Polar (az/el) track of the currently active pass
-            with state.status_lock:
-                cur = state.current_pass
-            result = {"active": False, "sat_name": None, "track": [], "now": None}
-            if cur is not None:
-                result["active"] = True
-                result["sat_name"] = cur["sat_name"]
-                if HAS_SKYFIELD and cur.get("sat") is not None:
-                    try:
-                        ts = load.timescale()
-                        site = wgs84.latlon(LAT, LON)
-                        now = datetime.utcnow().replace(tzinfo=timezone.utc)
-                        start, end = cur["rise_utc"], cur["set_utc"]
-                        span = (end - start).total_seconds()
-                        if span > 0:
-                            steps = max(int(span // 30), 1)
-                            times = [start + timedelta(seconds=span * k / steps) for k in range(steps + 1)]
-                            t = ts.from_datetimes(times)
-                            alt, az, _ = (cur["sat"] - site).at(t).altaz()
-                            result["track"] = [
-                                {"t": times[i].timestamp(),
-                                 "alt": round(alt.degrees[i], 1),
-                                 "az": round(az.degrees[i], 1)}
-                                for i in range(len(times))
-                            ]
-                        tn = ts.from_datetime(now)
-                        altn, azn, _ = (cur["sat"] - site).at(tn).altaz()
-                        result["now"] = {"t": now.timestamp(), "alt": round(altn.degrees, 1), "az": round(azn.degrees, 1)}
-                    except Exception as e:
-                        state.log_console(f"Track computation failed: {e}", "error")
+            # Polar (az/el) track of the currently active pass - see
+            # _track_data() (shared with the WS 'track' topic)
+            result = _track_data()
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -413,8 +508,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(ais.ships_registry()).encode())
         elif self.path == '/console.json':
-            with state.console_lock:
-                lines = list(state.console_buffer)
+            lines = _console_lines()
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
