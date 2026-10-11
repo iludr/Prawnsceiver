@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from .. import db
 from .. import state
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
-                   PASS_HISTORY_FILE, RECORD_DIR, UTC_OFFSET, WEBDIR)
+                   PASS_HISTORY_FILE, RECORD_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
 
 from ..decoding import ais
 from ..sdr import scan
@@ -71,6 +71,10 @@ def get_status():
     
     dongles = _dongle_list()
     status = {
+        # Capture span for the waterfall geometry (kHz the 512-bin FFT
+        # covers = SDR_RATE): the dashboard scales its zoom/axis/tune
+        # mapping from this instead of hardcoding the old 240 kHz
+        "sdr_khz": SDR_RATE // 1000,
         # aggregate liveness: True while at least one dongle streams
         "rtl_sdr_running": any(d.get("connected") for d in dongles),
         "frequency_mhz": round(freq / 1e6, 4),
@@ -120,6 +124,130 @@ def get_status():
 
 
 class NOAAHandler(http.server.SimpleHTTPRequestHandler):
+    _WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+
+    @staticmethod
+    def _ws_frame(opcode, payload):
+        """One RFC 6455 server frame: FIN + opcode, 16-bit extended
+        length (dB rows are ~1 kB, always over the 125-byte inline
+        limit), unmasked (server frames never are)."""
+        return bytes([0x80 | opcode, 126]) + len(payload).to_bytes(2, 'big') + payload
+
+    def _waterfall_websocket(self):
+        """WebSocket push of dBFS spectrum rows: replaces the dashboard's
+        200 ms /waterfall.json polling with a live stream at up to the
+        capture rate (~234 rows/s at 2.4 Msps; the client sets its own
+        rate with a text frame like 'rate=60').
+
+        Protocol: one binary frame per dongle per tick - [type=1][u16be
+        id_len][id utf8][512 x int16le, dB*10]. The 512 int16 replace
+        the JSON number arrays of the polling endpoint (bytes, not
+        text; ~1 kB vs ~5 kB per row, and no JSON parsing either side).
+        Per-connection thread (this handler thread lives until the
+        socket closes); a slow client is simply skipped rows (the tick
+        always sends the newest one - no backlog can build).
+        """
+        import base64
+        import hashlib
+        key = self.headers.get('Sec-WebSocket-Key')
+        if not key or 'websocket' not in (self.headers.get('Upgrade') or '').lower():
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b'expected a websocket upgrade')
+            return
+        accept = base64.b64encode(hashlib.sha1(
+            (key + self._WS_GUID).encode()).digest()).decode()
+        self.send_response(101, 'Switching Protocols')
+        self.send_header('Upgrade', 'websocket')
+        self.send_header('Connection', 'Upgrade')
+        self.send_header('Sec-WebSocket-Accept', accept)
+        self.end_headers()
+        state.log_console(f"Waterfall WebSocket client connected ({self.client_address[0]})")
+        conn = self.connection
+        try:
+            conn.setblocking(False)
+        except OSError:
+            self.close_connection = True
+            return
+        rate = 60.0          # rows/s per dongle until the client says otherwise
+        last_seq = {}
+        buf = bytearray()
+        tick = 0.0
+        try:
+            while True:
+                # client frames, non-blocking: 'rate=N' control, ping,
+                # close, or a dropped connection (recv() == b'')
+                try:
+                    data = conn.recv(4096)
+                    if not data:
+                        break
+                    buf += data
+                    while len(buf) >= 2:
+                        op = buf[0] & 0x0f
+                        masked = buf[1] & 0x80   # client frames MUST mask
+                        ln = buf[1] & 0x7f
+                        off = 2
+                        if ln == 126:
+                            if len(buf) < 4:
+                                break
+                            ln = int.from_bytes(buf[2:4], 'big'); off = 4
+                        elif ln == 127:
+                            if len(buf) < 10:
+                                break
+                            ln = int.from_bytes(buf[2:10], 'big'); off = 10
+                        if masked:
+                            if len(buf) < off + 4:
+                                break
+                            mask = bytes(buf[off:off + 4])
+                            off += 4
+                        if len(buf) < off + ln:
+                            break
+                        if masked:
+                            payload = bytes(b ^ mask[i % 4]
+                                            for i, b in enumerate(buf[off:off + ln]))
+                        else:
+                            payload = bytes(buf[off:off + ln])
+                        del buf[:off + ln]
+                        if op == 8:          # close
+                            break
+                        elif op == 9:        # ping -> pong
+                            conn.sendall(self._ws_frame(10, payload))
+                        elif op == 1:        # text: 'rate=N'
+                            try:
+                                rate = max(5.0, min(234.0,
+                                        float(payload.decode().strip().split('=')[-1])))
+                            except ValueError:
+                                pass
+                except BlockingIOError:
+                    pass
+                now = time.time()
+                if now - tick >= 1.0 / rate:
+                    tick = now
+                    for did, e in list(state.sdrs.items()):
+                        with e['lock']:
+                            seq = e.get('wf_db_seq', 0)
+                            row = e['wf_db'][-1] if len(e['wf_db']) else None
+                        if row is None or seq <= last_seq.get(did, 0):
+                            continue
+                        last_seq[did] = seq
+                        did_b = did.encode()
+                        payload = (bytes([1]) + len(did_b).to_bytes(2, 'big')
+                                   + did_b + row)
+                        try:
+                            conn.sendall(self._ws_frame(2, payload))
+                        except (BlockingIOError, OSError):
+                            # client stalled: drop this tick's rows - the
+                            # next tick continues with the newest one
+                            break
+                else:
+                    # no tick fired: do not busy-spin the recv loop
+                    time.sleep(0.002)
+        except OSError:
+            pass
+        finally:
+            self.close_connection = True
+            state.log_console(f"Waterfall WebSocket client disconnected ({self.client_address[0]})")
+
     def do_GET(self):
         if self.path == '/status.json':
             self.send_response(200)
@@ -175,6 +303,9 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({'ac': ac,
                                         'supplies': supplies}).encode())
+        elif self.path.split('?')[0] == '/waterfall.ws':
+            # WebSocket push of dBFS spectrum rows (see _waterfall_websocket)
+            self._waterfall_websocket()
         elif self.path.startswith('/waterfall.json'):
             # Optional ?d=<dongle serial> (default: primary) and last=1 for
             # the newest row only (the dashboard scrolls client-side)

@@ -874,15 +874,24 @@ def ais_capture_thread(did):
                         window = _get_fft_window()
                         magnitude = np.abs(np.fft.fftshift(np.fft.fft(c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window)))
                         center = len(magnitude) // 2
+                        # dBFS row (absolute level, pre-normalization - see
+                        # the satellite thread) rolled exactly like the
+                        # display row, so the dB feed matches the card's
+                        # frequency labels
+                        rot = int(SDR_OFFSET_HZ / SDR_RATE * FFT_SIZE)
+                        db_row = np.roll((20 * np.log10(
+                            np.maximum(magnitude, 1e-6)
+                            / (31.875 * FFT_SIZE)) * 10).astype(np.int16), rot).tobytes()
                         with entry["lock"]:
                             entry["signal"] = float(
                                 magnitude[center - _SIG_BINS:center + _SIG_BINS].mean())
                             peak = magnitude.max()
                             if peak > 0:
                                 magnitude *= 255.0 / peak
-                            rot = int(SDR_OFFSET_HZ / SDR_RATE * FFT_SIZE)
                             entry["waterfall"].append(
                                 np.roll(magnitude, rot).astype(int).tolist())
+                            entry["wf_db"].append(db_row)
+                            entry["wf_db_seq"] += 1
                     except Exception:
                         pass
                 # Demodulate both AIS channels from the same batch

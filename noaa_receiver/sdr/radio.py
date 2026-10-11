@@ -337,6 +337,18 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
         'ais': did == AIS_DONGLE, 'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
+        # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
+        # bin, appended with the display row; wf_db_seq counts them
+        'wf_db': deque(maxlen=512), 'wf_db_seq': 0,
+        # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
+        # bin, appended with the display row; wf_db_seq counts them
+        'wf_db': deque(maxlen=512), 'wf_db_seq': 0,
+        # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
+        # bin, appended with the display row; wf_db_seq counts them
+        'wf_db': deque(maxlen=512), 'wf_db_seq': 0,
+        # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
+        # bin, appended with the display row; wf_db_seq counts them
+        'wf_db': deque(maxlen=512), 'wf_db_seq': 0,
         'paused': False,
         'waterfall': waterfall, 'lock': lock,
         'signal': 0.0, 'last_mag': None, 'connected': False,
@@ -806,12 +818,25 @@ def sdr_capture_thread(did):
                         # blanking that used to live here existed for
                         # the removed FC0013, whose spike saturated at
                         # 7x its strongest signal.
-                        peak = magnitude.max()
-                        if peak > 0:
-                            magnitude *= 255.0 / peak
-                        row = magnitude.astype(int).tolist()
-                        with entry['lock']:
-                            entry['waterfall'].append(row)
+                            # dBFS row for the WebSocket feed: absolute
+                            # per-bin level, computed BEFORE the display
+                            # normalization below (which rescales to the
+                            # row max and destroys level - useless for a
+                            # spectrum display with contrast/range/offset
+                            # controls). Full scale: a +/-127.5 amplitude
+                            # sine, Hann-windowed, peaks at sum(window)/2
+                            # = 0.25 * FFT_SIZE of |X|.
+                            db_row = (20 * np.log10(
+                                np.maximum(magnitude, 1e-6)
+                                / (31.875 * FFT_SIZE)) * 10).astype(np.int16).tobytes()
+                            peak = magnitude.max()
+                            if peak > 0:
+                                magnitude *= 255.0 / peak
+                            row = magnitude.astype(int).tolist()
+                            with entry['lock']:
+                                entry['waterfall'].append(row)
+                                entry['wf_db'].append(db_row)
+                                entry['wf_db_seq'] += 1
                     except Exception:
                         pass
 

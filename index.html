@@ -44,7 +44,13 @@
         .sat-sub { color: #888; font-size: 0.85em; margin-top: 1px; }
         .sat-tx { max-height: 128px; overflow-y: auto; }
         .sat-tx-row { padding: 2px 0; color: #a8b8d8; border-top: 1px solid rgba(15, 52, 96, 0.5); font-size: 0.85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .wf-spec { width: 100%; height: 50px; background: #000; border: 1px solid #0f3460; border-radius: 4px; margin-top: 4px; }
+        .wf-spec { width: 100%; height: 110px; background: #000; border: 1px solid #0f3460; border-radius: 4px; margin-top: 4px; }
+        .wf-controls { flex: 0 0 150px; background: #0f1e3a; border: 1px solid #0f3460; border-radius: 4px; padding: 6px 8px; font-size: 0.75em; color: #a8b8d8; }
+        .wf-controls .ctl { margin-bottom: 7px; }
+        .wf-controls .ctl-row { display: flex; justify-content: space-between; }
+        .wf-controls input[type=range] { width: 100%; accent-color: #53d769; height: 14px; }
+        .wf-controls .ctl-val { color: #53d769; font-family: monospace; }
+        .wf-controls button { width: 100%; margin-top: 2px; padding: 2px; background: #16213e; color: #a8b8d8; border: 1px solid #0f3460; border-radius: 3px; cursor: pointer; }
         #container { display: flex; flex: 1; min-height: 300px; }
         #main-panel { flex: 1; overflow-y: auto; padding: 12px 15px; }
         /* The panel's 15px+15px padding and 2px border sit inside its box, so
@@ -192,7 +198,7 @@
     </div>
     <div id="waterfall-section">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-            <h2 style="margin-bottom:0;">Live Waterfall — <span id="wf-freq">137.620 MHz</span> ± 120 kHz</h2>
+            <h2 style="margin-bottom:0;">Live Waterfall — <span id="wf-freq">137.620 MHz</span> ± <span id="wf-spankhz">1200</span> kHz</h2>
             <button id="wf-overlay-btn" class="btn-outline" onclick="toggleWfOverlay()">📐 Features</button>
         </div>
         <div id="wf-list"></div>
@@ -300,7 +306,16 @@
         // not fall back into the starting window.
         let tleSyncClickAt = 0;
         let tleSyncWasActive = false;
-        const WF_WIDTH = 512, WF_HEIGHT = 300, SPEC_HEIGHT = 25;
+        const WF_WIDTH = 512, WF_HEIGHT = 300, SPEC_HEIGHT = 110;
+        // Capture span (kHz covered by the 512-bin FFT = SDR_RATE).
+        // Set from status.json's sdr_khz - NEVER hardcoded again: the
+        // pre-WebSocket frontend assumed 240 kHz from the original
+        // low-rate mode while the rows really spanned the full capture
+        // (2.4 MHz today) - every axis label and click-to-tune was 10x
+        // off (verified live: a 99.6 MHz broadcast station lands at the
+        // bin predicted by the 2.4 MHz span, nowhere near the 240 kHz
+        // model's position).
+        let SDR_KHZ = 2400;
         // One waterfall block per dongle, built dynamically from /dongles.json.
         // Blocks are keyed by dongle id ("host:port" of its rtl_tcp
         // server; dongles are added/removed at runtime via /add_dongle).
@@ -444,10 +459,11 @@
         }
 
         // ---------- waterfall zoom (Ctrl+wheel / trackpad pinch) ----------
-        // Per-block view state: zoom is the visible fraction of the 240 kHz
-        // capture span, zoomOffKHz pans the window around the tuned center.
-        // 1x = the full capture, max 32x = 7.5 kHz window (16 FFT bins).
-        function wfSpanKhz(b) { return 240 / (b.zoom || 1); }
+        // Per-block view state: zoom is the visible fraction of the
+        // capture span (SDR_KHZ), zoomOffKHz pans the window around the
+        // tuned center. 1x = the full capture, max 32x = 1/32 of it
+        // (16 FFT bins at any SDR_RATE).
+        function wfSpanKhz(b) { return SDR_KHZ / (b.zoom || 1); }
         function wfKhzToPct(b, khz) {
             const span = wfSpanKhz(b);
             return 50 + ((khz - (b.zoomOffKHz || 0)) / (span / 2)) * 50;
@@ -471,6 +487,75 @@
             } else {
                 b.zoomBadge.style.display = 'none';
             }
+        }
+
+        // SDR#-style right sidebar: Zoom / Contrast / Range / Offset
+        // sliders, persisted per dongle id in localStorage, + a reset view
+        // button. Zoom mirrors the Ctrl+wheel zoom (both recenter); the dB
+        // controls drive mapDbRow/drawSpectrum and take effect on the whole
+        // retained history via replayWaterfall.
+        function buildWfControls(b, meta) {
+            let saved = {};
+            try { saved = JSON.parse(localStorage.getItem('wfctl.' + meta.id) || '{}'); } catch (e) {}
+            b.dbContrast = saved.contrast !== undefined ? saved.contrast : 1;
+            b.dbRange = saved.range !== undefined ? saved.range : 80;
+            b.dbOffset = saved.offset !== undefined ? saved.offset : -70;
+            const el = document.createElement('div');
+            el.className = 'wf-controls';
+            const save = () => { try {
+                localStorage.setItem('wfctl.' + meta.id, JSON.stringify(
+                    { contrast: b.dbContrast, range: b.dbRange, offset: b.dbOffset }));
+            } catch (e) {} };
+            const mk = (label, min, max, step, value, fmt, oninput) => {
+                const wrap = document.createElement('div');
+                wrap.className = 'ctl';
+                const row = document.createElement('div');
+                row.className = 'ctl-row';
+                const name = document.createElement('span');
+                name.textContent = label;
+                const val = document.createElement('span');
+                val.className = 'ctl-val';
+                row.appendChild(name); row.appendChild(val);
+                const inp = document.createElement('input');
+                inp.type = 'range';
+                inp.min = min; inp.max = max; inp.step = step;
+                inp.value = value;
+                const upd = () => { val.textContent = fmt(parseFloat(inp.value)); };
+                inp.oninput = () => { upd(); oninput(parseFloat(inp.value)); };
+                upd();
+                wrap.appendChild(row); wrap.appendChild(inp);
+                el.appendChild(wrap);
+                return { inp, upd };
+            };
+            const zVal = v => Math.min(32, Math.max(1, Math.pow(2, v / 100 * 5)));
+            const zRaw = z => Math.round(Math.log2(z) / 5 * 100);
+            const zctl = mk('Zoom', 0, 100, 1, zRaw(b.zoom || 1),
+                v => zVal(v).toFixed(1) + '\u00d7', v => {
+                    b.zoom = zVal(v); b.zoomOffKHz = 0;   // recenter on zoom
+                    updateZoomBadge(b); updateFreqLabels(lastSharedMHz);
+                    replayWaterfall(b);
+                    if (wfOverlayOn) drawWfOverlay();
+                });
+            b.syncZoomSlider = () => { zctl.inp.value = zRaw(b.zoom || 1); zctl.upd(); };
+            mk('Contrast', 0.3, 3, 0.05, b.dbContrast, v => v.toFixed(2),
+                v => { b.dbContrast = v; save(); replayWaterfall(b); });
+            mk('Range', 10, 120, 5, b.dbRange, v => v.toFixed(0) + ' dB',
+                v => { b.dbRange = v; save(); replayWaterfall(b); });
+            mk('Offset', -140, 0, 1, b.dbOffset, v => v.toFixed(0) + ' dB',
+                v => { b.dbOffset = v; save(); replayWaterfall(b); });
+            const rst = document.createElement('button');
+            rst.textContent = 'Reset view';
+            rst.onclick = () => {
+                b.zoom = 1; b.zoomOffKHz = 0;
+                b.dbContrast = 1; b.dbRange = 80; b.dbOffset = -70;
+                save();
+                updateZoomBadge(b); updateFreqLabels(lastSharedMHz);
+                el.replaceWith(buildWfControls(b, meta));
+                replayWaterfall(b);
+                if (wfOverlayOn) drawWfOverlay();
+            };
+            el.appendChild(rst);
+            return el;
         }
 
         function ensureWfBlock(meta) {
@@ -566,7 +651,9 @@
             const hover = document.createElement('canvas');
             hover.className = 'wf-hover';
             wrap.appendChild(hover);
-            row.appendChild(timeCanvas); row.appendChild(wrap);
+            const controls = document.createElement('div');
+            controls.className = 'wf-controls';
+            row.appendChild(timeCanvas); row.appendChild(wrap); row.appendChild(controls);
             // Per-block frequency labels under this dongle's waterfall
             // (each dongle can be tuned independently via overrides)
             const labels = document.createElement('div');
@@ -596,13 +683,18 @@
                 block, collapseBtn, cardHolder, freqLabels,
                 serial: meta.id, centerMHz: null,
                 zoom: 1, zoomOffKHz: 0, recHl: hl, zoomBadge, satLine, satLineLbl,
+                // dB spectrum state: ring of recent int16 dB*10 rows,
+                // newest row, and the SDR#-style control values
+                dbRing: [], dbLatest: null, drawPending: 0,
             };
+            controls.replaceWith(buildWfControls(b, meta));
             wireWfInteractions(b, wrap, wfCanvas, meta);
             zoomBadge.onclick = ev => {
                 ev.stopPropagation();
                 b.zoom = 1; b.zoomOffKHz = 0;
-                clearWfCanvas(b);
+                replayWaterfall(b);
                 updateZoomBadge(b);
+                if (b.syncZoomSlider) b.syncZoomSlider();
                 updateFreqLabels(lastSharedMHz);
                 if (wfOverlayOn) drawWfOverlay();
             };
@@ -636,7 +728,7 @@
         // ---------- Waterfall hover cursor + click-to-tune ----------
         // The whole wrap (waterfall + spectrum) shares one frequency axis:
         // the tuned target sits at the horizontal center, the display spans
-        // ±120 kHz (SDR_RATE). Hovering shows a dotted line with the exact
+        // the full capture (SDR_KHZ). Hovering shows a dotted line with the exact
         // frequency (and its offset from the center); a click tunes THIS
         // dongle there via /tune_dongle (Sync on its card rejoins tracking).
         function wireWfInteractions(b, wrap, wfCanvas, meta) {
@@ -696,7 +788,11 @@
                 ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
                 ctx.setLineDash([]);
                 const delta = (mhz - b.centerMHz) * 1000;
-                const label = `${mhz.toFixed(4)} MHz (${delta >= 0 ? '+' : ''}${delta.toFixed(1)} kHz)`;
+                let label = `${mhz.toFixed(4)} MHz (${delta >= 0 ? '+' : ''}${delta.toFixed(1)} kHz)`;
+                if (b.dbLatest) {
+                    const sBin = wfSrcBin(b)(Math.min(511, Math.max(0, Math.round(frac * WF_WIDTH))));
+                    label += ` \u00b7 ${(b.dbLatest[sBin] / 10).toFixed(1)} dBFS`;
+                }
                 ctx.font = '12px monospace';
                 const tw = ctx.measureText(label).width;
                 let lx = x + 8;
@@ -751,14 +847,15 @@
                 newZoom = Math.min(32, newZoom);
                 if (Math.abs(newZoom - oldZoom) < 0.001) return;   // at the floor/ceiling: nothing to redraw
                 const cursorKhz = (b.zoomOffKHz || 0) + (frac - 0.5) * wfSpanKhz(b);
-                const newSpan = 240 / newZoom;
+                const newSpan = SDR_KHZ / newZoom;
                 let newOff = newZoom === 1 ? 0 : cursorKhz - (frac - 0.5) * newSpan;
-                const maxOff = Math.max(0, 120 - newSpan / 2);
+                const maxOff = Math.max(0, SDR_KHZ / 2 - newSpan / 2);
                 newOff = Math.min(maxOff, Math.max(-maxOff, newOff));
                 b.zoom = newZoom;
                 b.zoomOffKHz = newOff;
-                clearWfCanvas(b);
+                replayWaterfall(b);
                 updateZoomBadge(b);
+                if (b.syncZoomSlider) b.syncZoomSlider();
                 updateFreqLabels(lastSharedMHz);
                 if (wfOverlayOn) drawWfOverlay();
             }, { passive: false });
@@ -881,50 +978,160 @@
             return [Math.round(r), Math.round(g), Math.round(b)];
         }
 
-        function drawWaterfall(b, data) {
-            if (!data || data.length === 0) return;
+        // dB -> 0..255 palette level with the SDR#-style controls:
+        // Offset = the dB level at palette bottom... see the sliders in the
+        // block's right sidebar. db10 = dB*10 (int16 off the wire).
+        function dbToLevel(b, db10) {
+            let t = ((db10 / 10) - b.dbOffset) / b.dbRange;
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            if (b.dbContrast !== 1) t = Math.pow(t, b.dbContrast);
+            return t * 255;
+        }
+        function mapDbRow(b, dbRow) {
+            const out = new Uint8ClampedArray(512);
+            for (let i = 0; i < 512; i++) out[i] = dbToLevel(b, dbRow[i]);
+            return out;
+        }
+        // Fallback (polling) rows are per-row normalized 0..255 with no
+        // absolute level: feed them through the same controls as a linear
+        // dB ramp so the sliders still do something in degraded mode.
+        function mapNormRow(b, norm) {
+            const out = new Uint8ClampedArray(512);
+            const lo = b.dbOffset - b.dbRange / 2, hi = b.dbOffset + b.dbRange / 2;
+            for (let i = 0; i < 512; i++) {
+                const db10 = (lo + (norm[i] / 255) * (hi - lo)) * 10;
+                out[i] = dbToLevel(b, db10);
+            }
+            return out;
+        }
+        // srcBin: the visible slice of the 512-bin row is stretched across
+        // the canvas (nearest bin); at 1x this is the identity mapping
+        function wfSrcBin(b) {
+            const zoom = b.zoom || 1;
+            if (zoom <= 1.01) return x => x;
+            const offKhz = b.zoomOffKHz || 0;
+            const binKhz = SDR_KHZ / 512;
+            const zbin0 = (offKhz - wfSpanKhz(b) / 2) / binKhz;
+            const zspan = wfSpanKhz(b) / binKhz;
+            return x => {
+                const s = Math.floor(zbin0 + (x / WF_WIDTH) * zspan);
+                return s < 0 ? 0 : (s >= 512 ? 511 : s);
+            };
+        }
+        function drawWaterfall(b, mappedRow, dbRow) {
+            if (!mappedRow) return;
             // scroll one row down; self-drawImage stays on the GPU — no
             // getImageData/putImageData pixel readback every frame
             b.wfCtx.drawImage(b.wfCtx.canvas, 0, 1);
-            const row = data[data.length - 1];
-            // Zoom: the visible slice of the 512-bin row is stretched across
-            // the canvas (nearest bin); at 1x this is the identity mapping
-            const zoom = b.zoom || 1, offKhz = b.zoomOffKHz || 0;
-            const zbin0 = (offKhz - wfSpanKhz(b) / 2 + 120) / 0.46875;
-            const zspan = wfSpanKhz(b) / 0.46875;
-            const srcBin = x => {
-                if (zoom <= 1.01) return x;
-                let s = Math.floor(zbin0 + (x / WF_WIDTH) * zspan);
-                return s < 0 ? 0 : (s >= row.length ? row.length - 1 : s);
-            };
-            for (let x = 0; x < WF_WIDTH && x < row.length; x++) {
-                const [r, g, b2] = magnitudeToColor(row[srcBin(x)]);
+            const srcBin = wfSrcBin(b);
+            for (let x = 0; x < WF_WIDTH; x++) {
+                const [r, g, b2] = magnitudeToColor(mappedRow[srcBin(x)]);
                 b.wfCtx.fillStyle = `rgb(${r},${g},${b2})`;
                 b.wfCtx.fillRect(x, 0, 1, 1);
             }
-            // Time gutter: scroll one row down in lockstep with the
-            // waterfall, drawing a timestamp every 50 rows (10 s at the
-            // 5 rows/s display rate) so labels align to the data rows
-            b.tickCounter = (b.tickCounter || 0) + 1;
+            // Time gutter: scroll in lockstep; timestamp by wall clock (the
+            // row rate varies with the capture rate / feed rate)
             if (b.timeCtx) {
                 b.timeCtx.drawImage(b.timeCtx.canvas, 0, 1);
-                if (b.tickCounter % 50 === 1) {
+                const now = Date.now();
+                if (now - (b.lastTickTs || 0) > 10000) {
+                    b.lastTickTs = now;
                     b.timeCtx.fillStyle = '#a8b8d8';
                     b.timeCtx.font = '11px monospace';
                     b.timeCtx.textBaseline = 'top';
                     b.timeCtx.fillText(new Date().toTimeString().slice(0, 8), 2, 1);
                 }
             }
-            b.specCtx.fillStyle = '#000';
-            b.specCtx.fillRect(0, 0, WF_WIDTH, SPEC_HEIGHT);
-            if (row) {
-                for (let x = 0; x < WF_WIDTH && x < row.length; x++) {
-                    const h = (row[srcBin(x)] / 255) * SPEC_HEIGHT;
-                    const [r, g, b2] = magnitudeToColor(row[srcBin(x)]);
-                    b.specCtx.fillStyle = `rgb(${r},${g},${b2})`;
-                    b.specCtx.fillRect(x, SPEC_HEIGHT - h, 1, h);
-                }
+            drawSpectrum(b, dbRow, mappedRow, srcBin);
+        }
+        // SDR#-style spectrum pane: dBFS Y axis scaled by the same
+        // offset/range view as the waterfall palette, grid + trace + the
+        // green tuning line at the tracked center
+        function drawSpectrum(b, dbRow, mappedRow, srcBin) {
+            const ctx = b.specCtx;
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, WF_WIDTH, SPEC_HEIGHT);
+            const top = b.dbOffset + b.dbRange / 2, bot = b.dbOffset - b.dbRange / 2;
+            const dbToY = db => (top - db) / (top - bot) * SPEC_HEIGHT;
+            // grid + dB labels
+            ctx.font = '9px monospace';
+            for (let db = Math.ceil(bot / 20) * 20; db <= top; db += 20) {
+                const y = dbToY(db);
+                ctx.strokeStyle = 'rgba(15, 52, 96, 0.9)';
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WF_WIDTH, y); ctx.stroke();
+                ctx.fillStyle = '#5c7290';
+                ctx.fillText(db + ' dBFS', 3, y - 1);
             }
+            // trace (the palette color, so the pane reads at a glance)
+            ctx.strokeStyle = '#53d769';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let x = 0; x < WF_WIDTH; x++) {
+                const s = srcBin(x);
+                const db = dbRow ? dbRow[s] / 10
+                    : (bot + (mappedRow[s] / 255) * (top - bot));
+                const y = Math.max(0, Math.min(SPEC_HEIGHT - 1, dbToY(db)));
+                if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            // tuning line: the tracked center (kHz 0 in the rotated frame)
+            const cx = wfKhzToPct(b, 0) / 100 * WF_WIDTH;
+            if (cx >= 0 && cx <= WF_WIDTH) {
+                ctx.strokeStyle = '#53d769';
+                ctx.setLineDash([4, 3]);
+                ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, SPEC_HEIGHT); ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+
+        // ---------- WebSocket dB row push (/waterfall.ws) ----------
+        // One socket for all dongles; binary frames
+        // [type=1][u16be id_len][id utf8][512 x int16le dB*10]. The client
+        // sets its own row rate with a text frame ('rate=60'). Whenever the
+        // socket is not open, fetchWaterfall falls back to the
+        // /waterfall.json polling (normalized rows through mapNormRow).
+        let wfSocket = null;
+        function wfWsLive() { return wfSocket && wfSocket.readyState === 1; }
+        function connectWaterfallWS() {
+            try {
+                const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+                const ws = new WebSocket(proto + location.host + '/waterfall.ws');
+                wfSocket = ws;
+                ws.binaryType = 'arraybuffer';
+                ws.onopen = () => { try { ws.send('rate=60'); } catch (e) {} };
+                ws.onmessage = ev => {
+                    const u = new Uint8Array(ev.data);
+                    if (u.length < 4 || u[0] !== 1) return;
+                    const nlen = (u[1] << 8) | u[2];
+                    if (u.length < 3 + nlen + 1024) return;
+                    const did = new TextDecoder().decode(u.subarray(3, 3 + nlen));
+                    const b = wfBlocks[did];
+                    if (!b) return;
+                    // slice(): the payload offset is byte-aligned, Int16Array
+                    // needs an aligned buffer - the copy also detaches it
+                    const row = new Int16Array(ev.data.slice(3 + nlen));
+                    b.dbRing.push(row);
+                    if (b.dbRing.length > 600) b.dbRing.shift();
+                    b.dbLatest = row;
+                    if (!b.drawPending) {
+                        b.drawPending = requestAnimationFrame(() => {
+                            b.drawPending = 0;
+                            drawWaterfall(b, mapDbRow(b, b.dbLatest), b.dbLatest);
+                        });
+                    }
+                };
+                ws.onclose = () => { wfSocket = null; setTimeout(connectWaterfallWS, 5000); };
+                ws.onerror = () => { try { ws.close(); } catch (e) {} };
+            } catch (e) { wfSocket = null; }
+        }
+        // redraw the retained dB history: zoom and dB control changes take
+        // effect on the whole waterfall immediately (SDR# behaviour)
+        function replayWaterfall(b) {
+            b.wfCtx.fillStyle = '#000';
+            b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
+            if (b.timeCtx) { b.timeCtx.fillStyle = '#000'; b.timeCtx.fillRect(0, 0, 54, WF_HEIGHT); }
+            b.lastTickTs = 0;
+            for (const row of b.dbRing) drawWaterfall(b, mapDbRow(b, row), row);
         }
 
         function updateFreqLabels(freqMHz) {
@@ -936,7 +1143,7 @@
                 const b = wfBlocks[idx];
                 if (!b.freqLabels) continue;
                 const c = (b.centerMHz !== null && b.centerMHz !== undefined) ? b.centerMHz : freqMHz;
-                const step = (0.240 / (b.zoom || 1)) / 4;
+                const step = (SDR_KHZ / 1000 / (b.zoom || 1)) / 4;
                 const cView = c + (b.zoomOffKHz || 0) / 1000;
                 const dec = step >= 0.01 ? 3 : 4;
                 b.freqLabels.forEach((el, i) => {
@@ -1088,12 +1295,14 @@
                     b.centerMHz = d.ais ? 162.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
                         ? d.manual_frequency_mhz : lastSharedMHz);
                     updateDongleCard(d);
+                    if (wfWsLive()) continue;   // the WebSocket pushes rows
                     try {
                         // last=1: only the newest row — the waterfall scrolls
                         // client-side, the full buffer need not be transferred
                         const r = await fetch('/waterfall.json?d=' + encodeURIComponent(d.id) + '&last=1');
                         const data = await r.json();
-                        if (data.length > 0) drawWaterfall(b, data);
+                        if (data.length > 0)
+                            drawWaterfall(b, mapNormRow(b, data[data.length - 1]), null);
                     } catch(e) {}
                 }
                 // the overlay follows per-dongle geometry (recorded
@@ -1711,6 +1920,11 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
             try {
                 const res = await fetch('/status.json');
                 const data = await res.json();
+                if (data.sdr_khz) {
+                    SDR_KHZ = data.sdr_khz;
+                    const sp = document.getElementById('wf-spankhz');
+                    if (sp) sp.textContent = Math.round(SDR_KHZ / 2);
+                }
                 if (statusFails >= 2) document.getElementById('conn-banner').style.display = 'none';
                 statusFails = 0;
                 document.getElementById('rec-count').textContent = data.recording_count || 0;
@@ -2531,6 +2745,7 @@ bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo,
         }
 
         // Init
+        connectWaterfallWS();
         setInterval(fetchWaterfall, 200);
         setInterval(fetchStatus, 3000);
         setInterval(fetchPasses, 30000);
