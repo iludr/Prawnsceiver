@@ -299,6 +299,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         last_topic = {}      # topic -> last push time (0 = push now)
         buf = bytearray()
         tick = 0.0
+        why = 'loop exit'          # disconnect diagnosis, logged in finally
         try:
             while True:
                 # client frames, non-blocking: 'rate=N' control, ping,
@@ -306,6 +307,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 try:
                     data = conn.recv(4096)
                     if not data:
+                        why = 'client EOF (nginx/browser closed first)'
                         break
                     buf += data
                     while len(buf) >= 2:
@@ -335,6 +337,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                             payload = bytes(buf[off:off + ln])
                         del buf[:off + ln]
                         if op == 8:          # close
+                            code = int.from_bytes(payload[:2], 'big') if len(payload) >= 2 else 0
+                            why = f'close frame code {code}'
                             break
                         elif op == 9:        # ping -> pong
                             conn.sendall(self._ws_frame(10, payload))
@@ -402,11 +406,11 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     # no tick fired: do not busy-spin the recv loop
                     time.sleep(0.002)
-        except OSError:
-            pass
+        except OSError as e:
+            why = f'socket error {e!r}'
         finally:
             self.close_connection = True
-            state.log_console(f"Waterfall WebSocket client disconnected ({self.client_address[0]})")
+            state.log_console(f"Waterfall WebSocket client disconnected ({self.client_address[0]}, {why})")
 
     def do_GET(self):
         if self.path == '/status.json':
