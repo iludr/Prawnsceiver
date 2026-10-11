@@ -98,3 +98,36 @@ for _ in range(n):
     c = dsp.doppler_shift(c, 1234, fs, st)
     dsp.fm_demodulate(c, DECIMATION, st=st)
 print(f"chain cost: {(time.perf_counter()-t0)/n*1e6:.0f} us/block (this machine)")
+
+# --- 5. FFT convolution path vs direct (large inputs take the FFT
+# path in dsp.convolve_valid; small ones stay direct) ---
+import numpy as _np
+x = (_np.random.default_rng(1).standard_normal(20000) + 1j * _np.random.default_rng(2).standard_normal(20000)).astype(_np.complex64)
+taps = dsp.get_lowpass_taps(22000.0)
+direct = _np.convolve(x, taps, mode="valid")
+fft = dsp.convolve_valid(x, taps, "t")
+assert fft.dtype == x.dtype and fft.shape == direct.shape, (fft.dtype, fft.shape)
+assert _np.abs(fft - direct).max() < 1e-3 * _np.abs(direct).max(), _np.abs(fft - direct).max()
+print("convolve_valid FFT path matches direct convolution: ok")
+
+# --- 6. batched chain = per-block chain (filter tails, phase
+# continuity, decimation phase all carry across calls of any length) ---
+rng2 = _np.random.default_rng(3)
+raw_big = rng2.integers(0, 256, IQ_BLOCK * 64, dtype=_np.uint8).tobytes()
+st_p = dsp.new_state(); st_b = dsp.new_state()
+blocks = [raw_big[i * IQ_BLOCK:(i + 1) * IQ_BLOCK] for i in range(64)]
+perblock = b"".join(
+    dsp.fm_demodulate(dsp.doppler_shift(dsp.frequency_shift(dsp.iq_to_complex(r_), SDR_OFFSET_HZ, fs, st_p), 0, fs, st_p), DECIMATION, st=st_p)
+    for r_ in blocks)
+c = dsp.iq_to_complex(raw_big)
+c = dsp.frequency_shift(c, SDR_OFFSET_HZ, fs, st_b)
+batched = dsp.fm_demodulate(c, DECIMATION, st=st_b)
+# FFT-path convolution differs from the direct loop by float32
+# rounding (~1e-7 relative), so identical int16 quantization is not
+# guaranteed - compare with a +/-2 LSB tolerance instead
+import struct as _struct
+_a = _struct.unpack(f"<{len(batched)//2}h", batched)
+_b = _struct.unpack(f"<{len(perblock)//2}h", perblock)
+_diff = max(abs(x - y) for x, y in zip(_a, _b))
+assert len(_a) == len(_b) and _diff <= 2, _diff
+print(f"batched DSP chain matches per-block (max {_diff} LSB): ok")

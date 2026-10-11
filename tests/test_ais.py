@@ -223,4 +223,24 @@ assert r["msgs"] == 14 and len(r["recent"]) == 10, (r["msgs"], len(r["recent"]))
 assert len({e["ts"] for e in r["recent"]}) == 10 or True   # same-second frames allowed
 print("13. log trim 24 h + persistent registry with last-10 messages: ok")
 
+# --- 14. batched channel demod == per-block demod (the capture thread
+# feeds whole batches now; the sub-block split must preserve the exact
+# per-block freq48 slices and energies; FFT-path filter rounding is
+# tolerated in Hz) ---
+from noaa_receiver.sdr.dsp import iq_to_complex as _iqc
+_c = _iqc((np.random.default_rng(7).integers(0, 256, IQ_BLOCK * 64, dtype=np.uint8)).tobytes())
+_st_p = ais.new_channel_state()
+_st_b = ais.new_channel_state()
+_per = []
+for _i in range(64):
+    _f48, _e = ais.demod_channel_block(_c[_i * (IQ_BLOCK // 2):(_i + 1) * (IQ_BLOCK // 2)], _st_p)
+    _per.append((_f48, _e))
+_freqs, _energies = ais.demod_channel_batch(_c, _st_b, IQ_BLOCK // 2)
+assert len(_freqs) == 64 and len(_energies) == 64, (len(_freqs), len(_energies))
+for _j in range(64):
+    assert len(_freqs[_j]) == len(_per[_j][0]), _j
+    assert np.abs(_freqs[_j] - _per[_j][0]).max() < 5.0, _j
+    assert abs(float(_energies[_j]) - _per[_j][1]) < 1e-3 * max(1.0, _per[_j][1]), _j
+print("14. demod_channel_batch matches per-block: ok")
+
 print("\nall AIS tests passed")

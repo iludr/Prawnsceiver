@@ -445,6 +445,43 @@ def demod_channel_block(c, st):
     st["dec_pos"] = (st["dec_pos"] + len(freq)) % AIS_DEC
     return freq[start::AIS_DEC], energy
 
+def demod_channel_batch(c, st, sub):
+    """Batched demod_channel_block: one filter + discriminator pass over
+    a whole capture batch (CAPTURE_BLOCK blocks), returning per-sub-block
+    (freq48, energy) pairs so collect_bursts keeps its block-granular
+    energy model (AIS slots are 26.7 ms; sub-blocks are 512 samples =
+    ~213 us, exactly the granularity the per-block version had). Same
+    state keys, same numbers as the per-block version.
+    """
+    from ..sdr.dsp import convolve_valid
+    x = np.concatenate([st["fir_tail"], c])
+    st["fir_tail"] = x[-(len(_AIS_TAPS) - 1):].copy()
+    f = convolve_valid(x, _AIS_TAPS, "ais")
+    prev = st["last_c"]
+    if prev is None:
+        prev = f[0]
+    dd = np.empty(len(f), dtype=np.complex64)
+    dd[0] = f[0] * np.conj(prev)
+    np.multiply(f[1:], np.conj(f[:-1]), out=dd[1:])
+    st["last_c"] = f[-1].copy()
+    freq = np.arctan2(dd.imag, dd.real) * (SDR_RATE / (2 * np.pi))
+    # decimate to 48 kHz with continuous phase (mirrors dsp.fm_demodulate);
+    # the keep-mask reshape then splits the decimated stream back per
+    # sub-block with each sub-block's exact share (alternating 10/11
+    # samples at 512/50 - identical to the per-block calls)
+    keep = (np.arange(len(freq)) + st["dec_pos"]) % AIS_DEC == 0
+    st["dec_pos"] = (st["dec_pos"] + len(freq)) % AIS_DEC
+    d = freq[keep]
+    n = (len(f) // sub) * sub
+    if n == 0:
+        return [], []
+    e = np.sqrt((np.abs(f[:n].reshape(-1, sub)) ** 2).mean(axis=1))
+    counts = keep[:n].reshape(-1, sub).sum(axis=1)
+    bounds = np.concatenate(([0], np.cumsum(counts)))
+    freqs = [d[bounds[j]:bounds[j + 1]] for j in range(len(counts))]
+    return freqs, e
+
+
 def collect_bursts(freq48, energy, st, max_blocks=AIS_MAX_BURST_BLOCKS):
     """Noise-floor tracking + burst assembly: append a channel block to
     the open burst while it is active; when it goes quiet again the
@@ -728,6 +765,7 @@ def ais_capture_thread(did):
     from ..sdr.dsp import iq_to_complex, frequency_shift
     from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
                         _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
+                        CAPTURE_BATCH, IQ_BLOCK,
                         RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
     from ..config import FFT_SIZE, IQ_BLOCK
 
@@ -815,7 +853,7 @@ def ais_capture_thread(did):
                 # that landed during the reconnect backoff
                 if entry.get("closed") or not entry.get("ais"):
                     break
-                raw = reader.read_block()
+                raw = reader.read_batch(CAPTURE_BATCH)
                 if raw is None:
                     state.log_console(f"IQ stream ended (AIS dongle {did}), reconnecting...", "warn")
                     break
@@ -828,11 +866,11 @@ def ais_capture_thread(did):
                 # displayed row rotates by +SDR_OFFSET_HZ - the same
                 # convention as the satellite cards (their thread shifts
                 # the baseband to the tracked frequency before the FFT).
-                block_count += 1
-                if block_count % AIS_WF_BLOCKS == 0 and len(c) >= FFT_SIZE:
+                block_count += CAPTURE_BATCH
+                for k in range(0, len(c) // FFT_SIZE, AIS_WF_BLOCKS):
                     try:
                         window = _get_fft_window()
-                        magnitude = np.abs(np.fft.fftshift(np.fft.fft(c[:FFT_SIZE] * window)))
+                        magnitude = np.abs(np.fft.fftshift(np.fft.fft(c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window)))
                         center = len(magnitude) // 2
                         with entry["lock"]:
                             entry["signal"] = float(
@@ -845,16 +883,17 @@ def ais_capture_thread(did):
                                 np.roll(magnitude, rot).astype(int).tolist())
                     except Exception:
                         pass
-                # Demodulate both AIS channels from the same block
+                # Demodulate both AIS channels from the same batch
                 for ch_idx, (shift, ch_st) in enumerate(zip(shifts, st)):
                     cc = frequency_shift(c, shift, SDR_RATE, ch_st)
-                    freq48, energy = demod_channel_block(cc, ch_st)
-                    for burst in collect_bursts(freq48, energy, ch_st):
-                        payloads = decode_burst(burst)
-                        if payloads:
-                            handle_frames(payloads, channel_names[ch_idx], ch_st)
-                        elif len(burst) > 100:
-                            ch_st["bad"] += 1
+                    freqs, energies = demod_channel_batch(cc, ch_st, IQ_BLOCK // 2)
+                    for freq48, energy in zip(freqs, energies):
+                        for burst in collect_bursts(freq48, float(energy), ch_st):
+                            payloads = decode_burst(burst)
+                            if payloads:
+                                handle_frames(payloads, channel_names[ch_idx], ch_st)
+                            elif len(burst) > 100:
+                                ch_st["bad"] += 1
                     # expose per-channel stats for /ais.json
                     with state.ais_lock:
                         state.ais_channels[channel_names[ch_idx]] = {

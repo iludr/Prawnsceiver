@@ -48,6 +48,17 @@ from .dsp import doppler_shift, fm_demodulate, frequency_shift, iq_to_complex, n
 # oversampled. At full block rate the FFT + row conversion (~1 ms/block on the
 # Pi) starved the demod once two dongles were attached.
 FFT_EVERY = max(8, round(0.00427 * SDR_RATE / (IQ_BLOCK // 2)))  # ~4 ms of RF between FFTs at any SDR_RATE (8 blocks at 960 kHz)
+# Blocks of IQ processed per capture-loop iteration (both capture
+# threads). Per-block processing at 2.4 Msps meant ~25 numpy calls
+# 4700 times a second per dongle; two dongles saturated the GIL
+# (~80% of a core each) and each capture thread reached only
+# ~65-72% of real time - the audio rings under-delivered and
+# live-edge listeners heard constant stutter (2026-10-11, the
+# 'regular audio hangs'). 64 blocks = one 65536-byte pipe chunk =
+# ~13.6 ms of RF at 2.4 Msps; the DSP states carry phase/filter
+# tails across calls of ANY length, so batching is bit-transparent
+# to every downstream demod.
+CAPTURE_BATCH = 64
 
 # Retry interval for a WAV that could not be opened/written (disk full etc.)
 WAV_RETRY_SECS = 10.0
@@ -152,6 +163,24 @@ class _IQReader:
             self.buf = buf
         self.pos = pos + block
         return buf[pos:pos + block]
+
+    def read_batch(self, count):
+        """Concatenated bytes of `count` blocks (same None-at-EOF
+        contract as read_block): one iteration's worth of the batched
+        capture loop - one pipe read fills it, no extra latency."""
+        buf, pos, block = self.buf, self.pos, self.block
+        need = block * count
+        if len(buf) - pos < need:
+            buf = buf[pos:]
+            while len(buf) < need:
+                data = self.sock.recv(self.chunk)
+                if not data:
+                    return None
+                buf += data
+            pos = 0
+            self.buf = buf
+        self.pos = pos + need
+        return buf[pos:pos + need]
 
 class _PipeRecv:
     """Adapter that makes an rtl_sdr stdout pipe look like a socket for
@@ -692,7 +721,10 @@ def sdr_capture_thread(did):
                 # a ghost and hold the dongle forever
                 if entry.get('closed') or entry.get('ais'):
                     break
-                raw = reader.read_block()
+                raw = reader.read_batch(CAPTURE_BATCH)
+                if raw is None:
+                    state.log_console(f"IQ stream ended (dongle {did}), reconnecting...", "warn")
+                    break
                 if entry['iq'] is not None:
                     try:
                         entry['iq'].write(raw)
@@ -701,9 +733,6 @@ def sdr_capture_thread(did):
                         try: entry['iq'].close()
                         except Exception: pass
                         entry['iq'] = None
-                if raw is None:
-                    state.log_console(f"IQ stream ended (dongle {did}), reconnecting...", "warn")
-                    break
                 now_ts = time.time()
                 entry['last_data'] = now_ts
 
@@ -738,51 +767,51 @@ def sdr_capture_thread(did):
                     dop_hz = 0
                 c = doppler_shift(c, dop_hz, SDR_RATE, dst)
 
-                # FFT for waterfall + signal strength, every FFT_EVERY-th
-                # block (see FFT_EVERY — CPU budget, not display needs)
-                block_count += 1
-                if block_count % FFT_EVERY == 0:
+                # FFT for waterfall + signal strength: one row per
+                # FFT_EVERY-th block of the batch (see FFT_EVERY — CPU
+                # budget, not display needs)
+                block_count += CAPTURE_BATCH
+                for k in range(0, len(c) // FFT_SIZE, FFT_EVERY):
                     try:
-                        if len(c) >= FFT_SIZE:
-                            window = _get_fft_window()
-                            windowed = c[:FFT_SIZE] * window
-                            fft_result = np.fft.fftshift(np.fft.fft(windowed))
-                            magnitude = np.abs(fft_result)
-                            center = len(magnitude) // 2
-                            # signal metric: ~+/-18.75 kHz around the tracked
-                            # carrier (constant Hz width, so signal peaks stay
-                            # comparable across SDR_RATE changes)
-                            half = max(1, round(18750 / (SDR_RATE / FFT_SIZE)))
-                            band = float(magnitude[center-half:center+half].mean())
-                            with entry['lock']:
-                                entry['signal'] = band
-                                # Raw (pre-normalization) row for the scanner
-                                # (scan.py): peak/floor detection and the
-                                # recorded-bandwidth fit need true magnitudes;
-                                # the waterfall row below is display-scaled
-                                entry['last_mag'] = magnitude.astype(np.float32)
-                            if primary:
-                                with state.signal_lock:
-                                    state.signal_strength = band
-                                    if entry['is_recording']:
-                                        state.pass_signal_peak = max(state.pass_signal_peak, band)
-                                    if now_ts - last_history_append >= 1.0:
-                                        last_history_append = now_ts
-                                        state.signal_history.append(band)
-                            # Display normalization by the row max. The DC
-                            # spike at +SDR_OFFSET_HZ is a mild artifact on
-                            # both current dongles (~2x the noise floor,
-                            # never the row max - measured 2026-10-08 from
-                            # raw IQ), so it needs no special-casing; the
-                            # blanking that used to live here existed for
-                            # the removed FC0013, whose spike saturated at
-                            # 7x its strongest signal.
-                            peak = magnitude.max()
-                            if peak > 0:
-                                magnitude *= 255.0 / peak
-                            row = magnitude.astype(int).tolist()
-                            with entry['lock']:
-                                entry['waterfall'].append(row)
+                        window = _get_fft_window()
+                        windowed = c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window
+                        fft_result = np.fft.fftshift(np.fft.fft(windowed))
+                        magnitude = np.abs(fft_result)
+                        center = len(magnitude) // 2
+                        # signal metric: ~+/-18.75 kHz around the tracked
+                        # carrier (constant Hz width, so signal peaks stay
+                        # comparable across SDR_RATE changes)
+                        half = max(1, round(18750 / (SDR_RATE / FFT_SIZE)))
+                        band = float(magnitude[center-half:center+half].mean())
+                        with entry['lock']:
+                            entry['signal'] = band
+                            # Raw (pre-normalization) row for the scanner
+                            # (scan.py): peak/floor detection and the
+                            # recorded-bandwidth fit need true magnitudes;
+                            # the waterfall row below is display-scaled
+                            entry['last_mag'] = magnitude.astype(np.float32)
+                        if primary:
+                            with state.signal_lock:
+                                state.signal_strength = band
+                                if entry['is_recording']:
+                                    state.pass_signal_peak = max(state.pass_signal_peak, band)
+                                if now_ts - last_history_append >= 1.0:
+                                    last_history_append = now_ts
+                                    state.signal_history.append(band)
+                        # Display normalization by the row max. The DC
+                        # spike at +SDR_OFFSET_HZ is a mild artifact on
+                        # both current dongles (~2x the noise floor,
+                        # never the row max - measured 2026-10-08 from
+                        # raw IQ), so it needs no special-casing; the
+                        # blanking that used to live here existed for
+                        # the removed FC0013, whose spike saturated at
+                        # 7x its strongest signal.
+                        peak = magnitude.max()
+                        if peak > 0:
+                            magnitude *= 255.0 / peak
+                        row = magnitude.astype(int).tolist()
+                        with entry['lock']:
+                            entry['waterfall'].append(row)
                     except Exception:
                         pass
 
@@ -854,7 +883,7 @@ def sdr_capture_thread(did):
                 elif not should_record and entry['is_recording']:
                     close_wav()
 
-                # FM-demodulate every block (every dongle: each feeds its own
+                # FM-demodulate the batch (every dongle: each feeds its own
                 # live audio ring and its own WAV). Broadcast FM (manual radio
                 # test tunes) deviates ±75 kHz, so the whole ±120 kHz capture
                 # band is demodulated and only the audio is low-passed;

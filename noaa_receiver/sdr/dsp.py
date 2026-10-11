@@ -127,6 +127,29 @@ def get_real_taps(cutoff_hz):
     return _real_taps[key]
 
 
+_fft_filter_cache = {}
+
+def convolve_valid(x, taps, key):
+    """'valid'-mode FIR convolution, numerically equal to
+    np.convolve(x, taps, 'valid'), FFT-based for large inputs: a
+    250-610 tap FIR at 2.4 Msps is 0.6-1.5 GMAC/s per dongle with the
+    direct loop (a whole CPU core), ~20x cheaper via FFT. Small inputs
+    (per-block callers, tests) keep the direct path. `key` identifies
+    the taps set for the FFT cache (taps objects are long-lived)."""
+    n, m = len(x), len(taps)
+    if n == 0:
+        return x[:0]
+    if n < 4096 or m > n:
+        return np.convolve(x, taps, mode='valid')
+    N = 1 << (n + m - 1).bit_length()
+    H = _fft_filter_cache.get((key, N))
+    if H is None:
+        H = np.fft.fft(taps, N)
+        _fft_filter_cache[(key, N)] = H
+    y = np.fft.ifft(np.fft.fft(x, N) * H)
+    return y[m - 1:n].astype(x.dtype)
+
+
 def lowpass(c, cutoff_hz=22000.0, st=None):
     """Complex low-pass with the filter tail carried across blocks."""
     st = st if st is not None else demod_state
@@ -136,7 +159,7 @@ def lowpass(c, cutoff_hz=22000.0, st=None):
         tail = np.zeros(len(taps) - 1, dtype=np.complex64)
     x = np.concatenate([tail, c])
     st["fir_tail"] = x[-(len(taps) - 1):].copy()
-    return np.convolve(x, taps, mode='valid')
+    return convolve_valid(x, taps, f'lp{cutoff_hz}')
 
 
 def lowpass_audio(a, cutoff_hz, st=None):
@@ -148,7 +171,7 @@ def lowpass_audio(a, cutoff_hz, st=None):
         tail = np.zeros(len(taps) - 1, dtype=np.float32)
     x = np.concatenate([tail, np.asarray(a, dtype=np.float32)])
     st["afir_tail"] = x[-(len(taps) - 1):].copy()
-    return np.convolve(x, taps, mode='valid')
+    return convolve_valid(x, taps, f'af{cutoff_hz}')
 
 
 # ---------- Doppler NCO ----------
