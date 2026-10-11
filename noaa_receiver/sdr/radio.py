@@ -2,11 +2,14 @@
 
 All attached dongles run on the same frequency with the same settings (they
 re-tune together via state.current_frequency). A dongle is a REMOTE rtl_tcp
-server identified by "host:port" — e.g. the prawntenna dongle manager on
-the Pi publishing one rtl_tcp server per dongle (the serving host pins
-which physical dongle answers on which port). The receiver owns no USB devices:
-it connects out, and dongles are added/removed at runtime from the
-dashboard (radio.add_dongle / remove_dongle, persisted in DONGLES_FILE).
+server identified by "host:port" — e.g. the prawntenna dongle manager
+publishing one rtl_tcp server per dongle (the serving host pins
+which physical dongle answers on which port). A dongle plugged into
+the receiver host itself ("usb:<index>") needs no daemon: the capture
+threads read it directly with an rtl_sdr child process (raw u8 IQ on
+stdout, same sample format — see _spawn_rtl_sdr). Dongles are
+added/removed at runtime from the dashboard (radio.add_dongle /
+remove_dongle, persisted in the station database).
 
 Each dongle's capture thread reads the IQ stream from its socket and
 retunes by sending rtl_tcp frequency commands — the stream keeps flowing
@@ -18,8 +21,10 @@ strength, so receive quality can be compared on the dashboard.
 """
 import json
 import os
+import shutil
 import socket
 import struct
+import subprocess
 import threading
 import time
 import wave
@@ -147,6 +152,66 @@ class _IQReader:
         self.pos = pos + block
         return buf[pos:pos + block]
 
+class _PipeRecv:
+    """Adapter that makes an rtl_sdr stdout pipe look like a socket for
+    _IQReader (recv -> blocking read)."""
+    def __init__(self, pipe):
+        self.pipe = pipe
+
+    def recv(self, n):
+        return self.pipe.read(n)
+
+def _spawn_rtl_sdr(entry, tune_hz, gain_db):
+    """Start rtl_sdr for a USB dongle ("usb:<index>"): raw u8 IQ on
+    stdout, the exact sample format rtl_tcp serves, so the whole
+    capture chain (offset rotation, Doppler NCO, FFT, demod) is
+    unchanged.
+
+    The device is chosen by index (-d) and tuned with -f at the same
+    offset+correction the rtl_tcp path applies; a fixed gain goes in
+    tenths of dB, no -g keeps the tuner AGC. Buffer options are never
+    touched (non-default -b/-n collapsed dongle throughput on the old
+    Pi, measured 2026-10-10). rtl_sdr cannot be retuned while running
+    — a band switch restarts the process (the capture loop treats it
+    like any lost connection). Returns the Popen, or None when rtl_sdr
+    is not installed / cannot start (warned once per dongle).
+    """
+    idx = entry.get('usb_idx')
+    exe = shutil.which('rtl_sdr')
+    if not exe:
+        if not entry.get('usb_warned'):
+            entry['usb_warned'] = True
+            state.log_console(f"rtl_sdr not found on this host — cannot read USB dongle {idx}", "warn")
+        return None
+    argv = [exe, '-d', str(idx), '-f', str(int(tune_hz)), '-s', str(SDR_RATE)]
+    if gain_db:
+        argv += ['-g', str(int(round(gain_db * 10)))]
+    argv += ['-']   # IQ to stdout
+    try:
+        return subprocess.Popen(argv, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL,
+                                 stdin=subprocess.DEVNULL)
+    except Exception as e:
+        state.log_console(f"Cannot start rtl_sdr for USB dongle {idx}: {e}", "warn")
+        return None
+
+def _stop_capture(entry):
+    """Close a dongle's IQ source under its capture thread (remove,
+    pause, role switch): the rtl_tcp socket and/or the spawned
+    rtl_sdr process."""
+    sock = entry.get('sock')
+    if sock is not None:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    proc = entry.get('proc')
+    if proc is not None:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
 # ---------- dongle registry (add/remove at runtime, persisted) ----------
 
 def _dongle_id(host, port):
@@ -165,14 +230,20 @@ def _persist_dongles():
         with db.write() as cur:
             cur.execute("DELETE FROM dongles")
             for e in state.sdrs.values():
+                if e.get('usb_idx') is not None:
+                    # A USB dongle persists as its rtl_sdr device index,
+                    # not a network address
+                    host, port = 'usb', int(e['usb_idx'])
+                else:
+                    host, port = e['host'], int(e['port'])
                 cur.execute("INSERT INTO dongles VALUES (?,?,?,?)",
-                            (e['host'], int(e['port']),
+                            (host, port,
                              1 if e.get('ais') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
 
-def _new_entry(did, host, port, primary):
+def _new_entry(did, host, port, primary, usb_idx=None):
     """Fresh state.sdrs entry for one dongle address (shared by load and
     add_dongle). The primary dongle aliases the legacy waterfall globals so
     the rest of the system (status, live audio, recording) keeps working."""
@@ -184,7 +255,7 @@ def _new_entry(did, host, port, primary):
     return {
         'id': did, 'host': host, 'port': int(port),
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
-        'ais': did == AIS_DONGLE,
+        'ais': did == AIS_DONGLE, 'usb_idx': usb_idx, 'proc': None,
         'paused': False,
         'waterfall': waterfall, 'lock': lock,
         'signal': 0.0, 'last_mag': None, 'connected': False,
@@ -196,20 +267,36 @@ def _new_entry(did, host, port, primary):
     }
 
 def add_dongle(host, port):
-    """Register a dongle by its rtl_tcp server address ("host:port"): creates
-    its state entry, starts its capture thread (via the supervisor loop) and
-    persists the set. Idempotent: a known address is not added twice.
+    """Register a dongle by its rtl_tcp server address ("host:port"), or a
+    USB dongle plugged into the receiver host itself as ("usb", rtl_sdr
+    device index): creates its state entry, starts its capture thread
+    (via the supervisor loop) and persists the set. Idempotent: a known
+    dongle is not added twice.
 
     Returns (did, created): the dongle id and whether it was newly added.
     """
     host = (host or '').strip().rstrip(':')
-    try:
-        port = int(port)
-    except (TypeError, ValueError):
-        raise ValueError(f'invalid port: {port!r}')
-    if not host or not 1 <= port <= 65535:
-        raise ValueError('host must be non-empty and port in 1-65535')
-    did = _dongle_id(host, port)
+    usb_idx = None
+    if host.lower() == 'usb':
+        # Local USB dongle: "port" is the rtl_sdr device index. The id
+        # stays "usb:<index>" so calibration and pinning survive
+        # restarts; the capture threads read it with rtl_sdr directly
+        try:
+            usb_idx = int(port)
+        except (TypeError, ValueError):
+            raise ValueError(f'invalid USB device index: {port!r}')
+        if not 0 <= usb_idx <= 31:
+            raise ValueError('USB device index must be 0-31')
+        did = f'usb:{usb_idx}'
+        host = 'usb'
+    else:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            raise ValueError(f'invalid port: {port!r}')
+        if not host or not 1 <= port <= 65535:
+            raise ValueError('host must be non-empty and port in 1-65535')
+        did = _dongle_id(host, port)
     if did in state.sdrs:
         return did, False
     with state.status_lock:
@@ -222,7 +309,7 @@ def add_dongle(host, port):
             if did != PRIMARY_DONGLE and PRIMARY_DONGLE is not None:
                 state.log_console(f"Configured primary dongle {PRIMARY_DONGLE} not added — using {did}", "warn")
         primary = (did == state.primary_dongle)
-        state.sdrs[did] = _new_entry(did, host, port, primary)
+        state.sdrs[did] = _new_entry(did, host, port, primary, usb_idx)
     if state.sdrs[did]['ais']:
         state.log_console(f"Dongle {did} dedicated to AIS (ship traffic) — excluded from satellite tracking")
     state.log_console(f"🔌 Dongle added: {did}" + (" — primary" if primary else ""))
@@ -237,12 +324,7 @@ def remove_dongle(did):
     if entry is None:
         return False
     entry['closed'] = True
-    sock = entry.get('sock')
-    if sock is not None:
-        try:
-            sock.close()
-        except OSError:
-            pass
+    _stop_capture(entry)
     from . import scan
     scan.stop_scan(did)
     was_primary = entry['primary']
@@ -300,12 +382,7 @@ def set_dongle_ais(did, on):
     else:
         state.log_console(f"🛰 Dongle {did} switched back to satellite tracking")
     _persist_dongles()
-    sock = entry.get('sock')
-    if sock is not None:
-        try:
-            sock.close()
-        except OSError:
-            pass
+    _stop_capture(entry)
     return True
 
 def load_dongles():
@@ -356,13 +433,8 @@ def set_dongle_paused(did, on):
         return True
     with state.status_lock:
         entry['paused'] = on
-    sock = entry.get('sock')
     if on:
-        if sock is not None:
-            try:
-                sock.close()
-            except OSError:
-                pass
+        _stop_capture(entry)
         state.log_console(f"\u23f8 Dongle {did} paused — capture stopped")
     else:
         state.log_console(f"\u25b6 Dongle {did} played — capture restarting")
@@ -517,25 +589,40 @@ def sdr_capture_thread(did):
             # protocol — the rtl_tcp CLI parses -g as an int, so fractional
             # gain steps like the R820T's 29.7 dB must go through the socket
             gain_db = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
-            sock, tuner_type, gain_count = _rtl_tcp_connect(entry['host'], entry['port'], gain_db)
-            # Explicit tune on connect: the rtl_tcp daemon serves
-            # whatever frequency it last held — normally this
-            # dongle's previous session (a plain reconnect), but
-            # after a role switch (dashboard AIS button) the AIS
-            # thread left it on the 162 MHz AIS band
-            _rtl_tcp_set(sock, RTL_TCP_SET_FREQ, tuned_freq + SDR_OFFSET_HZ + correction)
-            entry['sock'] = sock
-            entry['connected'] = True
-            entry['tuner'] = TUNER_NAMES.get(tuner_type, f'rtl_tcp type {tuner_type}')
-            entry['last_data'] = time.time()
-            if primary:
-                state.log_console(f"Connected to rtl_tcp {did} (primary, tuner {entry['tuner']}, {gain_count} gain steps), tuned {freq_str}Hz (offset +{SDR_OFFSET_HZ + correction}Hz, DC spike displaced), gain={gain_db or 'auto'}dB")
+            if entry.get('usb_idx') is not None:
+                # Local USB dongle: rtl_sdr streams raw u8 IQ on stdout.
+                # It cannot be retuned while running — a band switch
+                # breaks the read loop and respawns it at the new
+                # frequency (Doppler stays software-rotated either way)
+                proc = _spawn_rtl_sdr(entry, tuned_freq + SDR_OFFSET_HZ + correction, gain_db)
+                if proc is None:
+                    raise RuntimeError('rtl_sdr not available on this host')
+                entry['proc'] = proc
+                entry['connected'] = True
+                entry['tuner'] = 'USB (rtl_sdr)'
+                entry['last_data'] = time.time()
+                state.log_console(f"Connected to USB dongle {did} (device {entry['usb_idx']}, rtl_sdr), tuned {freq_str}Hz (offset +{SDR_OFFSET_HZ + correction}Hz, DC spike displaced), gain={gain_db or 'auto'}dB")
+                reader = _IQReader(_PipeRecv(proc.stdout), IQ_BLOCK)
             else:
-                state.log_console(f"Connected to rtl_tcp {did} (dongle, tuner {entry['tuner']}), tuned {freq_str}Hz")
+                sock, tuner_type, gain_count = _rtl_tcp_connect(entry['host'], entry['port'], gain_db)
+                # Explicit tune on connect: the rtl_tcp daemon serves
+                # whatever frequency it last held — normally this
+                # dongle's previous session (a plain reconnect), but
+                # after a role switch (dashboard AIS button) the AIS
+                # thread left it on the 162 MHz AIS band
+                _rtl_tcp_set(sock, RTL_TCP_SET_FREQ, tuned_freq + SDR_OFFSET_HZ + correction)
+                entry['sock'] = sock
+                entry['connected'] = True
+                entry['tuner'] = TUNER_NAMES.get(tuner_type, f'rtl_tcp type {tuner_type}')
+                entry['last_data'] = time.time()
+                if primary:
+                    state.log_console(f"Connected to rtl_tcp {did} (primary, tuner {entry['tuner']}, {gain_count} gain steps), tuned {freq_str}Hz (offset +{SDR_OFFSET_HZ + correction}Hz, DC spike displaced), gain={gain_db or 'auto'}dB")
+                else:
+                    state.log_console(f"Connected to rtl_tcp {did} (dongle, tuner {entry['tuner']}), tuned {freq_str}Hz")
+                reader = _IQReader(sock, IQ_BLOCK)
             last_history_append = 0.0
             block_count = 0
             record_name = None
-            reader = _IQReader(sock, IQ_BLOCK)
 
             while True:
                 # A remove/role-switch can land while this thread was
@@ -554,7 +641,7 @@ def sdr_capture_thread(did):
                         except Exception: pass
                         entry['iq'] = None
                 if raw is None:
-                    state.log_console(f"rtl_tcp stream ended (dongle {did}), reconnecting...", "warn")
+                    state.log_console(f"IQ stream ended (dongle {did}), reconnecting...", "warn")
                     break
                 now_ts = time.time()
                 entry['last_data'] = now_ts
@@ -667,6 +754,14 @@ def sdr_capture_thread(did):
                     if entry['is_recording']:
                         close_wav()
                     if switch_band:
+                        if entry.get('usb_idx') is not None:
+                            # rtl_sdr cannot retune live: break to the
+                            # reconnect loop, which respawns it on the
+                            # new frequency (the running WAV is closed
+                            # above, exactly like the rtl_tcp path)
+                            if primary:
+                                state.log_console(f"Retuning (restart): {tuned_freq} Hz -> {freq_now} Hz ({sat_now})")
+                            break
                         new_corr = tuning_correction(freq_now, did)
                         _rtl_tcp_set(sock, RTL_TCP_SET_FREQ, freq_now + SDR_OFFSET_HZ + new_corr)
                         entry['correction'], entry['correction_src'] = correction_info(freq_now, did)
@@ -736,6 +831,10 @@ def sdr_capture_thread(did):
         entry['sock'] = None
         if sock is not None:
             try: sock.close()
+            except Exception: pass
+        proc = entry.pop('proc', None)
+        if proc is not None:
+            try: proc.terminate()
             except Exception: pass
         close_wav()
         if entry.get('closed') or entry.get('ais') or entry.get('paused'):

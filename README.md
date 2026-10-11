@@ -41,10 +41,12 @@ Live at: https://prawnceiver.derusi.de
   its own dashboard card (`🚢 Listen for AIS ships`) — with a single dongle
   the satellites pause while it listens for ships; a second dongle pinned
   via `AIS_DONGLE` in calibration.py keeps both running at the same time
-- 🖥️ Network dongles — the SDR dongles are decoupled from the
-  receiver: each dongle is served by an `rtl_tcp` daemon on the machine it
-  is plugged into, the receiver connects over the network, and dongles
-  are added/removed at runtime from the dashboard by IP address + port
+- 🖥️ Dongles, networked or local — each remote dongle is served by
+  an `rtl_tcp` daemon on the machine it is plugged into and added by
+  IP address + port; a dongle plugged into the receiver host itself is
+  added by USB device index and read directly with `rtl_sdr` (raw IQ on
+  stdout, restarted on band switches — it cannot retune live). Both
+  kinds are added/removed at runtime from the dashboard header
 
 
 ## Hardware

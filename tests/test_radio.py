@@ -324,5 +324,23 @@ assert radio.remove_dongle('nope:1') is False
 radio.remove_dongle(did_b)
 assert state.primary_dongle is None
 print("10 remove_dongle: thread exit, state cleared, primary promotion OK")
+
+# 12. USB dongles: registry id "usb:<idx>", rtl_sdr source fields, and the
+# persistence roundtrip through the dongles table as ("usb", idx)
+usb_did, usb_created = radio.add_dongle("usb", 2)
+assert usb_did == "usb:2" and usb_created, (usb_did, usb_created)
+u = state.sdrs[usb_did]
+assert u["usb_idx"] == 2 and u["host"] == "usb" and u["port"] == 2 and u["proc"] is None, u
+rows = [dict(r) for r in db.query("SELECT host, port FROM dongles")]
+assert {"host": "usb", "port": 2} in rows, rows
+_did2, _c2 = radio.add_dongle("usb", 2)          # idempotent
+assert _did2 == usb_did and not _c2
+try:
+    radio.add_dongle("usb", "x")
+    raise AssertionError("invalid USB index accepted")
+except ValueError:
+    pass
+assert radio.remove_dongle(usb_did) and usb_did not in state.sdrs
+print("12 USB dongle registry: id, source fields, persistence, idempotency, validation OK")
 print("ALL RADIO TESTS PASSED")
 os._exit(0)

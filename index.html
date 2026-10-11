@@ -146,6 +146,19 @@
                 <div class="info">Raspberry Pi 4 | RTL-SDR RTL2832U (R820T) | Regensburg 49.013°N 12.099°E | Auto Pass Tracking</div>
             </div>
         </div>
+        <div id="add-dongle-box" style="text-align:right;">
+            <div style="font-size:0.75em;color:#888;">Add dongle</div>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                <select id="add-dongle-mode" class="band-select" aria-label="Dongle connection type" onchange="dongleModeChanged()">
+                    <option value="tcp">📡 TCP (rtl_tcp)</option>
+                    <option value="usb">🔌 USB (local)</option>
+                </select>
+                <input id="add-dongle-host" type="text" placeholder="192.168.3.65" class="num-input" style="width:110px;" title="rtl_tcp server IP / hostname">
+                <input id="add-dongle-port" type="number" placeholder="1234" min="1" max="65535" class="num-input" style="width:64px;" title="rtl_tcp port">
+                <input id="add-dongle-usb" type="number" placeholder="0" min="0" max="31" class="num-input" style="width:44px;display:none;" title="USB device index on the receiver host (rtl_sdr -d)">
+                <button class="btn-solid" onclick="addDongle()">➕ Add</button>
+            </div>
+        </div>
         <div id="freq-display" style="text-align:right;font-size:1em;">
             <div style="color:#53d769;font-weight:bold;" id="freq-current">137.9125 MHz</div>
             <div style="color:#888;" id="sat-current">idle</div>
@@ -255,12 +268,7 @@
             <div class="status-item">
                 <div class="status-label">SDR Dongles (rtl_tcp)</div>
                 <div class="status-value" id="dongle-status" style="font-size:0.8em;">—</div>
-                <div style="display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap;">
-                    <input id="add-dongle-host" type="text" placeholder="192.168.3.245" class="num-input" style="flex:1;min-width:0;">
-                    <input id="add-dongle-port" type="number" placeholder="1234" min="1" max="65535" class="num-input" style="width:70px;">
-                    <button class="btn-solid" onclick="addDongle()">➕ Add</button>
-                </div>
-                <div style="font-size:0.75em;color:#888;margin-top:3px;">Dongles are rtl_tcp servers (IP + port): run one rtl_tcp daemon per dongle on the machine it is plugged into.</div>
+                <div style="font-size:0.75em;color:#888;margin-top:3px;">TCP dongles are rtl_tcp servers (IP + port) on the machine the dongle is plugged into; USB dongles are read directly with rtl_sdr on the receiver host. Add either from the header.</div>
                 <div style="font-size:0.85em;margin-top:4px;"><a href="/console" target="_blank" style="color:#53d769;">Full debug console →</a></div>
             </div>
             <div class="status-item">
@@ -777,16 +785,33 @@
             wrap.title = 'Click to tune this dongle; drag to set frequency (center) and recorded bandwidth (width)';
         }
 
+        function dongleModeChanged() {
+            const usb = document.getElementById('add-dongle-mode').value === 'usb';
+            document.getElementById('add-dongle-host').style.display = usb ? 'none' : '';
+            document.getElementById('add-dongle-port').style.display = usb ? 'none' : '';
+            document.getElementById('add-dongle-usb').style.display = usb ? '' : 'none';
+        }
+
         async function addDongle() {
-            const host = document.getElementById('add-dongle-host').value.trim();
-            const port = document.getElementById('add-dongle-port').value.trim();
-            if (!host || !port) { toast('Enter the rtl_tcp server IP and port (e.g. 192.168.3.245:1234)', true); return; }
+            const mode = document.getElementById('add-dongle-mode').value;
+            let q;
+            if (mode === 'usb') {
+                const idx = document.getElementById('add-dongle-usb').value.trim();
+                if (idx === '') { toast('Enter the USB device index (0 = first dongle, per rtl_sdr -d)', true); return; }
+                q = 'host=usb&port=' + encodeURIComponent(idx);
+            } else {
+                const host = document.getElementById('add-dongle-host').value.trim();
+                const port = document.getElementById('add-dongle-port').value.trim();
+                if (!host || !port) { toast('Enter the rtl_tcp server IP and port (e.g. 192.168.3.65:1234)', true); return; }
+                q = 'host=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port);
+            }
             try {
-                const res = await fetch('/add_dongle?host=' + encodeURIComponent(host) + '&port=' + encodeURIComponent(port));
+                const res = await fetch('/add_dongle?' + q);
                 const data = await res.json();
                 if (data.success) {
                     document.getElementById('add-dongle-host').value = '';
                     document.getElementById('add-dongle-port').value = '';
+                    document.getElementById('add-dongle-usb').value = '';
                     toast(data.created ? ('Dongle ' + data.id + ' added — connecting...') : ('Dongle ' + data.id + ' is already registered'));
                 } else {
                     toast('Add failed: ' + (data.error || 'unknown error'), true);
@@ -794,7 +819,8 @@
             } catch (e) { toast('Add failed: receiver unreachable', true); }
         }
         async function removeDongle(id) {
-            if (!confirm('Remove dongle ' + id + ' from the receiver? (The rtl_tcp daemon keeps running — re-add the address anytime.)')) return;
+            const usb = id.startsWith('usb:');
+            if (!confirm('Remove dongle ' + id + ' from the receiver? ' + (usb ? '(Its rtl_sdr reader is stopped too — re-add the index anytime.)' : '(The rtl_tcp daemon keeps running — re-add the address anytime.)'))) return;
             try {
                 const res = await fetch('/remove_dongle?d=' + encodeURIComponent(id));
                 const data = await res.json();

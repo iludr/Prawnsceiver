@@ -726,7 +726,8 @@ def ais_capture_thread(did):
     the dongle card shows the AIS spectrum like any other.
     """
     from ..sdr.dsp import iq_to_complex, frequency_shift
-    from ..sdr.radio import (_IQReader, _get_fft_window, _rtl_tcp_connect,
+    from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
+                        _rtl_tcp_connect, _spawn_rtl_sdr,
                         RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
     from ..config import FFT_SIZE, IQ_BLOCK
 
@@ -780,20 +781,35 @@ def ais_capture_thread(did):
             # capture threads (the ppm fallback applies ~+13 kHz here)
             entry["correction"], entry["correction_src"] = correction_info(AIS_CENTER_HZ, did)
             gain_db = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
-            sock, tuner_type, _gain_count = _rtl_tcp_connect(entry["host"], entry["port"], gain_db)
-            # Explicit tune on every connect: rtl_tcp serves whatever
-            # frequency its daemon last held (the startup script parks
-            # new daemons on 137.68 MHz) — and with the dashboard AIS
-            # button one dongle alternates between the roles, so its
-            # daemon can be on a satellite frequency right now
-            _rtl_tcp_set(sock, RTL_TCP_SET_FREQ, tune)
-            entry["sock"] = sock
-            entry["connected"] = True
-            entry["tuner"] = TUNER_NAMES.get(tuner_type, f"rtl_tcp type {tuner_type}")
-            entry["last_data"] = time.time()
-            state.log_console(f"Connected to AIS rtl_tcp {did}, tuned {tune}Hz "
-                               f"(offset +{SDR_OFFSET_HZ + correction}Hz, correction {correction:+d}Hz)")
-            reader = _IQReader(sock, IQ_BLOCK)
+            if entry.get("usb_idx") is not None:
+                # Local USB dongle: rtl_sdr on stdout, no control
+                # protocol (the AIS band is fixed, so no retune exists
+                # for the rtl_sdr restart limitation to matter)
+                proc = _spawn_rtl_sdr(entry, tune, gain_db)
+                if proc is None:
+                    raise RuntimeError("rtl_sdr not available on this host")
+                entry["proc"] = proc
+                entry["connected"] = True
+                entry["tuner"] = "USB (rtl_sdr)"
+                entry["last_data"] = time.time()
+                state.log_console(f"Connected to AIS USB dongle {did} (device {entry['usb_idx']}, rtl_sdr), tuned {tune}Hz "
+                                   f"(offset +{SDR_OFFSET_HZ + correction}Hz, correction {correction:+d}Hz)")
+                reader = _IQReader(_PipeRecv(proc.stdout), IQ_BLOCK)
+            else:
+                sock, tuner_type, _gain_count = _rtl_tcp_connect(entry["host"], entry["port"], gain_db)
+                # Explicit tune on every connect: rtl_tcp serves whatever
+                # frequency its daemon last held (the startup script parks
+                # new daemons on 137.68 MHz) — and with the dashboard AIS
+                # button one dongle alternates between the roles, so its
+                # daemon can be on a satellite frequency right now
+                _rtl_tcp_set(sock, RTL_TCP_SET_FREQ, tune)
+                entry["sock"] = sock
+                entry["connected"] = True
+                entry["tuner"] = TUNER_NAMES.get(tuner_type, f"rtl_tcp type {tuner_type}")
+                entry["last_data"] = time.time()
+                state.log_console(f"Connected to AIS rtl_tcp {did}, tuned {tune}Hz "
+                                   f"(offset +{SDR_OFFSET_HZ + correction}Hz, correction {correction:+d}Hz)")
+                reader = _IQReader(sock, IQ_BLOCK)
             while True:
                 # see sdr_capture_thread: catch a remove/role-switch
                 # that landed during the reconnect backoff
@@ -801,7 +817,7 @@ def ais_capture_thread(did):
                     break
                 raw = reader.read_block()
                 if raw is None:
-                    state.log_console(f"rtl_tcp stream ended (AIS dongle {did}), reconnecting...", "warn")
+                    state.log_console(f"IQ stream ended (AIS dongle {did}), reconnecting...", "warn")
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
@@ -854,6 +870,12 @@ def ais_capture_thread(did):
         if sock is not None:
             try:
                 sock.close()
+            except Exception:
+                pass
+        proc = entry.pop("proc", None)
+        if proc is not None:
+            try:
+                proc.terminate()
             except Exception:
                 pass
         if entry.get("closed") or not entry.get("ais") or entry.get("paused"):

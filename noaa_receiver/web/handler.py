@@ -345,6 +345,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # Register a dongle by its rtl_tcp server address (the daemon
             # runs on the machine the dongle is plugged into):
             # /add_dongle?host=192.168.3.245&port=1234
+            # A dongle plugged into the receiver host itself is registered
+            # by its rtl_sdr device index instead: /add_dongle?host=usb&port=0
             query = parse_qs(urlparse(self.path).query)
             host = (query.get('host') or query.get('ip') or [''])[0].strip()
             port = (query.get('port') or [''])[0].strip()

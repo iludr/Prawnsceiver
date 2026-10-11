@@ -1394,3 +1394,31 @@ measured 0 (±0.3 ppm).
 Deploy: pull + systemctl --user restart (check pass_active first).
 Old NOAA recordings, _apt/_dsb product dirs and their history
 entries stay untouched and keep serving.
+
+
+### 2026-10-11 — 📡 Add-dongle moved to the header; USB dongles read with rtl_sdr
+
+Dashboard: the add-dongle form moved from the system status panel
+into the site header, next to the frequency display, with a mode
+switch:
+- TCP (rtl_tcp): IP + port, unchanged
+- USB (local): device index on the receiver host
+
+USB dongles ("usb:<index>") are read directly with an rtl_sdr
+child process (raw u8 IQ on stdout — the exact rtl_tcp sample
+format, so the whole capture chain is unchanged; device via -d,
+tune via -f at the same offset+correction, fixed gain in tenths
+of dB, buffers never touched). rtl_sdr cannot be retuned while
+running, so a band switch (idle 137.9125 -> ISS 437.55) closes
+the stream and respawns the process at the new frequency — a
+short gap between bands only; within a pass nothing changes
+(Doppler was always software-rotated for exactly this reason).
+Persistence: the dongles table stores ("usb", <index>); the id
+stays "usb:<index>", so calibration/pinning keys survive.
+AIS capture thread got the same fork (AIS band is fixed, so no
+restart limitation there). remove/pause/role-switch stop the
+child process too (_stop_capture).
+Tests: test_radio section 12 (registry, persistence,
+idempotency, validation); full suite green. No rtl_sdr on the
+dev PC or the container, so the live spawn path is untested
+here — needs a dongle on a host with the rtl-sdr package.
