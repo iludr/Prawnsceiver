@@ -133,21 +133,46 @@ def convolve_valid(x, taps, key):
     """'valid'-mode FIR convolution, numerically equal to
     np.convolve(x, taps, 'valid'), FFT-based for large inputs: a
     250-610 tap FIR at 2.4 Msps is 0.6-1.5 GMAC/s per dongle with the
-    direct loop (a whole CPU core), ~20x cheaper via FFT. Small inputs
-    (per-block callers, tests) keep the direct path. `key` identifies
-    the taps set for the FFT cache (taps objects are long-lived)."""
+    direct loop (a whole CPU core), far cheaper via FFT. Large inputs
+    use segmented overlap-save with small FFTs (~12x the tap count):
+    FFT cost grows with N*log2(N), so several 4-8k FFTs beat one big
+    one ~2.3x (measured on the notebook's i5-7200U, where one 64k FFT
+    pair costs ~9 ms under load). Small inputs (per-block callers,
+    tests) keep the direct path. `key` identifies the taps set for the
+    FFT cache (taps objects are long-lived). The input is expected to
+    carry the filter tail prepended, exactly like the direct callers
+    assemble it - the returned samples align with convolve(x, taps,
+    'valid') of that assembled input.
+    """
     n, m = len(x), len(taps)
     if n == 0:
         return x[:0]
     if n < 4096 or m > n:
         return np.convolve(x, taps, mode='valid')
-    N = 1 << (n + m - 1).bit_length()
-    H = _fft_filter_cache.get((key, N))
+    seg = 1 << max(12, (12 * m - 1).bit_length())
+    hop = seg - m + 1
+    H = _fft_filter_cache.get((key, seg))
     if H is None:
-        H = np.fft.fft(taps, N)
-        _fft_filter_cache[(key, N)] = H
-    y = np.fft.ifft(np.fft.fft(x, N) * H)
-    return y[m - 1:n].astype(x.dtype)
+        H = np.fft.fft(taps, seg)
+        _fft_filter_cache[(key, seg)] = H
+    total = n - m + 1
+    out = np.empty(total, dtype=x.dtype)
+    real = not np.iscomplexobj(x)
+    produced = 0
+    pos = 0
+    while produced < total:
+        block = x[pos:pos + seg]
+        if len(block) < seg:
+            block = np.concatenate(
+                [block, np.zeros(seg - len(block), dtype=x.dtype)])
+        y = np.fft.ifft(np.fft.fft(block, seg) * H)
+        if real:
+            y = y.real
+        take = min(hop, total - produced)
+        out[produced:produced + take] = y[m - 1:m - 1 + take]
+        produced += take
+        pos += hop
+    return out
 
 
 def lowpass(c, cutoff_hz=22000.0, st=None):
