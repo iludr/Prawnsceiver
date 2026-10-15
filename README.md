@@ -1,13 +1,14 @@
 # Prawnsceiver — NOAAh's CrabArk
 
-A Raspberry Pi and a cheap RTL-SDR dongle turned into a fully automated
-weather-satellite ground station. It predicts passes, tunes the SDR to the
-right satellite at the right time, records the downlink, decodes it into
-weather images (Meteor-M LRPT, ISS SSTV), and serves everything on a live
-web dashboard. Between satellite passes it moonlights as a general VHF
-receiver: Danube ship traffic (AIS), Orbcomm satellite-IoT downlinks, and
-offline analysis of mystery carriers (it identified the local 24/7
-153.1126 MHz signal as a DMR Tier III trunked control channel).
+An always-on Linux machine and a cheap RTL-SDR dongle turned into a fully
+automated weather-satellite ground station. It predicts passes, tunes the SDR
+to the right satellite at the right time, records the downlink, decodes it
+into weather images (Meteor-M LRPT, ISS SSTV), and serves everything on a
+live web dashboard. Between satellite passes it moonlights as a general VHF
+receiver: Danube ship traffic (AIS), Orbcomm satellite-IoT downlinks, ham
+packet radio (APRS), and offline analysis of mystery carriers (it identified
+the local 24/7 153.1126 MHz signal as a DMR Tier III trunked control
+channel).
 
 The NOAA POES satellites this station was originally built around (NOAA
 15/18/19) were decommissioned Jun-Aug 2025 - the last APT carrier went
@@ -72,7 +73,9 @@ Live at: https://prawnceiver.derusi.de
 
 ## Hardware
 
-- Raspberry Pi 4
+The receiver is a plain Python process and runs anywhere Linux does (x86 or
+ARM); nothing in the code is platform-specific. What the station needs:
+
 - RTL-SDR dongle (RTL2832U with R820T tuner)
 - Antenna for 137 MHz (VHF 137 MHz SATCOM or a crossed dipole works)
 - Optional: any spare RTL-SDR dongle as a dedicated AIS receiver (the
@@ -171,12 +174,12 @@ cd Prawnsceiver
 python3 server_noaa.py
 ```
 
-Then open http://your-pi:8085 in your browser.
+Then open http://your-machine:8085 in your browser.
 
 ### Dongle host: the prawntenna manager
 
-The dongles live on a separate machine (a Raspberry Pi in this station)
-running [prawntenna](https://github.com/iludr/Prawntenna), a small web
+The dongles live on their own host machine running
+[prawntenna](https://github.com/iludr/Prawntenna), a small web
 manager that enumerates the attached RTL-SDRs and publishes each one as
 a standard `rtl_tcp` server on the LAN (ports are remembered per dongle
 serial; a wedged `rtl_tcp` is killed and republished automatically — see
