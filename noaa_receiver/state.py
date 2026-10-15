@@ -143,3 +143,15 @@ orbcomm_enabled = False
 orbcomm_dongle = None
 orbcomm_channels = {}
 orbcomm_packets = deque(maxlen=60)
+
+# APRS ham packet traffic (see noaa_receiver/decoding/aprs.py): a dongle
+# switched to the APRS role tunes to config.APRS_FREQ_HZ (144.800 MHz)
+# and decodes Bell 202 AFSK AX.25 UI frames. aprs_stations maps callsign
+# -> newest info (registry); aprs_packets keeps the most recent frames
+# for the dashboard's live feed.
+aprs_lock = threading.Lock()
+aprs_enabled = False
+aprs_dongle = None
+aprs_stations = {}
+aprs_packets = deque(maxlen=60)
+aprs_stats = {}       # frames / bad / floor of the running demodulator

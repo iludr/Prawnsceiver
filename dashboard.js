@@ -970,7 +970,7 @@
                     wfWsBackoff = 5000;   // reset after a good run
                     try {
                         ws.send('rate=60');
-                        ws.send('sub=dongles,status,passes,track,ais,orbcomm,power,recordings');
+                        ws.send('sub=dongles,status,passes,track,ais,orbcomm,aprs,power,recordings');
                     } catch (e) {}
                 };
                 ws.onmessage = ev => {
@@ -1241,8 +1241,8 @@
                     // 137.5 MHz (one 2.4 MHz capture spans the whole
                     // 137.0-138.0 MHz downlink band) — neither follows
                     // the shared satellite tune
-                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
-                        ? d.manual_frequency_mhz : lastSharedMHz));
+                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? 144.8 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
+                        ? d.manual_frequency_mhz : lastSharedMHz)));
                     updateDongleCard(d);
                 }
                 // the overlay follows per-dongle geometry (recorded
@@ -1289,6 +1289,7 @@
             if (!c || !c.lastD) return null;
             if (c.lastD.ais) return 162.0;   // AIS dongle never follows the shared tune
             if (c.lastD.orbcomm) return 137.5;   // Orbcomm dongle is parked on the band center
+            if (c.lastD.aprs) return 144.8;     // APRS dongle is parked on 144.800 MHz
             if (c.lastD.manual_frequency_mhz !== null && c.lastD.manual_frequency_mhz !== undefined)
                 return c.lastD.manual_frequency_mhz;
             return lastSharedMHz;
@@ -1349,6 +1350,29 @@
             c.orbBtn.style.borderColor = orbcomm ? '#b39ddb' : '#4da6ff';
             c.orbcommLast = orbcomm;
             if (orbcomm && liveAudioOn === c.lastD.id) toggleLiveAudio(c.lastD.id);
+        }
+
+        // APRS mode reshapes the card the same way (dedicated role:
+        // waterfall but no satellite tuning; audio stays on - APRS is
+        // listenable FM) — green button variant, 144.800 MHz tune
+        function applyDongleAprsMode(c, aprs) {
+            const sat = (aprs || (c.lastD && (c.lastD.ais || c.lastD.orbcomm))) ? 'none' : '';
+            c.tuneRow.style.display = sat;
+            c.nudgeRow.style.display = sat;
+            c.bwRow.style.display = sat;
+            c.scanRow.style.display = sat;
+            c.scanRow2.style.display = sat;
+            c.secTune.style.display = sat;
+            c.modeRow.style.display = sat;
+            c.secBw.style.display = sat;
+            c.secScan.style.display = sat;
+            c.recBtn.style.display = sat;
+            const txt = aprs ? '📡 Back to satellites' : '📡 Listen for APRS (144.800 MHz)';
+            if (c.aprsBtn._last !== txt) { c.aprsBtn._last = txt; c.aprsBtn.textContent = txt; }
+            c.aprsBtn.style.background = aprs ? '#1a2a3e' : '#0f3460';
+            c.aprsBtn.style.color = aprs ? '#53d769' : '#4da6ff';
+            c.aprsBtn.style.borderColor = aprs ? '#53d769' : '#4da6ff';
+            c.aprsLast = aprs;
         }
 
         function ensureDongleCard(d) {
@@ -1744,6 +1768,27 @@
                     })
                     .catch(() => toast('Orbcomm switch failed: receiver unreachable', true));
             };
+            // APRS toggle: dedicates this dongle to the amateur packet
+            // radio channel (144.800 MHz, Bell 202 AFSK) and decodes
+            // AX.25 UI frames — the capture thread restarts in the
+            // new role server-side
+            const aprsBtn = document.createElement('button');
+            aprsBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
+            aprsBtn.title = 'Tune this dongle to the APRS channel (144.800 MHz) and decode ham packet radio — satellite reception on it pauses until you switch back';
+            aprsBtn.onclick = () => {
+                const on = !(c.lastD && c.lastD.aprs);
+                fetch('/aprs_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(on ? '📡 Switching this dongle to APRS — ham packet radio on 144.800 MHz'
+                                     : '📡 Dongle back to satellite tracking');
+                        } else {
+                            toast('APRS switch failed: ' + (data.error || 'unknown error'), true);
+                        }
+                    })
+                    .catch(() => toast('APRS switch failed: receiver unreachable', true));
+            };
             // Pause/Play: temporarily stops this dongle's capture thread —
             // two dongles recording at once can overload the dongle host's
             // shared USB bus. The dongle stays registered; Play restarts it.
@@ -1764,17 +1809,18 @@
                     })
                     .catch(() => toast('Pause failed: receiver unreachable', true));
             };
-            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(orbBtn); card.appendChild(pauseBtn); card.appendChild(removeBtn);
+            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(orbBtn); card.appendChild(aprsBtn); card.appendChild(pauseBtn); card.appendChild(removeBtn);
             col.appendChild(card);
             c = dongleCards[d.id] = {
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
-                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, orbBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
+                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, orbBtn, aprsBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secBw, secScan, modeRow, modeSel, modeHint,
             };
             applyDongleAisMode(c, !!d.ais);
             applyDongleOrbcommMode(c, !!d.orbcomm);
+            applyDongleAprsMode(c, !!d.aprs);
             return c;
         }
 
@@ -1809,6 +1855,7 @@
             // mode flips arrive through dongles.json (ais/orbcomm flags)
             if (c.aisLast !== !!d.ais) applyDongleAisMode(c, !!d.ais);
             if (c.orbcommLast !== !!d.orbcomm) applyDongleOrbcommMode(c, !!d.orbcomm);
+            if (c.aprsLast !== !!d.aprs) applyDongleAprsMode(c, !!d.aprs);
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
             // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise
@@ -1859,6 +1906,7 @@
             let fTxt = '—', fCol = '#888';
             if (d.ais) { fTxt = '🚢 AIS 161.975 / 162.025 MHz'; fCol = '#4da6ff'; }
             else if (d.orbcomm) { fTxt = '🛰 Orbcomm 137.0-138.0 MHz (center 137.5)'; fCol = '#b39ddb'; }
+            else if (d.aprs) { fTxt = '📡 APRS 144.800 MHz'; fCol = '#53d769'; }
             else if (eff !== null) {
                 fTxt = eff.toFixed(4) + ' MHz' + (d.manual_frequency_mhz ? ' (manual)' : '');
                 fCol = d.manual_frequency_mhz ? '#f39c12' : '#53d769';
@@ -1870,9 +1918,11 @@
                 ? '🚢 AIS — Danube ship traffic · 161.975 / 162.025 MHz · <a href="/ais" style="color:#4da6ff;text-decoration:none;">→ full log</a> · <a href="/ais.json" target="_blank" rel="noopener" style="color:#4da6ff;text-decoration:none;">ais.json</a>'
                 : (d.orbcomm
                     ? '🛰 Orbcomm — satellite IoT downlink · 137.0-138.0 MHz · <a href="/orbcomm" style="color:#b39ddb;text-decoration:none;">→ full log</a> · <a href="/orbcomm.json" target="_blank" rel="noopener" style="color:#b39ddb;text-decoration:none;">orbcomm.json</a>'
+                    : (d.aprs
+                    ? '📡 APRS — ham packet radio · 144.800 MHz · <a href="/aprs" style="color:#53d769;text-decoration:none;">→ full log</a> · <a href="/aprs.json" target="_blank" rel="noopener" style="color:#53d769;text-decoration:none;">aprs.json</a>'
                     : (eff !== null
                     ? '📶 ' + bandLabel(bandFor(eff))
-                    : '📶 <span style="color:#666;">—</span>'));
+                    : '📶 <span style="color:#666;">—</span>')));
             if (c.bandTxt._last !== bandHtml) {
                 c.bandTxt._last = bandHtml;
                 c.bandTxt.innerHTML = bandHtml;
@@ -1891,7 +1941,7 @@
             // Scan controls: button doubles as Stop while a scan runs, the
             // status line shows live progress / the result; empty from/to
             // fields prefill with the current tune (\u00b15 MHz)
-            if (!d.ais && !d.orbcomm) {
+            if (!d.ais && !d.orbcomm && !d.aprs) {
                 const sc = d.scan;
                 const active = !!(sc && sc.active);
                 const btnTxt = active ? '\u23F9 Stop' : '\uD83D\uDD0D Scan';
@@ -2045,7 +2095,7 @@
                     const up = dl.filter(d => d.connected).length;
                     dsEl.textContent = dl.length
                         ? (up + '/' + dl.length + ' connected — ' + dl.map(d =>
-                            d.label + (d.primary ? ' ★' : '') + (d.ais ? ' (AIS)' : (d.orbcomm ? ' (Orbcomm)' : ''))
+                            d.label + (d.primary ? ' ★' : '') + (d.ais ? ' (AIS)' : (d.orbcomm ? ' (Orbcomm)' : (d.aprs ? ' (APRS)' : '')))
                             + ': ' + (d.connected ? 'live' : 'offline')).join(' · '))
                         : 'no dongles — add one below';
                 }
@@ -2944,6 +2994,52 @@
             } catch (e) { console.error('Error fetching Orbcomm:', e); }
         }
 
+        // Dashboard APRS section — shared by the /aprs.json fallback poll
+        // and the WS 'aprs' topic push (the full log page renders itself).
+        // Stations are the callsigns heard this run; packets the ring of
+        // newest decoded frames.
+        function applyAprs(data) {
+            try {
+                const title = document.getElementById('aprs-title');
+                const section = document.getElementById('aprs-section');
+                if (!data.enabled) { title.style.display = 'none'; section.style.display = 'none'; return; }
+                title.style.display = '';
+                section.style.display = '';
+                const st = data.stations || [];
+                const frames = (data.stats && data.stats.frames) || 0;
+                document.getElementById('aprs-stats').textContent =
+                    st.length + ' station' + (st.length === 1 ? '' : 's') + ' heard'
+                    + ' · ' + frames + ' frames · dongle ' + data.dongle + ' · 144.800 MHz';
+                let html = '';
+                st.slice(0, 8).forEach(c => {
+                    let pos = '<span style="color:#888">—</span>';
+                    if (c.lat != null) {
+                        pos = '<a href="https://www.google.com/maps?q=' + c.lat + ',' + c.lon
+                            + '" target="_blank" rel="noopener">' + c.lat.toFixed(4) + ', ' + c.lon.toFixed(4) + '</a>';
+                    }
+                    html += '<div class="orbcomm-row">' +
+                        '<div><div class="ais-name">' + escHtml(c.call) + '</div>' +
+                        '<div class="ais-sub">' + escHtml(c.text || '') + '</div></div>' +
+                        '<div class="ais-pos">' + pos + '</div>' +
+                        '<div class="ais-val">' + (c.via ? escHtml(c.via) : 'direct') + '</div>' +
+                        '<div class="ais-val">' + c.msgs + ' frm</div>' +
+                        '<div class="ais-val">' + Math.max(0, Math.round(Date.now() / 1000 - c.last_seen)) + 's ago</div>' +
+                        '</div>';
+                });
+                document.getElementById('aprs-stations').innerHTML = html ||
+                    '<div style="color:#666;padding:10px;">144.800 MHz is quiet — no stations heard this run.</div>';
+                const pk = (data.packets || []).slice(-25).map(e =>
+                    e.time + '  ' + e.call + '>' + e.dst + '  ' + (e.text || ''));
+                document.getElementById('aprs-packets').textContent = pk.join('\n');
+            } catch (e) { console.error('Error applying APRS:', e); }
+        }
+
+        async function fetchAprs() {
+            try {
+                applyAprs(await (await fetch('/aprs.json')).json());
+            } catch (e) { console.error('Error fetching APRS:', e); }
+        }
+
         // Init
         connectWaterfallWS();
         // WebSocket JSON topics: while the socket is live these replace
@@ -2956,6 +3052,7 @@
             track: applyTrack,
             ais: applyAis,
             orbcomm: applyOrbcomm,
+            aprs: applyAprs,
             power: applyPower,
             recordings: applyRecordings,
         };
@@ -2967,11 +3064,12 @@
         setInterval(() => { if (!wfWsLive()) fetchCrabCount(); }, 10000);
         setInterval(() => { if (!wfWsLive()) fetchAIS(); }, 10000);
         setInterval(() => { if (!wfWsLive()) fetchOrbcomm(); }, 10000);
+        setInterval(() => { if (!wfWsLive()) fetchAprs(); }, 10000);
         setInterval(() => { if (!wfWsLive()) fetchPower(); }, 15000); fetchPower();
         setInterval(updateUptime, 1000);
         setInterval(liveImgTick, 250);
         document.getElementById('tune-freq').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tuneManual(); } });
-        fetchWaterfall(); fetchStatus(); fetchPasses(); fetchTrack(); fetchCrabCount(); fetchAIS(); fetchOrbcomm(); updateUptime(); initPanels(); buildBandJump();
+        fetchWaterfall(); fetchStatus(); fetchPasses(); fetchTrack(); fetchCrabCount(); fetchAIS(); fetchOrbcomm(); fetchAprs(); updateUptime(); initPanels(); buildBandJump();
 
         // ---------- static wiring (the markup carries no inline JS) ----------
         (function wireStaticControls() {

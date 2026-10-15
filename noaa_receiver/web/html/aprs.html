@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOAAh's CrabArk — APRS Packet Log</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 12px 15px; }
+h1 { font-size: 1.2em; color: #b39ddb; margin-bottom: 4px; }
+.sub { font-size: 1em; color: #888; margin-bottom: 12px; }
+.sub a { color: #b39ddb; }
+#toolbar { display: flex; gap: 15px; font-size: 0.85em; color: #888; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+#toolbar label { cursor: pointer; }
+#toolbar select { background: #0f3460; color: #e0e0e0; border: 1px solid #b39ddb; border-radius: 3px; font-family: monospace; padding: 1px 4px; }
+#stats { color: #4da6ff; font-size: 0.9em; margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-bottom: 20px; }
+th { text-align: left; color: #888; border-bottom: 1px solid #0f3460; padding: 4px 6px; position: sticky; top: 0; background: #1a1a2e; }
+td { padding: 3px 6px; border-bottom: 1px solid #16213e; white-space: nowrap; }
+td.txt { white-space: normal; }
+tr:hover td { background: #16213e; }
+.t { color: #666; }
+.call { color: #b39ddb; font-weight: bold; }
+.via { color: #888; font-size: 0.8em; }
+.pos a { color: #4da6ff; text-decoration: none; }
+.pos a:hover { text-decoration: underline; }
+.sym { color: #888; }
+.txt { color: #e0e0e0; }
+.na { color: #555; }
+.muted { color: #666; padding: 10px; }
+</style>
+</head>
+<body>
+<h1>📡 APRS — Amateur Packet Radio Log</h1>
+<div class="sub"><a href="/">&#8592; dashboard</a> &nbsp;|&nbsp; <a href="/aprs.json">live station table (JSON)</a> &nbsp;|&nbsp; 144.800 MHz · Bell 202 AFSK 1200 baud · AX.25</div>
+<div id="toolbar">
+    <label><input type="checkbox" id="autorefresh" checked> auto-refresh (10 s)</label>
+    <span>show last</span>
+    <select id="count">
+        <option value="100">100</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+        <option value="2000">2000</option>
+    </select>
+    <span>frames</span>
+    <span id="loadinfo"></span>
+</div>
+<div id="stats">Loading...</div>
+<table>
+<thead><tr><th colspan="5">stations heard this run</th></tr>
+    <tr>
+        <th>callsign</th><th>via</th><th>position</th>
+        <th>frames</th><th>last packet</th>
+    </tr></thead>
+<tbody id="stations"><tr><td colspan="5" class="muted">Loading stations...</td></tr></tbody>
+</table>
+<table>
+<thead><tr>
+    <th>time</th><th>from</th><th>to</th><th>via</th><th>position</th><th>text</th>
+</tr></thead>
+<tbody id="rows"><tr><td colspan="6" class="muted">Loading APRS log...</td></tbody>
+</table>
+<script src="/aprs.js"></script>
+</body>
+</html>

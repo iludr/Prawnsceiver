@@ -37,7 +37,8 @@ from .config import LOGDIR
 
 # The PRAWN_DB_FILE override exists for tests (isolated temp
 # databases) - production always uses LOGDIR/station.db
-DB_FILE = os.environ.get("PRAWN_DB_FILE") or os.path.join(LOGDIR, "station.db")
+DB_FILE = os.environ.get("PRAWN_DB_FILE") or os.path.join(LOGDIR, "station.db")
+
 
 _lock = threading.RLock()
 _conn = None
@@ -90,6 +91,11 @@ CREATE INDEX IF NOT EXISTS ais_messages_ts ON ais_messages(ts);
 CREATE TABLE IF NOT EXISTS orbcomm_messages (
     id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
 CREATE INDEX IF NOT EXISTS orbcomm_messages_ts ON orbcomm_messages(ts);
+
+-- Rolling APRS decoded-frame log; trimmed by ts
+CREATE TABLE IF NOT EXISTS aprs_messages (
+    id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
+CREATE INDEX IF NOT EXISTS aprs_messages_ts ON aprs_messages(ts);
 """
 
 
@@ -114,6 +120,26 @@ def connect():
             if "orbcomm" not in cols:
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN orbcomm INTEGER DEFAULT 0")
+                _conn.commit()
+            if "aprs" not in cols:
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN aprs INTEGER DEFAULT 0")
+                _conn.commit()
+            # One-time repair: the pre-explicit-column positional
+            # INSERTs wrote the orbcomm flag into added_ts and the
+            # timestamp into orbcomm (the column arrived by ALTER
+            # after the INSERTs were written). Idempotent - a garbage
+            # orbcomm value is always a timestamp, roles re-persist
+            # correctly from here on.
+            rows = list(_conn.execute(
+                "SELECT rowid, added_ts, orbcomm FROM dongles"
+                " WHERE orbcomm > 1000000000"))
+            for rowid, added_ts, bad in rows:
+                _conn.execute(
+                    "UPDATE dongles SET added_ts = ?, orbcomm = ?"
+                    " WHERE rowid = ?",
+                    (bad, 1 if added_ts == 1 else 0, rowid))
+            if rows:
                 _conn.commit()
         return _conn
 
@@ -222,10 +248,10 @@ def import_legacy(record_dir):
                 with open(DONGLES_FILE, encoding="utf-8") as f:
                     for e in json.load(f):
                         cur.execute(
-                            "INSERT OR IGNORE INTO dongles VALUES (?,?,?,?,?)",
+                            "INSERT OR IGNORE INTO dongles (host, port, ais,"
+                            " added_ts) VALUES (?,?,?,?)",
                             (e["host"], int(e["port"]),
-                             1 if e.get("ais") else 0,
-                             1 if e.get("orbcomm") else 0, time.time()))
+                             1 if e.get("ais") else 0, time.time()))
                 _mark_imported(cur, "dongles")
             except (OSError, ValueError, KeyError, TypeError):
                 pass

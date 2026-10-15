@@ -110,6 +110,14 @@ AIS_SHIP_TTL_SECS = 3600
 # in ais.py, atomically)
 AIS_LOG_FILE = os.path.join(LOGDIR, "ais_log.jsonl")
 AIS_LOG_KEEP_HOURS = 24
+
+# APRS (amateur packet radio; see noaa_receiver/decoding/aprs.py): the
+# single European simplex channel - Bell 202 AFSK (1200/2200 Hz) at
+# 1200 baud on narrowband FM, AX.25 UI frames. One dongle role like
+# AIS/Orbcomm, switched from the dashboard.
+APRS_FREQ_HZ = 144800000
+# Rolling decoded-frame log (aprs_messages table), trimmed by ts
+APRS_LOG_KEEP_HOURS = 24
 # Persistent registry of EVERY ship ever received (one JSON file), each
 # with its latest data plus the last AIS_RECENT_MSGS decoded messages.
 # Rewritten at most every AIS_SHIPS_SAVE_SECS (see ais.py).

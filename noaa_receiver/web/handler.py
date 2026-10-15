@@ -12,16 +12,18 @@ from .. import state
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    PASS_HISTORY_FILE, RECORD_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
 
-from ..decoding import ais, orbcomm
+from ..decoding import ais, aprs, orbcomm
 from ..sdr import scan
 from ..decoding.decode import decode_recording, forget_decode_marker
 from .history import _load_history, get_recordings, quality_map, set_recording_quality
-from .pages import AIS_HTML, CONSOLE_HTML, HISTORY_HTML, ORBCOMM_HTML
+from .pages import (AIS_HTML, APRS_HTML, CONSOLE_HTML, HISTORY_HTML,
+                    ORBCOMM_HTML)
 from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
 from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_ais,
-                        set_dongle_orbcomm, set_dongle_paused, usb_dongles)
+                        set_dongle_aprs, set_dongle_orbcomm,
+                        set_dongle_paused, usb_dongles)
 
 def _dongle_list():
     """Dongle descriptors for status/dongles.json: primary first, then stable
@@ -45,6 +47,7 @@ def _dongle_list():
                 "primary": e["primary"],
                 "ais": bool(e.get("ais")),
                 "orbcomm": bool(e.get("orbcomm")),
+                "aprs": bool(e.get("aprs")),
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
                 "connected": bool(e.get("connected")),
@@ -227,12 +230,14 @@ _WS_TOPICS = {
     'track':        (2.0,  lambda p: _track_data()),
     'ais':          (10.0, lambda p: ais.ais_status()),
     'orbcomm':      (5.0,  lambda p: orbcomm.orbcomm_status()),
+    'aprs':         (5.0,  lambda p: aprs.aprs_status()),
     'power':        (15.0, lambda p: _power_data()),
     'recordings':   (10.0, lambda p: get_recordings()),
     'console':      (2.0,  lambda p: _console_lines()),
     'aislog':       (10.0, lambda p: ais.ais_log(_aislog_count(p))),
     'ais_ships':    (30.0, lambda p: ais.ships_registry()),
     'orbcommlog':   (10.0, lambda p: orbcomm.orbcomm_log(_aislog_count(p))),
+    'aprslog':      (10.0, lambda p: aprs.aprs_log(_aislog_count(p))),
     'pass_history': (8.0,  lambda p: _load_history()),
 }
 
@@ -553,6 +558,26 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps(orbcomm.orbcomm_log(count)).encode())
+        elif self.path == '/aprs.json':
+            # APRS: heard-station registry (callsigns, positions) +
+            # recent frames
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(aprs.aprs_status()).encode())
+        elif self.path.startswith('/aprslog.json'):
+            # Tail of the persistent decoded-frame log (?count=N, max 2000)
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                count = int((query.get('count') or ['200'])[0])
+            except ValueError:
+                count = 200
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(aprs.aprs_log(count)).encode())
         elif self.path == '/ais_ships.json':
             # Persistent registry: every ship ever received, each with
             # its latest data and the last AIS_RECENT_MSGS messages
@@ -586,6 +611,13 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(ORBCOMM_HTML.encode())
+        elif self.path == '/aprs' or self.path == '/aprs.html':
+            # APRS log page: every decoded frame from the persistent
+            # log, plus the live station registry
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(APRS_HTML.encode())
         elif self.path.split('?')[0] == '/ship_tracks.json':
             # 24 h position tracks for the AIS page's 'path on map'
             # multi-select: ?mmsi=123,456&hours=24
@@ -759,6 +791,29 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'success': True, 'orbcomm': bool(entry.get('orbcomm'))}).encode())
+        elif self.path.split('?')[0] == '/aprs_dongle':
+            # Switch one dongle between satellite tracking and the APRS
+            # role (dashboard button, mirroring the AIS/Orbcomm ones):
+            # /aprs_dongle?d=<id>&on=1 parks it on 144.800 MHz and
+            # decodes Bell 202 AFSK AX.25 frames; on=0 returns it to
+            # the satellites. The capture thread restarts in the new role.
+            query = parse_qs(urlparse(self.path).query)
+            dev = (query.get('d') or [''])[0].strip()
+            on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
+            entry = state.sdrs.get(dev)
+            if entry is None:
+                self.send_response(404)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                return
+            set_dongle_aprs(dev, on)
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': True, 'aprs': bool(entry.get('aprs'))}).encode())
         elif self.path.split('?')[0] == '/pause_dongle':
             # Temporarily stop one dongle's capture (dashboard
             # pause/play button): two dongles recording at the same
@@ -964,7 +1019,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(json.dumps({"success": True, "mode": "bw", "bandwidth_khz": bw_hz / 1000 if bw_hz else None}).encode())
                     return
-            if entry.get('ais') or entry.get('orbcomm'):
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
                 # A dongle dedicated to AIS or Orbcomm reception is parked
                 # on its mode's band - retuning it would stop reception
                 self.send_response(400)
@@ -1019,7 +1074,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
                 return
-            if entry.get('ais') or entry.get('orbcomm'):
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
                 # A dongle dedicated to AIS or Orbcomm reception is parked
                 # on its mode's band - scanning it would stop reception
                 self.send_response(400)
@@ -1114,7 +1169,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
                 return
-            if entry.get('ais') or entry.get('orbcomm'):
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
                 # A dedicated capture thread (AIS/Orbcomm) does not record
                 self.send_response(400)
                 self.send_header('Content-type', 'application/json')
@@ -1149,7 +1204,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
                 return
-            if entry.get('ais') or entry.get('orbcomm'):
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
                 self.send_response(400)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
