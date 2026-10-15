@@ -190,6 +190,28 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
         e.pop("_row", None)
     out["emitters"] = emitters
 
+    # POCSAG paging attempt: the European 466.x MHz paging
+    # downlinks are continuous narrowband 1200-baud 2-FSK, so
+    # every narrowband non-OOK emitter gets a decode try - the
+    # sync code either locks (channel identified, pages decoded,
+    # idle-only channels say so) or it is not POCSAG
+    try:
+        from ..decoding.pocsag import decode_band
+    except Exception:
+        decode_band = None
+    if decode_band is not None:
+        for e in emitters[:6]:
+            m = e.get("modulation") or {}
+            if m.get("type") == "ook" or e.get("occupied_bw_khz", 0) > 80:
+                continue
+            try:
+                poc = decode_band(getc, n_cplx,
+                                  e["offset_khz"] * 1000.0, fs)
+            except Exception:
+                continue
+            if poc is not None:
+                e["pocsag"] = poc
+
     # Sparse signals: peaks standing out only in the max-hold -
     # radar, DME, impulsive interference average below the emitter
     # threshold but are unmistakable per-bin peaks (observed live:
@@ -197,7 +219,14 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
     # avg-detected emitter are excluded; the dongle's own LO spike
     # is flagged instead of reported as a signal.
     sparse = []
-    ph = peak > floor + 15.0
+    # Max-hold threshold adapts to the row count: the per-bin maximum
+    # of R Rayleigh-distributed noise rows sits ~10*log10(2*ln(R)) over
+    # the averaged floor, so long captures need a higher bar than
+    # short ones (the 1.5 s synthetic caught noise crowding out a real
+    # radar cluster at a fixed +15 dB)
+    sparse_thr = floor + max(15.0, 10.0 * np.log10(
+        2.0 * np.log(max(acc_n, 2))) + 5.0)
+    ph = peak > sparse_thr
     ph &= ~covered
     pd = ph.copy()
     for d in range(1, 5):
@@ -223,10 +252,11 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
             "width_khz": round((j - i) * (fs / _N) / 1000.0, 1),
             "dc_or_lo_spike": i <= _N // 2 < j,
         })
-        if len(sparse) >= 12:
-            break
         i = j
-    out["sparse_signals"] = sparse
+    # strength-ranked cap: real signals must never be crowded out by
+    # noise excursions that slipped the threshold
+    sparse.sort(key=lambda x: -x["peak_dbfs"])
+    out["sparse_signals"] = sparse[:12]
     return out
 
 

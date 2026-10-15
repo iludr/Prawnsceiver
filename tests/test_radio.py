@@ -258,8 +258,9 @@ print("6d manual raw recording cap: auto-finalized at the limit OK")
 # in noise - the analyzer finds each, flags the LO spike, and pulls the
 # sparse train out of the max-hold where the average sees nothing
 from noaa_receiver.analysis.iqscan import analyze_recording
+from noaa_receiver.decoding import pocsag
 rng = np.random.default_rng(7)
-n_synth = SDR_RATE                                  # 1 s of IQ
+n_synth = int(1.5 * SDR_RATE)                       # 1.5 s of IQ
 tt = np.arange(n_synth) / SDR_RATE
 synth = (rng.normal(0, 6, n_synth)
          + 1j * rng.normal(0, 6, n_synth)).astype(np.complex64)
@@ -277,6 +278,22 @@ synth_tone(0.0, 1.0, 150_000.0, amp=60.0)           # steady carrier
 synth_tone(0.0, 1.0, 0.0, amp=25.0)                # dongle LO tone (raw DC)
 for k in range(5):                                 # sparse radar-like train
     synth_tone(0.05 + k * 0.2, 20e-6, 700_000.0, amp=75.0)
+# POCSAG paging channel at raw +1 MHz: preamble + one batch
+# with a numeric page - the pre-flight must decode it
+poc_bits = '10' * 288
+poc_words = [pocsag.IDLE] * 16
+poc_words[0] = pocsag.encode_word(1, (123456 << 2) | 0)
+poc_words[1] = pocsag.encode_word(0, 0x01234)
+poc_words[2] = pocsag.IDLE
+poc_bits += format(pocsag.SC, '032b')
+for w32 in poc_words:
+    poc_bits += format(w32, '032b')
+poc_f = np.where(np.array([int(c) for c in poc_bits]) == 1,
+                 2400.0, -2400.0)
+poc_frep = np.repeat(poc_f, SDR_RATE // 1200)
+poc_ph = (2 * np.pi * np.cumsum(poc_frep + 1_000_000.0)
+          / SDR_RATE)
+synth[:len(poc_frep)] += (60.0 * np.exp(1j * poc_ph)).astype(np.complex64)
 ap_synth = os.path.join(radio.RECORD_DIR, 'synth.iq.u8')
 u8 = np.empty(n_synth * 2, dtype=np.uint8)
 u8[0::2] = (np.clip(synth.real, -127, 127) + 127.5).astype(np.uint8)
@@ -294,12 +311,15 @@ cont = [x for x in em if x['modulation'] and x['modulation']['type'] == 'continu
 assert cont and any(abs(x['abs_mhz'] - 434.143) < 0.01 for x in cont), em
 lo = [x for x in em if x.get('dc_or_lo_spike')]
 assert lo and abs(lo[0]['offset_khz']) < 3, em      # LO tone at raw DC
+poc = [x for x in em if 'pocsag' in x]
+assert poc and any(p['addr'] == 123456 and p['text'] == '01234'
+                   for p in poc[0]['pocsag']['pages']), em
 sp = res['sparse_signals']
 spr = [x for x in sp if abs(x['offset_khz'] - 700.0) < 15]
 assert spr and spr[0]['peak_dbfs'] > res['noise_floor_dbfs'] + 15, sp
 assert not any(abs(x['offset_khz'] - 700.0) < 15 for x in em), em
 os.remove(ap_synth)
-print("6e pre-flight analysis: OOK + carrier + LO flag + sparse max-hold OK")
+print("6e pre-flight analysis: OOK + carrier + LO flag + sparse max-hold + POCSAG OK")
 
 # 7. WAV open failure must not kill the receiver; retried later
 # (wave.open is monkeypatched to fail while the flag is set: a chmod'd
