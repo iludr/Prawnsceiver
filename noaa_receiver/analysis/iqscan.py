@@ -169,7 +169,9 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
             "period_s": (round(float(np.median(np.diff(starts))) * step / fs, 2)
                          if len(starts) > 2 else None),
             "modulation": None,
-            "dc_or_lo_spike": abs(pk - _N // 2) <= 2,
+            # the LO spike's peak bin can wander a few bins off DC
+            # (noise on the skirts) - flag the whole DC cluster
+            "dc_or_lo_spike": i <= _N // 2 < j,
             "_pk": pk,
             "_row": r_start,
         }
@@ -219,7 +221,7 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
             "offset_khz": round((pk - _N // 2) * (fs / _N) / 1000.0, 1),
             "peak_dbfs": round(float(peak[pk]), 1),
             "width_khz": round((j - i) * (fs / _N) / 1000.0, 1),
-            "dc_or_lo_spike": abs(pk - _N // 2) <= 2,
+            "dc_or_lo_spike": i <= _N // 2 < j,
         })
         if len(sparse) >= 12:
             break
