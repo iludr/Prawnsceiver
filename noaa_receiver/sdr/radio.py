@@ -317,11 +317,12 @@ def _persist_dongles():
                 else:
                     host, port = e['host'], int(e['port'])
                 cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
-                            " aprs, added_ts) VALUES (?,?,?,?,?,?)",
+                            " aprs, aprs_iss, added_ts) VALUES (?,?,?,?,?,?,?)",
                             (host, port,
                              1 if e.get('ais') else 0,
                              1 if e.get('orbcomm') else 0,
-                             1 if e.get('aprs') else 0, time.time()))
+                             1 if e.get('aprs') else 0,
+                             1 if e.get('aprs_iss') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -339,7 +340,8 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
     return {
         'id': did, 'host': host, 'port': int(port),
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
-        'ais': did == AIS_DONGLE, 'orbcomm': False, 'aprs': False, 'usb_idx': usb_idx, 'proc': None,
+        'ais': did == AIS_DONGLE, 'orbcomm': False, 'aprs': False,
+        'aprs_iss': False, 'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
         # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
         # bin, appended with the display row; wf_db_seq counts them
@@ -520,10 +522,11 @@ def set_dongle_orbcomm(did, on):
 def set_dongle_aprs(did, on):
     """Switch one dongle between satellite tracking and the APRS role
     (dashboard button, mirroring set_dongle_ais): on=1 parks it on
-    144.800 MHz and decodes Bell 202 AFSK AX.25 frames (see
-    noaa_receiver/decoding/aprs.py). The capture thread restarts in
-    the new role within ~2 s; the dongle stays registered. Unknown id:
-    False; a no-op request still succeeds."""
+    144.800 MHz (or 145.825 MHz, the ISS digipeater, when the dongle's
+    aprs_iss flag is set — see set_dongle_aprs_iss) and decodes Bell 202
+    AFSK AX.25 frames (see noaa_receiver/decoding/aprs.py). The capture
+    thread restarts in the new role within ~2 s; the dongle stays
+    registered. Unknown id: False; a no-op request still succeeds."""
     entry = state.sdrs.get(did)
     if entry is None:
         return False
@@ -537,11 +540,40 @@ def set_dongle_aprs(did, on):
             entry['orbcomm'] = False
             state.manual_recording.pop(did, None)
     if on:
-        state.log_console(f"📡 Dongle {did} switched to APRS (144.800 MHz) — satellite reception on it paused")
+        freq = ("145.825 MHz (ISS digipeater)" if entry.get('aprs_iss')
+                else "144.800 MHz")
+        state.log_console(f"📡 Dongle {did} switched to APRS ({freq}) — satellite reception on it paused")
     else:
         state.log_console(f"📡 Dongle {did} switched back to satellite tracking")
     _persist_dongles()
     _stop_capture(entry)
+    return True
+
+def set_dongle_aprs_iss(did, on):
+    """Flip one dongle's APRS channel between the European simplex
+    channel (144.800 MHz) and the ISS (Zarya) digipeater (145.825 MHz)
+    — the checkbox under the APRS button on the dashboard card. Only
+    meaningful while the dongle is in the APRS role: a running APRS
+    capture thread is restarted so it retunes (within ~2 s); when the
+    dongle is on the satellites the flag is just stored and takes
+    effect on the next APRS switch. Like the role flags it survives
+    restarts via the dongles table. Unknown id: False; a no-op request
+    still succeeds."""
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return False
+    on = bool(on)
+    if bool(entry.get('aprs_iss')) == on:
+        return True
+    with state.status_lock:
+        entry['aprs_iss'] = on
+    freq = "145.825 MHz" if on else "144.800 MHz"
+    if entry.get('aprs'):
+        state.log_console(f"🛰 Dongle {did} APRS channel -> {freq} — retuning")
+        _stop_capture(entry)
+    else:
+        state.log_console(f"🛰 Dongle {did} APRS channel preset to {freq} (not in APRS role yet)")
+    _persist_dongles()
     return True
 
 def load_dongles():
@@ -549,12 +581,12 @@ def load_dongles():
     it has rows, else calibration.DEFAULT_DONGLES (persisted right away,
     so later dashboard additions update the database)."""
     entries = [(r['host'], r['port'], bool(r['ais']), bool(r['orbcomm']),
-                bool(r['aprs']))
-               for r in db.query("SELECT host, port, ais, orbcomm, aprs"
-                                 " FROM dongles ORDER BY port, host")]
+                bool(r['aprs']), bool(r['aprs_iss']))
+               for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
+                                 " aprs_iss FROM dongles ORDER BY port, host")]
     if not entries:
-        entries = [(h, p, False, False, False) for h, p in DEFAULT_DONGLES]
-    for host, port, was_ais, was_orbcomm, was_aprs in entries:
+        entries = [(h, p, False, False, False, False) for h, p in DEFAULT_DONGLES]
+    for host, port, was_ais, was_orbcomm, was_aprs, was_iss in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -574,10 +606,14 @@ def load_dongles():
                 state.sdrs[did]['orbcomm'] = True
             state.log_console(f"Dongle {did} restored to Orbcomm (satellite IoT downlink) - persisted role")
         elif was_aprs:
-            # and the APRS role: the receiver resumes on 144.800 MHz
+            # and the APRS role: the receiver resumes on 144.800 MHz (or
+            # 145.825 MHz, the ISS digipeater, when the checkbox was set)
             with state.status_lock:
                 state.sdrs[did]['aprs'] = True
-            state.log_console(f"Dongle {did} restored to APRS (ham packet radio) - persisted role")
+                state.sdrs[did]['aprs_iss'] = was_iss
+            state.log_console(f"Dongle {did} restored to APRS (ham packet radio)"
+                              + (" — ISS digipeater 145.825 MHz" if was_iss else "")
+                              + " - persisted role")
     _persist_dongles()
 
 

@@ -116,6 +116,10 @@ AIS_LOG_KEEP_HOURS = 24
 # 1200 baud on narrowband FM, AX.25 UI frames. One dongle role like
 # AIS/Orbcomm, switched from the dashboard.
 APRS_FREQ_HZ = 144800000
+# The ISS (Zarya) APRS digipeater: same Bell 202 AFSK/AX.25, reachable
+# during passes. A per-dongle checkbox in APRS mode retunes the role
+# from APRS_FREQ_HZ to this frequency (see decoding/aprs.py).
+ISS_APRS_FREQ_HZ = 145825000
 # Rolling decoded-frame log (aprs_messages table), trimmed by ts
 APRS_LOG_KEEP_HOURS = 24
 # Persistent registry of EVERY ship ever received (one JSON file), each

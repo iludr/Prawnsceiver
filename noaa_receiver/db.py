@@ -125,6 +125,12 @@ def connect():
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN aprs INTEGER DEFAULT 0")
                 _conn.commit()
+            if "aprs_iss" not in cols:
+                # ISS digipeater checkbox for a dongle in the APRS role
+                # (145.825 MHz instead of 144.800 MHz)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN aprs_iss INTEGER DEFAULT 0")
+                _conn.commit()
             # One-time repair: the pre-explicit-column positional
             # INSERTs wrote the orbcomm flag into added_ts and the
             # timestamp into orbcomm (the column arrived by ALTER

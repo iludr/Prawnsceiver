@@ -22,7 +22,8 @@ from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
 from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_ais,
-                        set_dongle_aprs, set_dongle_orbcomm,
+                        set_dongle_aprs, set_dongle_aprs_iss,
+                        set_dongle_orbcomm,
                         set_dongle_paused, usb_dongles)
 
 def _dongle_list():
@@ -48,6 +49,7 @@ def _dongle_list():
                 "ais": bool(e.get("ais")),
                 "orbcomm": bool(e.get("orbcomm")),
                 "aprs": bool(e.get("aprs")),
+                "aprs_iss": bool(e.get("aprs_iss")),
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
                 "connected": bool(e.get("connected")),
@@ -814,6 +816,29 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'success': True, 'aprs': bool(entry.get('aprs'))}).encode())
+        elif self.path.split('?')[0] == '/aprs_iss':
+            # Flip one dongle's APRS channel between the DL simplex
+            # channel (144.800 MHz) and the ISS digipeater
+            # (145.825 MHz) — the checkbox below the APRS button.
+            # /aprs_iss?d=<id>&on=1 selects the ISS channel and
+            # retunes a running APRS capture; on=0 returns to 144.800.
+            query = parse_qs(urlparse(self.path).query)
+            dev = (query.get('d') or [''])[0].strip()
+            on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
+            entry = state.sdrs.get(dev)
+            if entry is None:
+                self.send_response(404)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                return
+            set_dongle_aprs_iss(dev, on)
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': True, 'aprs_iss': bool(entry.get('aprs_iss'))}).encode())
         elif self.path.split('?')[0] == '/pause_dongle':
             # Temporarily stop one dongle's capture (dashboard
             # pause/play button): two dongles recording at the same

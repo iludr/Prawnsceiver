@@ -16,11 +16,13 @@ function applyStatus(s) {
     document.getElementById('stats').textContent =
         (s.enabled ? 'Receiver live on dongle ' + s.dongle
                    : 'APRS disabled (no APRS dongle) — showing the persisted log')
+        + (s.freq_mhz ? ' · ' + s.freq_mhz.toFixed(3) + ' MHz'
+                      + (s.freq_mhz === 145.825 ? ' (ISS digipeater)' : '') : '')
         + ' · ' + st.length + ' station' + (st.length === 1 ? '' : 's') + ' heard this run'
         + (s.stats && s.stats.frames ? ' · ' + s.stats.frames + ' frames, ' + s.stats.bad + ' bad bursts' : '');
     const el = document.getElementById('stations');
     if (!st.length) {
-        el.innerHTML = '<tr><td colspan="5" class="muted">No stations heard yet — 144.800 MHz is quiet.</td></tr>';
+        el.innerHTML = '<tr><td colspan="5" class="muted">No stations heard yet — the channel is quiet.</td></tr>';
         return;
     }
     let html = '';

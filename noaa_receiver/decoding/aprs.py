@@ -42,7 +42,7 @@ from .. import db
 from .. import state
 from ..sdr.dsp import frequency_shift
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
-from ..config import (APRS_FREQ_HZ, APRS_LOG_KEEP_HOURS,
+from ..config import (APRS_FREQ_HZ, APRS_LOG_KEEP_HOURS, ISS_APRS_FREQ_HZ,
                       FFT_SIZE, IQ_BLOCK, SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE)
 from .ais import (FLAG, FCS_RESIDUE, _find_flags, crc16_register,
                   destuff_bits, fcs_bits, payload_to_transmitted,
@@ -384,8 +384,10 @@ def aprs_status():
         enabled = state.aprs_enabled
         serial = state.aprs_dongle
         stats = dict(state.aprs_stats)
-    return {"enabled": enabled, "dongle": serial, "stats": stats,
-            "stations": stations, "packets": packets}
+        freq_hz = state.aprs_freq_hz
+    return {"enabled": enabled, "dongle": serial,
+            "freq_mhz": round(freq_hz / 1e6, 3) if freq_hz else None,
+            "stats": stats, "stations": stations, "packets": packets}
 
 def load_log_summary():
     """Startup line for the console (mirrors the AIS/Orbcomm summary)."""
@@ -402,7 +404,11 @@ def aprs_capture_thread(did):
     """rtl_tcp/rtl_sdr connection + demod for a dongle switched to the
     APRS role. Mirrors the AIS capture thread's connection lifecycle
     (handshake, gain, offset tune, reconnect with backoff); one fixed
-    channel instead of two, and no retune (the band never moves)."""
+    channel instead of two, and no retune (the band never moves). The
+    channel is 144.800 MHz (European APRS simplex) or, when the dongle's
+    aprs_iss flag is set (dashboard checkbox), 145.825 MHz — the ISS
+    (Zarya) digipeater; the flag is read once at thread start, a flip
+    restarts the thread (radio.set_dongle_aprs_iss)."""
     from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
@@ -410,9 +416,13 @@ def aprs_capture_thread(did):
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
 
     entry = state.sdrs[did]
-    # move the 144.800 MHz channel onto 0 Hz: the dongle is tuned
-    # SDR_OFFSET_HZ above APRS_FREQ_HZ, so the signal arrives at
-    # -SDR_OFFSET_HZ (see ais._ais_shifts)
+    # The channel this thread listens to: the ISS digipeater checkbox
+    # (aprs_iss) selects 145.825 MHz over the 144.800 MHz simplex
+    # channel; read once here, a flip restarts the thread
+    freq_hz = ISS_APRS_FREQ_HZ if entry.get("aprs_iss") else APRS_FREQ_HZ
+    # move the channel onto 0 Hz: the dongle is tuned SDR_OFFSET_HZ
+    # above the channel, so the signal arrives at -SDR_OFFSET_HZ
+    # (see ais._ais_shifts)
     shift = int(SDR_OFFSET_HZ)
     st = new_channel_state(did)
 
@@ -427,12 +437,16 @@ def aprs_capture_thread(did):
                 return
             state.aprs_enabled = False
             state.aprs_dongle = None
+            state.aprs_freq_hz = 0
 
     with state.aprs_lock:
         state.aprs_enabled = True
         state.aprs_dongle = did
+        state.aprs_freq_hz = freq_hz
     state.log_console(f"📡 APRS receiver on dongle {did}: "
-                      f"{APRS_FREQ_HZ / 1e6:.3f} MHz (Bell 202 AFSK 1200 baud)")
+                      f"{freq_hz / 1e6:.3f} MHz "
+                      f"({'ISS digipeater' if entry.get('aprs_iss') else 'DL simplex channel'}, "
+                      f"Bell 202 AFSK 1200 baud)")
     restart_backoff = 5.0
     while True:
         if entry.get("closed") or not entry.get("aprs") or entry.get("paused"):
@@ -441,9 +455,9 @@ def aprs_capture_thread(did):
         run_started = time.time()
         sock = None
         try:
-            correction = tuning_correction(APRS_FREQ_HZ, did)
-            tune = APRS_FREQ_HZ + SDR_OFFSET_HZ + correction
-            entry["correction"], entry["correction_src"] = correction_info(APRS_FREQ_HZ, did)
+            correction = tuning_correction(freq_hz, did)
+            tune = freq_hz + SDR_OFFSET_HZ + correction
+            entry["correction"], entry["correction_src"] = correction_info(freq_hz, did)
             gain_db = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
             if entry.get("usb_idx") is not None:
                 proc = _spawn_rtl_sdr(entry, tune, gain_db)

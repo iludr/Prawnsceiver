@@ -1239,9 +1239,10 @@
                     // The AIS dongle is parked on 162.000 MHz (both ship
                     // channels at +/-25 kHz), the Orbcomm dongle on
                     // 137.5 MHz (one 2.4 MHz capture spans the whole
-                    // 137.0-138.0 MHz downlink band) — neither follows
-                    // the shared satellite tune
-                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? 144.8 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
+                    // 137.0-138.0 MHz downlink band), the APRS dongle on
+                    // 144.8 MHz (145.825 with the ISS checkbox set) —
+                    // none follow the shared satellite tune
+                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_iss ? 145.825 : 144.8) : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
                         ? d.manual_frequency_mhz : lastSharedMHz)));
                     updateDongleCard(d);
                 }
@@ -1289,7 +1290,7 @@
             if (!c || !c.lastD) return null;
             if (c.lastD.ais) return 162.0;   // AIS dongle never follows the shared tune
             if (c.lastD.orbcomm) return 137.5;   // Orbcomm dongle is parked on the band center
-            if (c.lastD.aprs) return 144.8;     // APRS dongle is parked on 144.800 MHz
+            if (c.lastD.aprs) return c.lastD.aprs_iss ? 145.825 : 144.8;     // APRS dongle is parked on the APRS channel (ISS checkbox: 145.825)
             if (c.lastD.manual_frequency_mhz !== null && c.lastD.manual_frequency_mhz !== undefined)
                 return c.lastD.manual_frequency_mhz;
             return lastSharedMHz;
@@ -1372,6 +1373,8 @@
             c.aprsBtn.style.background = aprs ? '#1a2a3e' : '#0f3460';
             c.aprsBtn.style.color = aprs ? '#53d769' : '#4da6ff';
             c.aprsBtn.style.borderColor = aprs ? '#53d769' : '#4da6ff';
+            // the ISS digipeater checkbox only exists in APRS mode
+            c.aprsIssRow.style.display = aprs ? 'flex' : 'none';
             c.aprsLast = aprs;
         }
 
@@ -1789,6 +1792,36 @@
                     })
                     .catch(() => toast('APRS switch failed: receiver unreachable', true));
             };
+            // ISS digipeater checkbox (APRS mode only, shown by
+            // applyDongleAprsMode): retunes the APRS channel from the
+            // 144.800 MHz DL simplex channel to the ISS (Zarya)
+            // digipeater on 145.825 MHz — server-side the capture
+            // thread restarts with the new tune. The checkbox state
+            // itself mirrors d.aprs_iss from dongles.json
+            const aprsIssRow = document.createElement('label');
+            aprsIssRow.style.cssText = 'display:none;align-items:center;width:100%;margin-top:4px;padding:3px 10px;background:#0f2233;color:#a8b8d8;border:1px solid #1a3a5c;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.82em;box-sizing:border-box;';
+            aprsIssRow.title = 'While this dongle listens for APRS: tune to the ISS (Zarya) digipeater on 145.825 MHz instead of the 144.800 MHz simplex channel — frames relayed through the ISS show up during passes';
+            const aprsIssBox = document.createElement('input');
+            aprsIssBox.type = 'checkbox';
+            aprsIssBox.style.cssText = 'accent-color:#53d769;margin-right:6px;';
+            const aprsIssTxt = document.createElement('span');
+            aprsIssTxt.textContent = '🛰 ISS digipeater (145.825 MHz)';
+            aprsIssRow.appendChild(aprsIssBox); aprsIssRow.appendChild(aprsIssTxt);
+            aprsIssBox.onchange = () => {
+                const on = aprsIssBox.checked;
+                fetch('/aprs_iss?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(on ? '🛰 APRS channel -> 145.825 MHz (ISS digipeater) — retuning'
+                                     : '📡 APRS channel -> 144.800 MHz (DL simplex) — retuning');
+                        } else {
+                            aprsIssBox.checked = !on;
+                            toast('ISS switch failed: ' + (data.error || 'unknown error'), true);
+                        }
+                    })
+                    .catch(() => { aprsIssBox.checked = !on; toast('ISS switch failed: receiver unreachable', true); });
+            };
             // Pause/Play: temporarily stops this dongle's capture thread —
             // two dongles recording at once can overload the dongle host's
             // shared USB bus. The dongle stays registered; Play restarts it.
@@ -1809,12 +1842,12 @@
                     })
                     .catch(() => toast('Pause failed: receiver unreachable', true));
             };
-            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(orbBtn); card.appendChild(aprsBtn); card.appendChild(pauseBtn); card.appendChild(removeBtn);
+            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(orbBtn); card.appendChild(aprsBtn); card.appendChild(aprsIssRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
             col.appendChild(card);
             c = dongleCards[d.id] = {
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
-                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, orbBtn, aprsBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
+                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, orbBtn, aprsBtn, aprsIssRow, aprsIssBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secBw, secScan, modeRow, modeSel, modeHint,
             };
@@ -1856,6 +1889,10 @@
             if (c.aisLast !== !!d.ais) applyDongleAisMode(c, !!d.ais);
             if (c.orbcommLast !== !!d.orbcomm) applyDongleOrbcommMode(c, !!d.orbcomm);
             if (c.aprsLast !== !!d.aprs) applyDongleAprsMode(c, !!d.aprs);
+            // ISS digipeater checkbox mirrors the server flag (the click
+            // already flipped it locally; this only follows external
+            // changes, e.g. a second browser tab)
+            if (c.issLast !== !!d.aprs_iss) { c.issLast = !!d.aprs_iss; c.aprsIssBox.checked = c.issLast; }
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
             // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise
@@ -1906,7 +1943,7 @@
             let fTxt = '—', fCol = '#888';
             if (d.ais) { fTxt = '🚢 AIS 161.975 / 162.025 MHz'; fCol = '#4da6ff'; }
             else if (d.orbcomm) { fTxt = '🛰 Orbcomm 137.0-138.0 MHz (center 137.5)'; fCol = '#b39ddb'; }
-            else if (d.aprs) { fTxt = '📡 APRS 144.800 MHz'; fCol = '#53d769'; }
+            else if (d.aprs) { fTxt = '📡 APRS ' + (d.aprs_iss ? '145.825 MHz (ISS)' : '144.800 MHz'); fCol = '#53d769'; }
             else if (eff !== null) {
                 fTxt = eff.toFixed(4) + ' MHz' + (d.manual_frequency_mhz ? ' (manual)' : '');
                 fCol = d.manual_frequency_mhz ? '#f39c12' : '#53d769';
@@ -1919,7 +1956,7 @@
                 : (d.orbcomm
                     ? '🛰 Orbcomm — satellite IoT downlink · 137.0-138.0 MHz · <a href="/orbcomm" style="color:#b39ddb;text-decoration:none;">→ full log</a> · <a href="/orbcomm.json" target="_blank" rel="noopener" style="color:#b39ddb;text-decoration:none;">orbcomm.json</a>'
                     : (d.aprs
-                    ? '📡 APRS — ham packet radio · 144.800 MHz · <a href="/aprs" style="color:#53d769;text-decoration:none;">→ full log</a> · <a href="/aprs.json" target="_blank" rel="noopener" style="color:#53d769;text-decoration:none;">aprs.json</a>'
+                    ? '📡 APRS — ' + (d.aprs_iss ? 'ISS (Zarya) digipeater · 145.825 MHz' : 'ham packet radio · 144.800 MHz') + ' · <a href="/aprs" style="color:#53d769;text-decoration:none;">→ full log</a> · <a href="/aprs.json" target="_blank" rel="noopener" style="color:#53d769;text-decoration:none;">aprs.json</a>'
                     : (eff !== null
                     ? '📶 ' + bandLabel(bandFor(eff))
                     : '📶 <span style="color:#666;">—</span>')));
@@ -3009,7 +3046,8 @@
                 const frames = (data.stats && data.stats.frames) || 0;
                 document.getElementById('aprs-stats').textContent =
                     st.length + ' station' + (st.length === 1 ? '' : 's') + ' heard'
-                    + ' · ' + frames + ' frames · dongle ' + data.dongle + ' · 144.800 MHz';
+                    + ' · ' + frames + ' frames · dongle ' + data.dongle
+                    + ' · ' + (data.freq_mhz ? data.freq_mhz.toFixed(3) + ' MHz' : '—');
                 let html = '';
                 st.slice(0, 8).forEach(c => {
                     let pos = '<span style="color:#888">—</span>';
@@ -3027,7 +3065,7 @@
                         '</div>';
                 });
                 document.getElementById('aprs-stations').innerHTML = html ||
-                    '<div style="color:#666;padding:10px;">144.800 MHz is quiet — no stations heard this run.</div>';
+                    '<div style="color:#666;padding:10px;">The APRS channel is quiet — no stations heard this run.</div>';
                 const pk = (data.packets || []).slice(-25).map(e =>
                     e.time + '  ' + e.call + '>' + e.dst + '  ' + (e.text || ''));
                 document.getElementById('aprs-packets').textContent = pk.join('\n');
