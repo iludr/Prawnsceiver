@@ -71,10 +71,21 @@ ORBCOMM_WF_BLOCKS = max(8, round(4.27e-3 / _BLK_S))   # one row per ~4 ms
 # history so a header straddling block edges is still found.
 _BITBUF = 4096
 _TRIALBUF = 2048
-# A channel that has never produced a checksum-valid packet for this
-# long is dropped (a persistent local carrier looks like a carrier but
-# never validates; a real satellite locks within seconds)
-_NOLOCK_TIMEOUT_SECS = 45.0
+# A channel is dropped when it has produced no checksum-valid packet
+# for this long - whether it never locked (a persistent local carrier
+# looks like a carrier but never validates) or its last packet is
+# older than this (a one-off false lock; real satellites emit Sync
+# packets continuously, so seconds without one means not a satellite).
+# The band detector opens noise-cluster channels constantly; each
+# costs ~3-4 ms of CPU per 13.7 ms batch, so a short timeout plus the
+# opening cap keeps the demod budget bounded.
+_NOLOCK_TIMEOUT_SECS = 12.0
+# Maximum simultaneously demodulating channels. A real pass has 1-2
+# satellites; beyond this the detector's noise clusters would spend
+# the whole CPU budget (and starve a real satellite's lock attempt).
+# A carrier arriving while every slot is taken is ignored until a
+# slot frees (drop timeout above, at most _NOLOCK_TIMEOUT_SECS).
+_MAX_DEMOD_CHANNELS = 4
 
 # ---------- Fletcher-16 (mod 256, over the whole packet) ----------
 
@@ -168,6 +179,11 @@ _HEADER_CANDIDATES = (
     (tuple(1 - b for b in _H), False, True),
     (tuple(1 - b for b in reversed(_H)), True, True),
 )
+# Pre-converted +/-1 match vectors for _find_anchor's correlations
+# (it runs up to 10 phases x 4 candidates per channel per batch -
+# rebuilding these per call showed up in the profile)
+_HEADER_MATCHERS = tuple((np.array(p, dtype=np.int8) * 2 - 1, rev, pol)
+                         for p, rev, pol in _HEADER_CANDIDATES)
 
 def _bytes_from_bits(bits, rev, pol):
     """A bit array -> packet bytes. `rev`: the air bits are LSB-first
@@ -209,19 +225,24 @@ def _find_anchor(bits, from_ix=0):
     Searching forward from the failed slot after a corrupted packet
     is what makes re-anchoring progress: restarting from the buffer
     head would find the already-seen first Sync and rewind the grid
-    into seen packets forever."""
+    into seen packets forever.
+
+    from_ix also bounds the correlation itself: a header match at or
+    after from_ix has all 8 of its bits there, so the candidate window
+    is sliced first - the per-batch incremental scan (demod_batch)
+    correlates ~160 bits instead of the whole rolling buffer."""
     if len(bits) < 96:
         return None
-    x = np.asarray(bits, dtype=np.int8) * 2 - 1
-    for pat, rev, pol in _HEADER_CANDIDATES:
-        f = np.array(pat, dtype=np.int8) * 2 - 1
+    from_ix = max(0, int(from_ix))
+    seg = bits[from_ix:]
+    x = np.asarray(seg, dtype=np.int8) * 2 - 1
+    for f, rev, pol in _HEADER_MATCHERS:
         corr = np.correlate(x, f, mode="valid") == 8
         for ix in np.flatnonzero(corr):
-            if ix < from_ix:
-                continue
-            data = _try_packet(bits, int(ix), rev, pol, header=SYNC)
+            data = _try_packet(bits, int(ix) + from_ix, rev, pol,
+                               header=SYNC)
             if data is not None:
-                return int(ix), data, (rev, pol)
+                return int(ix) + from_ix, data, (rev, pol)
     return None
 
 # ---------- per-channel demod state ----------
@@ -236,6 +257,9 @@ def _sinc_taps(cutoff_hz, numtaps, fs=SDR_RATE):
 # channel (>=25 kHz away) and the offset-tuned DC spike (60 kHz)
 # stay outside.
 _ORB_TAPS = _sinc_taps(8000, 610)
+# polyphase form used by _demod_channel_batch (see there): complex64 so
+# the window dot product stays in the input's dtype
+_ORB_TAPS_C = _ORB_TAPS.astype(np.complex64)
 
 def new_channel_state(did, key, freq_hz):
     """Fresh demodulation state for one tracked satellite channel."""
@@ -266,15 +290,32 @@ def new_channel_state(did, key, freq_hz):
         "first_seen": time.time(), "last_seen": time.time(),
     }
 
-def _demod_channel_batch(c, st, sub):
-    """Offset-rotated IQ batch -> (per-sub-block 48 kHz frequency
-    arrays, per-sub-block energy). Identical in structure to the AIS
-    demod_channel_batch (filter tail, discriminator, decimation phase
-    all carried across batches), with the Orbcomm taps and rate."""
-    from ..sdr.dsp import convolve_valid
+def _demod_channel_batch(c, st):
+    """Offset-rotated IQ batch -> 48 kHz frequency samples (the 96-bit
+    grid's phase source). Identical in output to filtering the whole
+    2.4 MHz batch with the 610-tap channel FIR and keeping every
+    50th sample - but the FIR is evaluated only AT those samples
+    (polyphase: one 610-wide dot product per output, via
+    sliding_window_view), ~20x cheaper than the full-rate FFT
+    convolution. On this machine the full-rate chain cost ~13 ms per
+    channel per 13.7 ms batch, so a single channel already saturated
+    the thread (waterfall fell behind real time); the polyphase form
+    leaves headroom for several simultaneous channels.
+
+    The filter tail and the decimation phase carry across batches
+    exactly like the AIS chain (fir_tail, dec_pos, last_c)."""
     x = np.concatenate([st["fir_tail"], c])
     st["fir_tail"] = x[-(len(_ORB_TAPS) - 1):].copy()
-    f = convolve_valid(x, _ORB_TAPS, "orbcomm")
+    m = len(x) - len(_ORB_TAPS) + 1       # valid FIR output positions
+    if m <= 0:
+        return np.empty(0, dtype=np.float32)
+    start = (-st["dec_pos"]) % ORBCOMM_DEC
+    st["dec_pos"] = (st["dec_pos"] + m) % ORBCOMM_DEC
+    # convolve(x, h, 'valid')[j] == x[j:j+len] @ h[::-1]; the windowed
+    # sinc is symmetric, so the reversal is a no-op and the taps are
+    # used as they are
+    f = (np.lib.stride_tricks.sliding_window_view(x, len(_ORB_TAPS))
+         [start::ORBCOMM_DEC] @ _ORB_TAPS_C)
     prev = st["last_c"]
     if prev is None:
         prev = f[0]
@@ -282,24 +323,7 @@ def _demod_channel_batch(c, st, sub):
     dd[0] = f[0] * np.conj(prev)
     np.multiply(f[1:], np.conj(f[:-1]), out=dd[1:])
     st["last_c"] = f[-1].copy()
-    freq = np.arctan2(dd.imag, dd.real) * (SDR_RATE / (2 * np.pi))
-    keep = (np.arange(len(freq)) + st["dec_pos"]) % ORBCOMM_DEC == 0
-    st["dec_pos"] = (st["dec_pos"] + len(freq)) % ORBCOMM_DEC
-    keep_idx = np.flatnonzero(keep)
-    d = freq[keep]
-    if len(d) == 0:
-        return [], []
-    n = (len(f) // sub) * sub
-    e = (np.sqrt((np.abs(f[:n].reshape(-1, sub)) ** 2).mean(axis=1))
-         if n else np.empty(0))
-    # Unlike the AIS burst chain this stream is CONTINUOUS, so the
-    # decimated samples of a trailing partial sub-block must not be
-    # dropped: every lost sample shifts all later bits and corrupts
-    # every packet straddling a batch boundary.
-    groups = keep_idx // sub
-    cuts = np.searchsorted(groups, np.arange(groups[-1] + 2))
-    freqs = [d[cuts[g]:cuts[g + 1]] for g in range(len(cuts) - 1)]
-    return freqs, e
+    return np.arctan2(dd.imag, dd.real) * (ORBCOMM_FS / (2 * np.pi))
 
 def _bits_append(st, new_bits):
     st["bits"] = np.concatenate([st["bits"], new_bits])
@@ -364,7 +388,7 @@ def _scan_channel(st, now):
         out.append(data)
     return out
 
-def demod_batch(c, st, sub=IQ_BLOCK // 2):
+def demod_batch(c, st):
     """One IQ batch for one channel -> new valid packet bytes.
 
     Trial phase: the symbol grid phase is unknown, so every one of the
@@ -380,10 +404,7 @@ def demod_batch(c, st, sub=IQ_BLOCK // 2):
     slicing every batch from its own sample 0 would scramble the
     stream at the batch boundary).
     """
-    freqs, _ = _demod_channel_batch(c, st, sub)
-    if not freqs:
-        return []
-    f48 = np.concatenate(freqs)
+    f48 = _demod_channel_batch(c, st)
     if len(f48) < 2 * SYM_SAMP:
         return []
     # Residual carrier offset: the two FSK tones sit exactly +/-1200 Hz
@@ -394,7 +415,14 @@ def demod_batch(c, st, sub=IQ_BLOCK // 2):
     # estimate is clamped to +/-600 Hz per batch and EMA-smoothed, so
     # even a single-tone batch cannot drag it outside the +/-1200
     # slicing margin.
-    obs = 0.5 * (float(np.percentile(f48, 90)) + float(np.percentile(f48, 10)))
+    # 10th/90th percentiles by hand (np.percentile costs ~0.4 ms per
+    # channel per batch here) - linear interpolation, same values
+    s = np.sort(f48)
+    i10, i90 = 0.1 * (len(s) - 1), 0.9 * (len(s) - 1)
+    lo10, lo90 = int(i10), int(i90)
+    p10 = s[lo10] + (i10 - lo10) * (s[lo10 + 1] - s[lo10])
+    p90 = s[lo90] + (i90 - lo90) * (s[min(lo90 + 1, len(s) - 1)] - s[lo90])
+    obs = 0.5 * (float(p90) + float(p10))
     if st["dc"] is None:
         st["dc"] = obs
     else:
@@ -408,11 +436,19 @@ def demod_batch(c, st, sub=IQ_BLOCK // 2):
         for ph in range(SYM_SAMP):
             trial = st["trial"][ph]
             start = (ph - n0) % SYM_SAMP
+            len_before = len(trial)
             trial = np.concatenate([trial, x[start::SYM_SAMP] > 0])
             if len(trial) > _TRIALBUF:
                 trial = trial[-_TRIALBUF:]
             st["trial"][ph] = trial
-            anchor = _find_anchor(trial)
+            # Only Fletcher-test header matches that involve new bits:
+            # every position holding a complete packet was already
+            # tested (and failed) last batch, and on noise the full
+            # re-scan ran ~90 Python-level packet builds per phase
+            # per batch. A 96-bit packet incomplete last batch starts
+            # at len_before-95 .. len_before-1; earlier starts are old
+            # news (anchors are always 96-bit windows).
+            anchor = _find_anchor(trial, max(0, len_before - 95))
             if anchor is None:
                 continue
             ix, data, orient = anchor
@@ -742,12 +778,17 @@ def orbcomm_capture_thread(did):
 def _track_candidate(det, did, freq, bin_hz):
     """Match a detected carrier to an existing channel (within 4 kHz -
     a pass's Doppler drifts by ~5 kHz over minutes, never 4 kHz per
-    scan) or open a new one; refreshes the channel's last_seen."""
+    scan) or open a new one; refreshes the channel's last_seen. New
+    channels open only while a demod slot is free (_MAX_DEMOD_CHANNELS
+    - every channel costs CPU per batch, and the detector feeds noise
+    clusters in constantly)."""
     for key, st in det["channels"].items():
         if abs(st["freq_hz"] - freq) < 4000.0:
             st["freq_hz"] += 0.25 * (freq - st["freq_hz"])
             st["last_seen"] = time.time()
             return
+    if len(det["channels"]) >= _MAX_DEMOD_CHANNELS:
+        return
     key = f"{did}:{_quantize(freq) // 1000}"
     st = new_channel_state(did, key, freq)
     det["channels"][key] = st
@@ -764,14 +805,19 @@ def _demod_channels(det, c):
 
 def _prune_channels(det):
     """Drop dead channels: no carrier for ORBCOMM_CHANNEL_TIMEOUT_SECS
-    (pass over / noise cluster), or a carrier that never checksum-locks
-    within _NOLOCK_TIMEOUT_SECS (a persistent local carrier). The live
-    registry entry lingers on the dashboard until it times out there."""
+    (pass over / noise cluster), or no checksum-valid packet for
+    _NOLOCK_TIMEOUT_SECS - a channel that never locked (persistent
+    local carrier) and one whose last packet has gone stale (a one-off
+    false lock would otherwise occupy a demod slot forever, since the
+    carrier keeps being re-detected). The live registry entry lingers
+    on the dashboard until it times out there."""
     now = time.time()
     for key in [k for k, st in det["channels"].items()
                 if now - st["last_seen"] > ORBCOMM_CHANNEL_TIMEOUT_SECS
                 or (st["packets"] == 0
-                    and now - st["first_seen"] > _NOLOCK_TIMEOUT_SECS)]:
+                    and now - st["first_seen"] > _NOLOCK_TIMEOUT_SECS)
+                or (st["packets"] > 0
+                    and now - st["last_packet"] > _NOLOCK_TIMEOUT_SECS)]:
         st = det["channels"].pop(key)
         state.log_console(f"🛰 Orbcomm: channel {key} at "
                           f"{st['freq_hz'] / 1e6:.4f} MHz dropped "
