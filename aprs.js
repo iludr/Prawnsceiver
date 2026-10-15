@@ -9,6 +9,15 @@ function cell(v, cls) {
         + (v === null || v === undefined ? '<span class="na">—</span>' : v) + '</td>';
 }
 
+// The server logs in ITS timezone (the station runs UTC) — every
+// entry also carries unix ts, so the times below are rendered
+// browser-local (like the AIS page; the server-side "time" strings
+// stay in the JSON only as a fallback).
+function fmtTime(ts) {
+    if (!ts) return '';
+    return new Date(ts * 1000).toLocaleTimeString([], { hour12: false });
+}
+
 // Live station registry render — shared by /aprs.json and the WS
 // 'aprs' topic push
 function applyStatus(s) {
@@ -87,10 +96,10 @@ function applyLog(log) {
                 + ' ' + esc(g.pos.sym || '');
         }
         const cnt = g.count > 1
-            ? '<td class="cnt" title="first ' + esc(g.oldest.time) + ' · newest ' + esc(g.newest.time) + '">&times;' + g.count + '</td>'
+            ? '<td class="cnt" title="first ' + fmtTime(g.oldest.ts) + ' · newest ' + fmtTime(g.newest.ts) + '">&times;' + g.count + '</td>'
             : '<td></td>';
         html += '<tr>'
-            + cell(esc(g.newest.time), 't')
+            + cell(fmtTime(g.newest.ts), 't')
             + cnt
             + cell(esc(g.newest.call), 'call')
             + cell(esc(g.newest.dst), 'via')
@@ -133,7 +142,7 @@ function stationIcon(call) {
 }
 function stationPopup(e, count) {
     return '<b>' + esc(e.call) + '</b> · ' + count + ' frame' + (count === 1 ? '' : 's') + '<br>'
-        + 'last: ' + esc(e.time) + ' · ' + esc(e.dst) + (e.via ? ' via ' + esc(e.via) : '') + '<br>'
+        + 'last: ' + fmtTime(e.ts) + ' · ' + esc(e.dst) + (e.via ? ' via ' + esc(e.via) : '') + '<br>'
         + '<a href="https://www.google.com/maps?q=' + e.lat + ',' + e.lon + '" target="_blank" rel="noopener">'
         + e.lat.toFixed(4) + ', ' + e.lon.toFixed(4) + '</a>' + (e.sym ? ' · ' + esc(e.sym) : '') + '<br>'
         + esc(e.text || '');
@@ -251,7 +260,7 @@ function applyRegistry(sts) {
         const recent = s.recent || [];
         let msgs = '';
         for (const e of recent.slice().reverse()) {   // newest first
-            msgs += '<tr><td class="t">' + esc(e.time || '') + '</td>'
+            msgs += '<tr><td class="t">' + fmtTime(e.ts) + '</td>'
                 + '<td class="txt">' + esc(e.text || '') + '</td></tr>';
         }
         html += '<tr>'
@@ -284,7 +293,7 @@ function applyRegistry(sts) {
             .join(' ');
         th += '<tr>'
             + cell(esc(s.call), 'call')
-            + cell(esc(t.time || ''), 't')
+            + cell(fmtTime(t.ts), 't')
             + cell(t.seq === null || t.seq === undefined ? null : esc(t.seq))
             + cell(chans, 'txt')
             + cell(bits ? bits + (t.label ? ' · ' + esc(t.label) : '') : null, 'txt')
