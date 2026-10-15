@@ -868,6 +868,10 @@ def sdr_capture_thread(did):
                 "offset tuning and the calibration correction); the "
                 "tuned signal sits at 0 Hz, the DC spike at "
                 "+offset_tuning_hz."),
+            "preflight": ("analysis.json - the server-side pre-flight "
+                          "analysis (averaged spectrum, detected emitters "
+                          "with modulation and decoded codes): read this "
+                          "first, the raw IQ only for deep dives"),
             "format": {
                 "file": "raw_iq.u8",
                 "encoding": "interleaved unsigned 8-bit I/Q",
@@ -924,7 +928,22 @@ def sdr_capture_thread(did):
         except Exception as e:
             state.log_console(f"description.json write failed (dongle {did}): {e}", "warn")
 
-        def _build_zip(base=base, iq_path=iq_path, png_path=png_path):
+        def _build_zip(base=base, iq_path=iq_path, png_path=png_path,
+                      freq_hz=meta['freq_hz']):
+            # Server-side pre-flight analysis first: the spectrum,
+            # the emitters and pre-decoded codes let an analyst (or
+            # an AI) start from a small JSON instead of crunching
+            # the raw file - same thread, before the zip, so the
+            # capture loop never waits for either
+            apath = base + '.analysis.json'
+            try:
+                from ..analysis.iqscan import analyze_recording
+                analysis = analyze_recording(iq_path, freq_hz, SDR_RATE)
+                with open(apath, 'w', encoding='utf-8') as jf:
+                    json.dump(analysis, jf, indent=1)
+            except Exception as e:
+                apath = None
+                state.log_console(f"Pre-flight analysis skipped (dongle {did}): {e}", "warn")
             try:
                 zpath = base + '.zip'
                 # STORED, not deflated: like the station backup,
@@ -933,6 +952,8 @@ def sdr_capture_thread(did):
                 with zipfile.ZipFile(zpath, 'w', zipfile.ZIP_STORED) as z:
                     z.write(iq_path, arcname='raw_iq.u8')
                     z.write(base + '.json', arcname='description.json')
+                    if apath:
+                        z.write(apath, arcname='analysis.json')
                     if png_path:
                         z.write(png_path, arcname='waterfall.png')
                 entry['manual_zip'] = '/manual/' + os.path.basename(zpath)

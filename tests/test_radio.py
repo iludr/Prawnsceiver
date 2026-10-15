@@ -210,7 +210,10 @@ mzip6b = entry['manual_zip']
 with zf.ZipFile(os.path.join(radio.RECORD_DIR, 'manual', os.path.basename(mzip6b))) as z:
     names = z.namelist()
     assert 'raw_iq.u8' in names and 'description.json' in names, names
+    assert 'analysis.json' in names, names        # pre-flight analysis
     desc = json.loads(z.read('description.json'))
+    adesc = json.loads(z.read('analysis.json'))
+    assert adesc['sample_rate_hz'] == SDR_RATE and adesc['emitters'] == [], adesc
     iqbytes = z.getinfo('raw_iq.u8').file_size
 assert iqbytes > 0 and desc['format']['complex_samples'] == iqbytes // 2, (iqbytes, desc['format'])
 assert desc['radio']['center_freq_hz'] == 137620000, desc['radio']
@@ -247,6 +250,42 @@ wait_for(lambda: DID not in state.manual_recording
          secs=10, what='cap auto-finalizes into a fresh zip')
 radio.MANUAL_REC_MAX_SECS = _prev_cap
 print("6d manual raw recording cap: auto-finalized at the limit OK")
+
+# 6e. pre-flight analysis (analysis/iqscan.py): a synthetic OOK remote
+# (fixed 31-bit code, gap-length bits) plus a steady carrier in noise -
+# the analyzer finds both, classifies the OOK and pre-decodes the code
+from noaa_receiver.analysis.iqscan import analyze_recording
+rng = np.random.default_rng(7)
+n_synth = SDR_RATE                                  # 1 s of IQ
+tt = np.arange(n_synth) / SDR_RATE
+synth = (rng.normal(0, 6, n_synth)
+         + 1j * rng.normal(0, 6, n_synth)).astype(np.complex64)
+def synth_tone(t0, dur, freq, amp=90.0):
+    i0 = int(t0 * SDR_RATE); i1 = int((t0 + dur) * SDR_RATE)
+    synth[i0:i1] += amp * np.exp(2j * np.pi * freq * tt[i0:i1])
+CODE = "0011100110000000010101001111011"             # 31-bit fixed code
+P, G0, G1, SYNC = 0.5e-3, 1.0e-3, 1.6e-3, 3.2e-3
+for rep in range(3):                               # 3 repetitions
+    tcur = 0.30 + rep * (31 * (P + G1) + SYNC)
+    for bit in CODE:
+        synth_tone(tcur, P, -66_200.0)
+        tcur += P + (G1 if bit == '1' else G0)
+synth_tone(0.0, 1.0, 150_000.0, amp=90.0)           # steady carrier
+ap_synth = os.path.join(radio.RECORD_DIR, 'synth.iq.u8')
+u8 = np.empty(n_synth * 2, dtype=np.uint8)
+u8[0::2] = (np.clip(synth.real, -127, 127) + 127.5).astype(np.uint8)
+u8[1::2] = (np.clip(synth.imag, -127, 127) + 127.5).astype(np.uint8)
+u8.tofile(ap_synth)
+res = analyze_recording(ap_synth, 433_933_000, SDR_RATE)
+em = res['emitters']
+ook = [x for x in em if x['modulation'] and x['modulation']['type'] == 'ook']
+assert ook and abs(ook[0]['offset_khz'] + 66.2) < 8, em
+codes = ook[0]['modulation'].get('codes') or []
+assert any(c['bits'] == CODE and c['count'] >= 2 for c in codes), codes
+cont = [x for x in em if x['modulation'] and x['modulation']['type'] == 'continuous_carrier']
+assert cont and abs(cont[0]['offset_khz'] - 150.0) < 10, em
+os.remove(ap_synth)
+print("6e pre-flight analysis: OOK remote code + steady carrier detected OK")
 
 # 7. WAV open failure must not kill the receiver; retried later
 # (wave.open is monkeypatched to fail while the flag is set: a chmod'd
