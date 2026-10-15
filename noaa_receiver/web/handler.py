@@ -23,7 +23,7 @@ from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
 from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_ais,
                         set_dongle_aprs, set_dongle_aprs_iss,
-                        set_dongle_orbcomm,
+                        set_dongle_orbcomm, set_dongle_pocsag,
                         set_dongle_paused, usb_dongles)
 
 def _dongle_list():
@@ -1312,7 +1312,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             dev = (query.get('d') or [''])[0]
             on = (query.get('on') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
-            ok = radio.set_dongle_pocsag(dev, on)
+            ok = set_dongle_pocsag(dev, on)
             self.send_response(200 if ok else 404)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
