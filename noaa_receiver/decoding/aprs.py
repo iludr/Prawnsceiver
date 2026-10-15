@@ -519,6 +519,14 @@ def aprs_capture_thread(did):
                 freq48, energy = demod_channel_batch(cc, st)
                 if len(freq48) == 0:
                     continue
+                # Live audio: the discriminator output is the FM demod
+                # audio (Hz of deviation at 48 kHz). Scaled to int16 with
+                # the same ±fs/2 == ±32767 convention as fm_demodulate,
+                # it feeds the 🔊 Listen button — APRS stays listenable
+                # (the dongle card keeps the button, unlike AIS/Orbcomm).
+                audio = np.clip(freq48 * (32767.0 / (APRS_FS / 2.0)),
+                                -32767, 32767).astype(np.int16).tobytes()
+                state.push_live_audio(entry, audio)
                 for burst in collect_bursts(freq48, energy, st):
                     payloads = decode_burst(burst)
                     if payloads:
