@@ -25,6 +25,9 @@ Run: python3 tests/test_aprs.py (needs numpy). Asserts:
   PARM/UNIT/EQNS definition messages (value = a*raw^2 + b*raw + c),
   digital bits named, plain messages ignored, persistence through
   the registry round-trip
+- telemetry backfill: the rolling aprs_messages log replays
+  through the telemetry parsers at registry load - a wiped
+  registry table rebuilds the decoded channels from frames
 
 Memory-light by design: the test signal is ~3 s of 2.4 MHz IQ (~30 MB
 of complex64) and everything else is bounded - it runs comfortably
@@ -214,5 +217,21 @@ with state.aprs_lock:
     tlm2 = dict(state.aprs_stations_all["DB0BMW"]["telemetry"])
 assert tlm2["channels"][0]["value"] == 14.1 and tlm2["label"] == "Telemetry DB0BMW"
 print("8. telemetry decode (T#, PARM/UNIT/EQNS/BITS, persistence): ok")
+
+# --- 9. telemetry backfill from the persisted frame log ---
+# wipe the registry table but KEEP aprs_messages: load_stations
+# must rebuild the decoded telemetry from the logged frames
+with aprs.db.write() as cur:
+    cur.execute("DELETE FROM aprs_stations")
+with state.aprs_lock:
+    state.aprs_stations_all.clear()
+aprs.load_stations()
+with state.aprs_lock:
+    tlm3 = dict(state.aprs_stations_all["DB0BMW"]["telemetry"])
+c0 = tlm3["channels"][0]
+assert c0 == {"name": "Batt.", "raw": 188, "value": 14.1, "unit": "Volt"}, c0
+assert tlm3["seq"] == 99 and tlm3["label"] == "Telemetry DB0BMW"
+assert [b["name"] for b in tlm3["bits"]][:2] == ["O1", "O2"]
+print("9. telemetry backfill from the aprs_messages log: ok")
 
 print("ALL APRS TESTS PASSED")

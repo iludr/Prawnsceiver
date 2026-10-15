@@ -536,7 +536,10 @@ _stations_save_at = 0.0
 
 def load_stations():
     """Read the registry at startup: restores every station ever
-    received (with its frame history) from the aprs_stations table."""
+    received (with its frame history) from the aprs_stations
+    table. Telemetry frames in the rolling aprs_messages log are
+    replayed afterwards, so decoded channels survive a restart
+    even when the registry has no telemetry saved yet."""
     try:
         rows = db.query("SELECT data FROM aprs_stations")
         with state.aprs_lock:
@@ -552,6 +555,47 @@ def load_stations():
                           "warn")
         with state.aprs_lock:
             state.aprs_stations_all = {}
+    _replay_telemetry_log()
+
+def _replay_telemetry_log():
+    """Startup backfill: replay the rolling aprs_messages log through
+    the telemetry parsers, oldest frame first (newest T# data and
+    the last definitions win), merging into the registry entries.
+    Frames decoded before a restart or before a registry save would
+    otherwise be lost from the telemetry view until the station
+    beaconed again - DB0BMW sends its PARM/UNIT/EQNS/BITS cycle
+    rarely. Saved once at the end so the backfill survives the
+    next restart even if the channel stays quiet."""
+    try:
+        rows = db.query("SELECT entry FROM aprs_messages ORDER BY id")
+    except Exception as e:
+        state.log_console(f"APRS telemetry replay failed: {e}", "warn")
+        return
+    applied = 0
+    for r in rows:
+        try:
+            e = json.loads(r["entry"])
+        except ValueError:
+            continue
+        info = e.get("text")
+        if not info:
+            continue
+        tlm = parse_telemetry(info)
+        tdef = None if tlm is not None else parse_telemetry_definition(info)
+        if tlm is None and tdef is None:
+            continue
+        call = e["call"] if tlm is not None else tdef[0]
+        with state.aprs_lock:
+            reg = state.aprs_stations_all.setdefault(
+                call, _new_station_reg(call, e.get("ts") or time.time()))
+            if tlm is not None:
+                _apply_telemetry(reg, tlm, e)
+            else:
+                _apply_telemetry_definition(reg, tdef)
+        applied += 1
+    if applied:
+        state.log_console(f"\U0001f4e1 APRS telemetry: {applied} frames replayed from the persistent log")
+        save_stations()
 
 def save_stations():
     """Write the whole registry to the station database (aprs_stations
