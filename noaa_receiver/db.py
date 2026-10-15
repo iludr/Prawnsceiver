@@ -85,6 +85,11 @@ CREATE TABLE IF NOT EXISTS ships (
 CREATE TABLE IF NOT EXISTS ais_messages (
     id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
 CREATE INDEX IF NOT EXISTS ais_messages_ts ON ais_messages(ts);
+
+-- Rolling Orbcomm decoded-packet log; trimmed by ts
+CREATE TABLE IF NOT EXISTS orbcomm_messages (
+    id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
+CREATE INDEX IF NOT EXISTS orbcomm_messages_ts ON orbcomm_messages(ts);
 """
 
 
@@ -102,6 +107,14 @@ def connect():
             _conn.execute("PRAGMA foreign_keys=ON")
             _conn.executescript(SCHEMA)
             _conn.commit()
+            # Schema migration (CREATE IF NOT EXISTS cannot extend an
+            # existing table): the dongle role flags added after the
+            # first deployment arrive as columns here
+            cols = {r[1] for r in _conn.execute("PRAGMA table_info(dongles)")}
+            if "orbcomm" not in cols:
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN orbcomm INTEGER DEFAULT 0")
+                _conn.commit()
         return _conn
 
 
@@ -209,9 +222,10 @@ def import_legacy(record_dir):
                 with open(DONGLES_FILE, encoding="utf-8") as f:
                     for e in json.load(f):
                         cur.execute(
-                            "INSERT OR IGNORE INTO dongles VALUES (?,?,?,?)",
+                            "INSERT OR IGNORE INTO dongles VALUES (?,?,?,?,?)",
                             (e["host"], int(e["port"]),
-                             1 if e.get("ais") else 0, time.time()))
+                             1 if e.get("ais") else 0,
+                             1 if e.get("orbcomm") else 0, time.time()))
                 _mark_imported(cur, "dongles")
             except (OSError, ValueError, KeyError, TypeError):
                 pass

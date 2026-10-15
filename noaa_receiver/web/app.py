@@ -28,6 +28,10 @@ def main():
     db.import_legacy(None)
     from ..decoding import ais as _ais
     _ais.load_ships()
+    # Startup summary of the persistent Orbcomm packet log (count only —
+    # the log itself stays in the database, queried via /orbcommlog.json)
+    from ..decoding import orbcomm as _orbcomm
+    _orbcomm.load_log_summary()
 
     # Start scheduler thread (TLE refresh + pass prediction + frequency switching)
     threading.Thread(target=scheduler_thread, daemon=True).start()

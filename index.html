@@ -94,7 +94,12 @@
         .ais-row .ais-val { font-size: 0.9em; color: #a8b8d8; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .ais-row .ais-pos { font-size: 0.85em; text-align: right; }
         .ais-row .ais-pos a { color: #4da6ff; text-decoration: none; }
-        .ais-stats { color: #888; font-size: 0.85em; margin: 6px 0; }        .status-item { margin-bottom: 8px; padding: 6px 8px; background: #0f3460; border-radius: 4px; }
+        .ais-stats { color: #888; font-size: 0.85em; margin: 6px 0; }        .orbcomm-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 64px 84px 84px 74px; gap: 4px 10px; align-items: center; padding: 6px 10px; margin-bottom: 4px; background: #0f3460; border-radius: 4px; border-left: 3px solid #b39ddb; }
+        .orbcomm-row .ais-name { font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .orbcomm-row .ais-sub { font-size: 0.8em; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .orbcomm-row .ais-val { font-size: 0.9em; color: #a8b8d8; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .orbcomm-row .ais-pos { font-size: 0.85em; text-align: right; }
+        .orbcomm-row .ais-pos a { color: #b39ddb; text-decoration: none; }        .status-item { margin-bottom: 8px; padding: 6px 8px; background: #0f3460; border-radius: 4px; }
         .status-label { color: #888; font-size:0.85em; }
         .status-value { color: #e0e0e0; font-size:1em; margin-top: 2px; }
         .indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
@@ -213,6 +218,15 @@
                 <details id="ais-nmea-wrap" style="margin-top:6px;">
                     <summary style="color:#888;cursor:pointer;font-size:0.85em;">raw NMEA feed</summary>
                     <pre id="ais-nmea" style="font-size:0.8em;color:#a8b8d8;margin:4px 0 0;white-space:pre-wrap;"></pre>
+                </details>
+            </div>
+            <div class="section-title" id="orbcomm-title" style="display:none;margin-top:14px;">🛰 Orbcomm Satellite Downlink <a href="/orbcomm" style="font-size:0.8em;color:#b39ddb;text-decoration:none;">→ full log</a></div>
+            <div id="orbcomm-section" style="display:none;">
+                <div class="ais-stats" id="orbcomm-stats"></div>
+                <div id="orbcomm-channels"></div>
+                <details id="orbcomm-packets-wrap" style="margin-top:6px;">
+                    <summary style="color:#888;cursor:pointer;font-size:0.85em;">recent decoded packets</summary>
+                    <pre id="orbcomm-packets" style="font-size:0.8em;color:#a8b8d8;margin:4px 0 0;white-space:pre-wrap;"></pre>
                 </details>
             </div>
             <div class="section-title" style="margin-top:14px;">📅 Upcoming Passes (24h)</div>

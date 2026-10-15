@@ -130,3 +130,16 @@ ais_nmea = deque(maxlen=60)
 ais_channels = {}    # 'A'/'B' -> per-channel stats (frames, bad, floor)
 ais_enabled = False
 ais_dongle = None
+
+# Orbcomm satellite traffic (see noaa_receiver/decoding/orbcomm.py): a dongle
+# switched to the Orbcomm mode tunes to config.ORBCOMM_CENTER_HZ and
+# decodes every satellite it finds in the 137.0-138.0 MHz band.
+# orbcomm_channels maps a per-dongle channel key -> stats dict (frequency,
+# Doppler, packet counters, satellite ID and position from its Sync/
+# Ephemeris packets); orbcomm_packets keeps the most recent decoded
+# packets for the dashboard's live feed.
+orbcomm_lock = threading.Lock()
+orbcomm_enabled = False
+orbcomm_dongle = None
+orbcomm_channels = {}
+orbcomm_packets = deque(maxlen=60)

@@ -970,7 +970,7 @@
                     wfWsBackoff = 5000;   // reset after a good run
                     try {
                         ws.send('rate=60');
-                        ws.send('sub=dongles,status,passes,track,ais,power,recordings');
+                        ws.send('sub=dongles,status,passes,track,ais,orbcomm,power,recordings');
                     } catch (e) {}
                 };
                 ws.onmessage = ev => {
@@ -1237,10 +1237,12 @@
                     // Frequency axis center for hover/click: the dongle's
                     // manual override if set, else the shared tune frequency
                     // The AIS dongle is parked on 162.000 MHz (both ship
-                    // channels at +/-25 kHz) and never follows the shared
-                    // satellite tune
-                    b.centerMHz = d.ais ? 162.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
-                        ? d.manual_frequency_mhz : lastSharedMHz);
+                    // channels at +/-25 kHz), the Orbcomm dongle on
+                    // 137.5 MHz (one 2.4 MHz capture spans the whole
+                    // 137.0-138.0 MHz downlink band) — neither follows
+                    // the shared satellite tune
+                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
+                        ? d.manual_frequency_mhz : lastSharedMHz));
                     updateDongleCard(d);
                 }
                 // the overlay follows per-dongle geometry (recorded
@@ -1286,6 +1288,7 @@
             const c = dongleCards[serial];
             if (!c || !c.lastD) return null;
             if (c.lastD.ais) return 162.0;   // AIS dongle never follows the shared tune
+            if (c.lastD.orbcomm) return 137.5;   // Orbcomm dongle is parked on the band center
             if (c.lastD.manual_frequency_mhz !== null && c.lastD.manual_frequency_mhz !== undefined)
                 return c.lastD.manual_frequency_mhz;
             return lastSharedMHz;
@@ -1299,7 +1302,10 @@
         // flips its label, and a live-audio stream of this dongle is
         // dropped (the AIS thread never feeds the audio ring).
         function applyDongleAisMode(c, ais) {
-            const sat = ais ? 'none' : '';
+            // role-aware: while the OTHER dedicated role is on, the
+            // satellite controls stay hidden (the roles are mutually
+            // exclusive server-side, but both arrive via dongles.json)
+            const sat = (ais || (c.lastD && c.lastD.orbcomm)) ? 'none' : '';
             c.tuneRow.style.display = sat;
             c.nudgeRow.style.display = sat;
             c.bwRow.style.display = sat;
@@ -1318,6 +1324,31 @@
             c.aisBtn.style.borderColor = ais ? '#53d769' : '#4da6ff';
             c.aisLast = ais;
             if (ais && liveAudioOn === c.lastD.id) toggleLiveAudio(c.lastD.id);
+        }
+
+        // Orbcomm mode reshapes the card the same way as AIS (dedicated
+        // role: the capture thread feeds the waterfall but no audio or
+        // satellite tuning) — purple button variant, 137.5 MHz band tune
+        function applyDongleOrbcommMode(c, orbcomm) {
+            const sat = (orbcomm || (c.lastD && c.lastD.ais)) ? 'none' : '';
+            c.tuneRow.style.display = sat;
+            c.nudgeRow.style.display = sat;
+            c.bwRow.style.display = sat;
+            c.scanRow.style.display = sat;
+            c.scanRow2.style.display = sat;
+            c.secTune.style.display = sat;
+            c.modeRow.style.display = sat;
+            c.secBw.style.display = sat;
+            c.secScan.style.display = sat;
+            c.recBtn.style.display = sat;
+            c.listenBtn.style.display = sat;
+            const txt = orbcomm ? '🛰 Back to satellites' : '🛰 Listen for Orbcomm satellites';
+            if (c.orbBtn._last !== txt) { c.orbBtn._last = txt; c.orbBtn.textContent = txt; }
+            c.orbBtn.style.background = orbcomm ? '#1a2a3e' : '#0f3460';
+            c.orbBtn.style.color = orbcomm ? '#b39ddb' : '#4da6ff';
+            c.orbBtn.style.borderColor = orbcomm ? '#b39ddb' : '#4da6ff';
+            c.orbcommLast = orbcomm;
+            if (orbcomm && liveAudioOn === c.lastD.id) toggleLiveAudio(c.lastD.id);
         }
 
         function ensureDongleCard(d) {
@@ -1692,6 +1723,27 @@
                     })
                     .catch(() => toast('AIS switch failed: receiver unreachable', true));
             };
+            // Orbcomm toggle: dedicates this dongle to the satellite
+            // Orbcomm downlink band (137.0-138.0 MHz, one 2.4 MHz
+            // capture covers it) and decodes every carrier it finds —
+            // the capture thread restarts in the new role server-side
+            const orbBtn = document.createElement('button');
+            orbBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
+            orbBtn.title = 'Tune this dongle to the Orbcomm satellite downlink band (137.0-138.0 MHz) and decode the satellite IoT traffic it finds — satellite reception on it pauses until you switch back';
+            orbBtn.onclick = () => {
+                const on = !(c.lastD && c.lastD.orbcomm);
+                fetch('/orbcomm_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(on ? '🛰 Switching this dongle to Orbcomm — satellite IoT downlink on 137.0-138.0 MHz'
+                                     : '🛰 Dongle back to satellite tracking');
+                        } else {
+                            toast('Orbcomm switch failed: ' + (data.error || 'unknown error'), true);
+                        }
+                    })
+                    .catch(() => toast('Orbcomm switch failed: receiver unreachable', true));
+            };
             // Pause/Play: temporarily stops this dongle's capture thread —
             // two dongles recording at once can overload the dongle host's
             // shared USB bus. The dongle stays registered; Play restarts it.
@@ -1712,16 +1764,17 @@
                     })
                     .catch(() => toast('Pause failed: receiver unreachable', true));
             };
-            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(pauseBtn); card.appendChild(removeBtn);
+            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(orbBtn); card.appendChild(pauseBtn); card.appendChild(removeBtn);
             col.appendChild(card);
             c = dongleCards[d.id] = {
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
-                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
+                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, orbBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secBw, secScan, modeRow, modeSel, modeHint,
             };
             applyDongleAisMode(c, !!d.ais);
+            applyDongleOrbcommMode(c, !!d.orbcomm);
             return c;
         }
 
@@ -1753,8 +1806,9 @@
 
         function updateDongleCard(d) {
             const c = ensureDongleCard(d);
-            // mode flips arrive through dongles.json (ais flag)
+            // mode flips arrive through dongles.json (ais/orbcomm flags)
             if (c.aisLast !== !!d.ais) applyDongleAisMode(c, !!d.ais);
+            if (c.orbcommLast !== !!d.orbcomm) applyDongleOrbcommMode(c, !!d.orbcomm);
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
             // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise
@@ -1804,6 +1858,7 @@
             c.idLed.className = 'indicator ' + (d.connected ? 'green' : 'red');
             let fTxt = '—', fCol = '#888';
             if (d.ais) { fTxt = '🚢 AIS 161.975 / 162.025 MHz'; fCol = '#4da6ff'; }
+            else if (d.orbcomm) { fTxt = '🛰 Orbcomm 137.0-138.0 MHz (center 137.5)'; fCol = '#b39ddb'; }
             else if (eff !== null) {
                 fTxt = eff.toFixed(4) + ' MHz' + (d.manual_frequency_mhz ? ' (manual)' : '');
                 fCol = d.manual_frequency_mhz ? '#f39c12' : '#53d769';
@@ -1813,9 +1868,11 @@
             // What this frequency is normally used for (band allocation)
             const bandHtml = d.ais
                 ? '🚢 AIS — Danube ship traffic · 161.975 / 162.025 MHz · <a href="/ais" style="color:#4da6ff;text-decoration:none;">→ full log</a> · <a href="/ais.json" target="_blank" rel="noopener" style="color:#4da6ff;text-decoration:none;">ais.json</a>'
-                : (eff !== null
+                : (d.orbcomm
+                    ? '🛰 Orbcomm — satellite IoT downlink · 137.0-138.0 MHz · <a href="/orbcomm" style="color:#b39ddb;text-decoration:none;">→ full log</a> · <a href="/orbcomm.json" target="_blank" rel="noopener" style="color:#b39ddb;text-decoration:none;">orbcomm.json</a>'
+                    : (eff !== null
                     ? '📶 ' + bandLabel(bandFor(eff))
-                    : '📶 <span style="color:#666;">—</span>');
+                    : '📶 <span style="color:#666;">—</span>'));
             if (c.bandTxt._last !== bandHtml) {
                 c.bandTxt._last = bandHtml;
                 c.bandTxt.innerHTML = bandHtml;
@@ -1834,7 +1891,7 @@
             // Scan controls: button doubles as Stop while a scan runs, the
             // status line shows live progress / the result; empty from/to
             // fields prefill with the current tune (\u00b15 MHz)
-            if (!d.ais) {
+            if (!d.ais && !d.orbcomm) {
                 const sc = d.scan;
                 const active = !!(sc && sc.active);
                 const btnTxt = active ? '\u23F9 Stop' : '\uD83D\uDD0D Scan';
@@ -1988,7 +2045,7 @@
                     const up = dl.filter(d => d.connected).length;
                     dsEl.textContent = dl.length
                         ? (up + '/' + dl.length + ' connected — ' + dl.map(d =>
-                            d.label + (d.primary ? ' ★' : '') + (d.ais ? ' (AIS)' : '')
+                            d.label + (d.primary ? ' ★' : '') + (d.ais ? ' (AIS)' : (d.orbcomm ? ' (Orbcomm)' : ''))
                             + ': ' + (d.connected ? 'live' : 'offline')).join(' · '))
                         : 'no dongles — add one below';
                 }
@@ -2830,6 +2887,63 @@
             } catch (e) { console.error('Error fetching AIS:', e); }
         }
 
+        // Dashboard Orbcomm section — shared by the /orbcomm.json fallback
+        // poll and the WS 'orbcomm' topic push (the full log page renders
+        // itself). Channels are the satellite carriers the receiver is
+        // currently demodulating (freq + packet counters, position once a
+        // Sync/Ephemeris pair identified the satellite)
+        function applyOrbcomm(data) {
+            try {
+                const title = document.getElementById('orbcomm-title');
+                const section = document.getElementById('orbcomm-section');
+                if (!data.enabled) { title.style.display = 'none'; section.style.display = 'none'; return; }
+                title.style.display = '';
+                section.style.display = '';
+                const chans = data.channels || [];
+                const totPk = chans.reduce((s, ch) => s + (ch.packets || 0), 0);
+                document.getElementById('orbcomm-stats').textContent =
+                    chans.length + ' satellite channel' + (chans.length === 1 ? '' : 's')
+                    + ' · ' + totPk + ' packets · dongle ' + data.dongle
+                    + ' · 137.0-138.0 MHz';
+                const now = Date.now() / 1000;
+                let html = '';
+                chans.forEach(ch => {
+                    const name = ch.sat_id ? ('🛰 ' + ch.sat_id.toUpperCase()) : ('carrier ' + ch.freq_khz.toFixed(1) + ' kHz');
+                    const sub = ch.freq_khz.toFixed(1) + ' kHz · ch ' + ch.key;
+                    let pos = '<span style="color:#888">—</span>';
+                    if (ch.lat != null) {
+                        const maps = 'https://www.google.com/maps?q=' + ch.lat + ',' + ch.lon;
+                        pos = '<a href="' + maps + '" target="_blank" rel="noopener">'
+                            + ch.lat.toFixed(3) + ', ' + ch.lon.toFixed(3) + '</a>';
+                    } else if (ch.gps_week) {
+                        pos = '<span style="color:#888">GPS wk ' + ch.gps_week + '</span>';
+                    }
+                    const age = Math.max(0, Math.round(now - ch.last_seen));
+                    html += '<div class="orbcomm-row">' +
+                        '<div><div class="ais-name">' + escHtml(name) + '</div><div class="ais-sub">' + escHtml(sub) + '</div></div>' +
+                        '<div class="ais-pos">' + pos + '</div>' +
+                        '<div class="ais-val">' + ch.packets + ' pkt</div>' +
+                        '<div class="ais-val">' + Math.round(now - ch.first_seen) + 's</div>' +
+                        '<div class="ais-val" style="color:' + (ch.bad ? '#f39c12' : '#888') + '">' + ch.bad + ' bad</div>' +
+                        '<div class="ais-val">' + age + 's ago</div>' +
+                        '</div>';
+                });
+                document.getElementById('orbcomm-channels').innerHTML = html ||
+                    '<div style="color:#666;padding:10px;">No satellite carriers in the band right now.</div>';
+                const pk = (data.packets || []).slice(-25).map(e =>
+                    e.time + '  ' + e.type +
+                    (e.sat_id ? '  sat ' + e.sat_id.toUpperCase() : '') +
+                    '  ' + e.freq_khz + ' kHz  ' + e.hex);
+                document.getElementById('orbcomm-packets').textContent = pk.join('\n');
+            } catch (e) { console.error('Error applying Orbcomm:', e); }
+        }
+
+        async function fetchOrbcomm() {
+            try {
+                applyOrbcomm(await (await fetch('/orbcomm.json')).json());
+            } catch (e) { console.error('Error fetching Orbcomm:', e); }
+        }
+
         // Init
         connectWaterfallWS();
         // WebSocket JSON topics: while the socket is live these replace
@@ -2841,6 +2955,7 @@
             passes: applyPasses,
             track: applyTrack,
             ais: applyAis,
+            orbcomm: applyOrbcomm,
             power: applyPower,
             recordings: applyRecordings,
         };
@@ -2851,11 +2966,12 @@
         setInterval(() => { if (!wfWsLive()) fetchTrack(); }, 2000);
         setInterval(() => { if (!wfWsLive()) fetchCrabCount(); }, 10000);
         setInterval(() => { if (!wfWsLive()) fetchAIS(); }, 10000);
+        setInterval(() => { if (!wfWsLive()) fetchOrbcomm(); }, 10000);
         setInterval(() => { if (!wfWsLive()) fetchPower(); }, 15000); fetchPower();
         setInterval(updateUptime, 1000);
         setInterval(liveImgTick, 250);
         document.getElementById('tune-freq').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); tuneManual(); } });
-        fetchWaterfall(); fetchStatus(); fetchPasses(); fetchTrack(); fetchCrabCount(); fetchAIS(); updateUptime(); initPanels(); buildBandJump();
+        fetchWaterfall(); fetchStatus(); fetchPasses(); fetchTrack(); fetchCrabCount(); fetchAIS(); fetchOrbcomm(); updateUptime(); initPanels(); buildBandJump();
 
         // ---------- static wiring (the markup carries no inline JS) ----------
         (function wireStaticControls() {

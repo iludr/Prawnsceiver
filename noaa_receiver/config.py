@@ -116,3 +116,18 @@ AIS_LOG_KEEP_HOURS = 24
 AIS_SHIPS_FILE = os.path.join(LOGDIR, "ais_ships_persist.json")
 AIS_RECENT_MSGS = 10
 AIS_SHIPS_SAVE_SECS = 60
+
+# Orbcomm (satellite IoT downlink; see noaa_receiver/decoding/orbcomm.py): the
+# satellites transmit a continuous 4800 bps SDPSK stream somewhere in
+# 137.0-138.0 MHz (2.5 kHz raster + up to +/-2.5 kHz Doppler) while
+# above the horizon. One 2.4 MHz capture centered here covers the whole
+# band, and the receiver finds each active satellite's channel in the
+# spectrum, so no fixed channel list is needed.
+ORBCOMM_CENTER_HZ = 137500000
+ORBCOMM_BAND_HZ = (137000000, 138000000)
+ORBCOMM_SYMRATE = 4800
+# Channels whose carrier disappears for this long are dropped (a pass
+# has ended, or the cluster was noise)
+ORBCOMM_CHANNEL_TIMEOUT_SECS = 10
+# Rolling decoded-packet log (orbcomm_messages table), trimmed by ts
+ORBCOMM_LOG_KEEP_HOURS = 24

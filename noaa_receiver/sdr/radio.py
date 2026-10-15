@@ -316,9 +316,10 @@ def _persist_dongles():
                     host, port = 'usb', int(e['usb_idx'])
                 else:
                     host, port = e['host'], int(e['port'])
-                cur.execute("INSERT INTO dongles VALUES (?,?,?,?)",
+                cur.execute("INSERT INTO dongles VALUES (?,?,?,?,?)",
                             (host, port,
-                             1 if e.get('ais') else 0, time.time()))
+                             1 if e.get('ais') else 0,
+                             1 if e.get('orbcomm') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -336,7 +337,7 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
     return {
         'id': did, 'host': host, 'port': int(port),
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
-        'ais': did == AIS_DONGLE, 'usb_idx': usb_idx, 'proc': None,
+        'ais': did == AIS_DONGLE, 'orbcomm': False, 'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
         # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
         # bin, appended with the display row; wf_db_seq counts them
@@ -466,6 +467,11 @@ def set_dongle_ais(did, on):
     with state.status_lock:
         entry['ais'] = on
         if on:
+            # one dongle, one dedicated role: switching to AIS ends an
+            # Orbcomm session on the same dongle (and vice versa in
+            # set_dongle_orbcomm)
+            entry['orbcomm'] = False
+        if on:
             # An AIS capture thread neither records nor demodulates FM —
             # a manual recording left over from satellite mode would sit
             # as a dangling flag and resume the moment the dongle is
@@ -479,16 +485,44 @@ def set_dongle_ais(did, on):
     _stop_capture(entry)
     return True
 
+def set_dongle_orbcomm(did, on):
+    """Switch one dongle between satellite tracking and Orbcomm
+    reception (dashboard button, mirroring set_dongle_ais): on=1 parks
+    it on 137.5 MHz — one 2.4 MHz capture covers the whole Orbcomm
+    downlink band — and every satellite carrier it finds there is
+    demodulated (see noaa_receiver/orbcomm.py). The capture thread
+    restarts in the new role within ~2 s; the dongle stays registered.
+    Unknown id: False; a no-op request still succeeds.
+    """
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return False
+    on = bool(on)
+    if bool(entry.get('orbcomm')) == on:
+        return True
+    with state.status_lock:
+        entry['orbcomm'] = on
+        if on:
+            entry['ais'] = False     # one dedicated role per dongle
+            state.manual_recording.pop(did, None)
+    if on:
+        state.log_console(f"🛰 Dongle {did} switched to Orbcomm (137.0-138.0 MHz) — satellite reception on it paused")
+    else:
+        state.log_console(f"🛰 Dongle {did} switched back to satellite tracking")
+    _persist_dongles()
+    _stop_capture(entry)
+    return True
+
 def load_dongles():
     """Register the startup dongle set: the persisted dongles table when
     it has rows, else calibration.DEFAULT_DONGLES (persisted right away,
     so later dashboard additions update the database)."""
-    entries = [(r['host'], r['port'], bool(r['ais']))
-               for r in db.query("SELECT host, port, ais FROM dongles"
+    entries = [(r['host'], r['port'], bool(r['ais']), bool(r['orbcomm']))
+               for r in db.query("SELECT host, port, ais, orbcomm FROM dongles"
                                  " ORDER BY port, host")]
     if not entries:
-        entries = [(h, p, False) for h, p in DEFAULT_DONGLES]
-    for host, port, was_ais in entries:
+        entries = [(h, p, False, False) for h, p in DEFAULT_DONGLES]
+    for host, port, was_ais, was_orbcomm in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -501,6 +535,12 @@ def load_dongles():
             with state.status_lock:
                 state.sdrs[did]['ais'] = True
             state.log_console(f"Dongle {did} restored to AIS (ship traffic) - persisted role")
+        elif was_orbcomm:
+            # same for the Orbcomm role: the receiver comes back up
+            # listening to the satellite downlink band
+            with state.status_lock:
+                state.sdrs[did]['orbcomm'] = True
+            state.log_console(f"Dongle {did} restored to Orbcomm (satellite IoT downlink) - persisted role")
     _persist_dongles()
 
 
@@ -557,6 +597,10 @@ def sdr_thread():
                     from ..decoding.ais import ais_capture_thread
                     t = threading.Thread(target=ais_capture_thread, args=(did,),
                                          daemon=True, name=f'ais-{did}')
+                elif entry.get('orbcomm'):
+                    from ..decoding.orbcomm import orbcomm_capture_thread
+                    t = threading.Thread(target=orbcomm_capture_thread, args=(did,),
+                                         daemon=True, name=f'orbcomm-{did}')
                 else:
                     t = threading.Thread(target=sdr_capture_thread, args=(did,),
                                          daemon=True, name=f'sdr-{did}')
@@ -657,9 +701,10 @@ def sdr_capture_thread(did):
         if entry.get('closed'):
             close_wav()
             return
-        if entry.get('ais'):
-            # AIS was switched on from the dashboard after this thread
-            # started: hand the dongle over to the supervisor's AIS thread
+        if entry.get('ais') or entry.get('orbcomm'):
+            # AIS or Orbcomm was switched on from the dashboard after this
+            # thread started: hand the dongle over to the supervisor's
+            # dedicated capture thread for the new role
             close_wav()
             return
         if entry.get('paused'):
@@ -723,7 +768,7 @@ def sdr_capture_thread(did):
                 # in its reconnect backoff (the socket close missed it)
                 # — without this check the thread would reconnect as
                 # a ghost and hold the dongle forever
-                if entry.get('closed') or entry.get('ais'):
+                if entry.get('closed') or entry.get('ais') or entry.get('orbcomm'):
                     break
                 raw = reader.read_batch(CAPTURE_BATCH)
                 if raw is None:
@@ -946,7 +991,8 @@ def sdr_capture_thread(did):
                             wav_retry_at = now_ts + WAV_RETRY_SECS
 
         except Exception as e:
-            if not entry.get('closed') and not entry.get('ais') and not entry.get('paused'):   # a removed/AIS-switched/paused dongle's socket is
+            if not entry.get('closed') and not entry.get('ais') \
+                    and not entry.get('orbcomm') and not entry.get('paused'):   # a removed/role-switched/paused dongle's socket is
                 state.log_console(f"SDR thread error (dongle {did}): {e}", "error")  # closed under the thread — not an error
         entry['connected'] = False
         entry['sock'] = None
@@ -955,7 +1001,7 @@ def sdr_capture_thread(did):
             except Exception: pass
         _kill_rtl_sdr(entry.pop('proc', None))
         close_wav()
-        if entry.get('closed') or entry.get('ais') or entry.get('paused'):
+        if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('paused'):
             # a removed/role-switched/paused dongle never reconnects;
             # a dongle removed mid-backoff also needs its WAV closed here
             close_wav()
