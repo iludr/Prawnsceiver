@@ -51,6 +51,7 @@ import numpy as np
 
 from .. import db
 from .. import state
+from ..sdr.dsp import frequency_shift
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
 from ..config import (ORBCOMM_BAND_HZ, ORBCOMM_CENTER_HZ,
                       ORBCOMM_CHANNEL_TIMEOUT_SECS, ORBCOMM_LOG_KEEP_HOURS,
@@ -241,6 +242,13 @@ def new_channel_state(did, key, freq_hz):
     return {
         "dongle": did, "key": key,
         "freq_hz": freq_hz,          # smoothed carrier centroid (display)
+        # Fixed rotator offset: recomputing it from the drifting centroid
+        # would switch the frequency_shift LUT mid-stream (its period
+        # changes with the offset, invalidating st["rot"]) and jump the
+        # rotation phase; the demod's dc estimator tracks the residual
+        # Doppler instead. Quantized to 500 Hz to bound the LUT cache.
+        "shift_hz": int(SDR_OFFSET_HZ + (ORBCOMM_CENTER_HZ
+                                        - _quantize(freq_hz))),
         "rot": 0,                    # offset rotator counter (dsp.frequency_shift)
         "fir_tail": np.zeros(len(_ORB_TAPS) - 1, dtype=np.complex64),
         "last_c": None, "dec_pos": 0,
@@ -609,7 +617,7 @@ def orbcomm_capture_thread(did):
     thread's connection lifecycle (handshake, gain, reconnect with
     backoff); instead of two fixed channels it tracks every carrier it
     finds in the 137.0-138.0 MHz downlink band."""
-    from ..sdr.dsp import iq_to_complex, frequency_shift
+    from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, IQ_BLOCK,
@@ -749,9 +757,7 @@ def _track_candidate(det, did, freq, bin_hz):
 def _demod_channels(det, c):
     """One IQ batch through every tracked channel's demodulator."""
     for st in det["channels"].values():
-        shift = int(SDR_OFFSET_HZ + (ORBCOMM_CENTER_HZ
-                                     - _quantize(st["freq_hz"])))
-        cc = frequency_shift(c, shift, SDR_RATE, st)
+        cc = frequency_shift(c, st["shift_hz"], SDR_RATE, st)
         packets = demod_batch(cc, st)
         if packets:
             handle_packets(st, packets)
