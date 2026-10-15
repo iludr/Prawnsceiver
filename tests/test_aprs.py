@@ -18,6 +18,9 @@ Run: python3 tests/test_aprs.py (needs numpy). Asserts:
   frame in the same burst
 - handle_frames: station registry, packet ring, waterfall marks and
   the persistent aprs_messages log (isolated temp database)
+- the all-time station registry (aprs_stations table): newest data
+  merged over old, position kept only from frames that carry one,
+  last-10 frame history, save/load round-trip through the database
 
 Memory-light by design: the test signal is ~3 s of 2.4 MHz IQ (~30 MB
 of complex64) and everything else is bounded - it runs comfortably
@@ -146,5 +149,25 @@ aprs.handle_frames([g2], st3, now=1236.0)
 with state.aprs_lock:
     assert state.aprs_stations["DL1ABC-7"]["msgs"] == 2
 print("6. registry / aprs_messages log / waterfall marks / status: ok")
+
+# --- 7. all-time station registry (aprs_stations table) ---
+with state.aprs_lock:
+    state.aprs_stations_all.clear()
+aprs._stations_save_at = 0.0
+aprs.handle_frames([g2, g3], st3, now=1238.0)   # fresh registry
+aprs.handle_frames([g2], st3, now=1240.0)      # same station again
+reg = aprs.stations_registry()
+assert [s["call"] for s in reg] == ["DL1ABC-7", "OE9XYZ"], reg   # newest first
+d7, oe = reg[0], reg[1]
+assert d7["msgs"] == 2 and len(d7["recent"]) == 2, d7
+assert d7["lat"] is not None and d7["first_seen"] < d7["last_seen"], d7
+assert oe["msgs"] == 1 and oe["lat"] is None and len(oe["recent"]) == 1, oe
+aprs.save_stations()
+aprs.load_stations()                            # restart round-trip
+reg2 = aprs.stations_registry()
+assert [s["call"] for s in reg2] == ["DL1ABC-7", "OE9XYZ"], reg2
+d7b = reg2[0]
+assert d7b["msgs"] == 2 and len(d7b["recent"]) == 2 and d7b["lat"] is not None, d7b
+print("7. all-time station registry (aprs_stations table): ok")
 
 print("ALL APRS TESTS PASSED")

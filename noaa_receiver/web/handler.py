@@ -240,6 +240,7 @@ _WS_TOPICS = {
     'ais_ships':    (30.0, lambda p: ais.ships_registry()),
     'orbcommlog':   (10.0, lambda p: orbcomm.orbcomm_log(_aislog_count(p))),
     'aprslog':      (10.0, lambda p: aprs.aprs_log(_aislog_count(p))),
+    'aprs_stations': (30.0, lambda p: aprs.stations_registry()),
     'pass_history': (8.0,  lambda p: _load_history()),
 }
 
@@ -580,6 +581,15 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps(aprs.aprs_log(count)).encode())
+        elif self.path == '/aprs_stations.json':
+            # Persistent registry: every APRS station ever received,
+            # each with its latest data and the last APRS_RECENT_MSGS
+            # frames
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(aprs.stations_registry()).encode())
         elif self.path == '/ais_ships.json':
             # Persistent registry: every ship ever received, each with
             # its latest data and the last AIS_RECENT_MSGS messages

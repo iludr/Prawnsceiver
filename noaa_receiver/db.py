@@ -96,6 +96,11 @@ CREATE INDEX IF NOT EXISTS orbcomm_messages_ts ON orbcomm_messages(ts);
 CREATE TABLE IF NOT EXISTS aprs_messages (
     id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
 CREATE INDEX IF NOT EXISTS aprs_messages_ts ON aprs_messages(ts);
+
+-- Every APRS station ever received (like the AIS ships table);
+-- the full station dict is kept as JSON so the page shape is stable
+CREATE TABLE IF NOT EXISTS aprs_stations (
+    call TEXT PRIMARY KEY, data TEXT, updated_ts REAL);
 """
 
 

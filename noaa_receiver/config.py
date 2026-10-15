@@ -122,6 +122,12 @@ APRS_FREQ_HZ = 144800000
 ISS_APRS_FREQ_HZ = 145825000
 # Rolling decoded-frame log (aprs_messages table), trimmed by ts
 APRS_LOG_KEEP_HOURS = 24
+# Persistent registry of EVERY APRS station ever received
+# (aprs_stations table, like the AIS ships registry), each with
+# its latest data plus the last APRS_RECENT_MSGS decoded frames.
+# Rewritten at most every APRS_STATIONS_SAVE_SECS (see aprs.py).
+APRS_RECENT_MSGS = 10
+APRS_STATIONS_SAVE_SECS = 60
 # Persistent registry of EVERY ship ever received (one JSON file), each
 # with its latest data plus the last AIS_RECENT_MSGS decoded messages.
 # Rewritten at most every AIS_SHIPS_SAVE_SECS (see ais.py).

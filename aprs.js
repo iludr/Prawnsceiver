@@ -171,6 +171,117 @@ function updateMap(callPos, callCount) {
 }
 initMap();
 
+// ---------- full history: station registry (every station ever -------
+// received, like the AIS ship registry) with its own map, fed by
+// /aprs_stations.json and the WS 'aprs_stations' topic push
+const regOpen = new Set();       // callsigns whose packet history is expanded
+let hmap = null, hmarkers = {}, hfitted = false;
+function initHistoryMap() {
+    if (typeof L === 'undefined') {
+        const d = document.getElementById('hmap');
+        d.innerHTML = '<div class="muted">Map library (Leaflet CDN) unreachable — the registry below still works.</div>';
+        d.style.height = 'auto';
+        return;
+    }
+    hmap = L.map('hmap').setView([48.99, 12.09], 13);   // Regensburg, refit to stations on data
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(hmap);
+    document.getElementById('hfitbtn').onclick = () => { hfitted = false; fitAllStations(); };
+}
+function fmtDateTime(ts) {
+    const d = new Date(ts * 1000);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour12: false });
+}
+function regPosLink(s) {
+    if (s.lat === null || s.lat === undefined) return null;
+    return '<a href="https://www.google.com/maps?q=' + s.lat + ',' + s.lon
+        + '" target="_blank" rel="noopener">' + s.lat.toFixed(4) + ', ' + s.lon.toFixed(4) + '</a>';
+}
+function regPopup(s) {
+    const link = regPosLink(s);
+    return '<b>' + esc(s.call) + '</b> · ' + s.msgs + ' frame' + (s.msgs === 1 ? '' : 's') + ' ever<br>'
+        + 'first seen ' + fmtDateTime(s.first_seen) + '<br>'
+        + 'last seen ' + fmtDateTime(s.last_seen) + ' · ' + esc(s.dst) + (s.via ? ' via ' + esc(s.via) : '') + '<br>'
+        + (link ? link + (s.sym ? ' · ' + esc(s.sym) : '') : '—') + '<br>'
+        + esc(s.text || '');
+}
+function fitAllStations() {
+    if (!hmap || !hfitted) return;
+    const ms = Object.values(hmarkers);
+    if (!ms.length) return;
+    hmap.fitBounds(L.latLngBounds(ms.map(m => m.getLatLng())).pad(0.25));
+}
+// Persistent station registry render — shared by the /aprs_stations.json
+// fallback poll and the WS 'aprs_stations' topic push
+function applyRegistry(sts) {
+    document.getElementById('regcount').textContent = sts.length;
+    if (hmap) {
+        const seen = new Set();
+        let onMap = 0, noPos = 0;
+        for (const s of sts) {
+            if (s.lat === null || s.lat === undefined) { noPos++; continue; }
+            seen.add(s.call);
+            onMap++;
+            let m = hmarkers[s.call];
+            if (!m) {
+                m = hmarkers[s.call] = L.marker([s.lat, s.lon], { title: s.call }).addTo(hmap);
+                m.bindPopup(regPopup(s));
+            } else {
+                m.setLatLng([s.lat, s.lon]);
+                m.setPopupContent(regPopup(s));
+            }
+        }
+        for (const k of Object.keys(hmarkers)) {
+            if (!seen.has(k)) { hmap.removeLayer(hmarkers[k]); delete hmarkers[k]; }
+        }
+        if (onMap && !hfitted) { hfitted = true; fitAllStations(); }
+        document.getElementById('hmapstats').textContent =
+            onMap + ' station' + (onMap === 1 ? '' : 's') + ' with position on the map'
+            + (noPos > 0 ? ' · ' + noPos + ' without position ever' : '');
+    }
+    const rows = document.getElementById('regrows');
+    if (!sts.length) {
+        rows.innerHTML = '<tr><td colspan="6" class="muted">No stations in the registry yet — it fills as stations beacon.</td></tr>';
+        return;
+    }
+    let html = '';
+    for (const s of sts) {
+        const recent = s.recent || [];
+        let msgs = '';
+        for (const e of recent.slice().reverse()) {   // newest first
+            msgs += '<tr><td class="t">' + esc(e.time || '') + '</td>'
+                + '<td class="txt">' + esc(e.text || '') + '</td></tr>';
+        }
+        html += '<tr>'
+            + cell(esc(s.call), 'call')
+            + cell(regPosLink(s), 'pos')
+            + cell(esc(s.msgs))
+            + cell(esc(fmtDateTime(s.first_seen)), 't')
+            + cell(esc(fmtDateTime(s.last_seen)), 't')
+            + '<td><details' + (regOpen.has(s.call) ? ' open' : '')
+            + ' data-call="' + esc(s.call) + '" ontoggle="regToggle(this.dataset.call, this.open)">'
+            + '<summary>' + recent.length + ' packets (last 10)</summary>'
+            + '<table class="regmsgs"><tbody>' + msgs + '</tbody></table>'
+            + '</details></td></tr>';
+    }
+    rows.innerHTML = html;
+}
+function regToggle(call, open) {
+    if (open) regOpen.add(call); else regOpen.delete(call);
+}
+async function loadRegistry() {
+    try {
+        applyRegistry(await (await fetch('/aprs_stations.json')).json());
+    } catch (err) {
+        console.error('Station registry load failed:', err);
+    }
+}
+initHistoryMap();
+setInterval(() => { if (!aprsWsLive()) loadRegistry(); }, 30000);
+loadRegistry();
+
 async function load() {
     try {
         const n = document.getElementById('count').value;
@@ -202,7 +313,7 @@ setTimer();
 let aprsSocket = null, aprsWsBackoff = 2000;
 function aprsWsLive() { return aprsSocket && aprsSocket.readyState === 1; }
 function sendAprsSub() {
-    try { aprsSocket.send('sub=aprs,aprslog=' + (document.getElementById('count').value || 200)); } catch (e) {}
+    try { aprsSocket.send('sub=aprs,aprs_stations,aprslog=' + (document.getElementById('count').value || 200)); } catch (e) {}
 }
 function connectAprsWs() {
     try {
@@ -222,6 +333,7 @@ function connectAprsWs() {
                 const data = JSON.parse(new TextDecoder().decode(u.subarray(3 + nlen)));
                 if (topic === 'aprs') applyStatus(data);
                 else if (topic === 'aprslog') applyLog(data);
+                else if (topic === 'aprs_stations') applyRegistry(data);
             } catch (e) { console.error('WS topic ' + topic + ' failed:', e); }
         };
         ws.onclose = () => {

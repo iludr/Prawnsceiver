@@ -27,7 +27,9 @@ traffic turns out to be mostly Mic-E.
 
 Live data: state.aprs_stations (callsign -> newest info), the newest
 packets in state.aprs_packets, every frame appended to the aprs_messages
-table (trimmed to APRS_LOG_KEEP_HOURS).
+table (trimmed to APRS_LOG_KEEP_HOURS), and the persistent every-
+station-ever registry in state.aprs_stations_all (aprs_stations table,
+mirroring the AIS ship registry - see load_stations/save_stations).
 """
 import json
 import re
@@ -42,7 +44,8 @@ from .. import db
 from .. import state
 from ..sdr.dsp import frequency_shift
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
-from ..config import (APRS_FREQ_HZ, APRS_LOG_KEEP_HOURS, ISS_APRS_FREQ_HZ,
+from ..config import (APRS_FREQ_HZ, APRS_LOG_KEEP_HOURS, APRS_RECENT_MSGS,
+                      APRS_STATIONS_SAVE_SECS, ISS_APRS_FREQ_HZ,
                       FFT_SIZE, IQ_BLOCK, SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE)
 from .ais import (FLAG, FCS_RESIDUE, _find_flags, crc16_register,
                   destuff_bits, fcs_bits, payload_to_transmitted,
@@ -327,12 +330,33 @@ def handle_frames(payloads, st, now=None):
             else:
                 state.aprs_stations[d["src"]] = entry
             state.aprs_packets.append(entry)
+            # persistent registry: every station ever received,
+            # newest data merged over the old (position only from
+            # frames that carry one), plus the last APRS_RECENT_MSGS
+            # frames
+            reg = state.aprs_stations_all.setdefault(d["src"], {
+                "call": d["src"], "first_seen": round(now, 2),
+                "msgs": 0, "lat": None, "lon": None, "sym": None,
+                "recent": []})
+            reg["msgs"] += 1
+            reg["last_seen"] = entry["last_seen"]
+            reg.update({k: entry[k] for k in ("dst", "via", "type", "text")})
+            if entry.get("lat") is not None:
+                reg["lat"] = entry["lat"]
+                reg["lon"] = entry["lon"]
+                reg["sym"] = entry["sym"]
+            reg["recent"].append({k: entry[k] for k in
+                                  ("ts", "time", "dst", "via",
+                                   "text", "lat", "lon", "sym")})
+            if len(reg["recent"]) > APRS_RECENT_MSGS:
+                del reg["recent"][:len(reg["recent"]) - APRS_RECENT_MSGS]
         state.log_console(f"📡 APRS {d['src']}>{d['dst']}"
                           + (f" via {entry['via']} " if d["digis"] else ": ")
                           + d["info"][:80])
         if de is not None:
             with de["lock"]:
                 de.setdefault("wf_marks", deque(maxlen=64)).append(0.0)
+        _maybe_save_stations()
 
 _log_lock = threading.Lock()
 _log_appends = 0
@@ -374,6 +398,69 @@ def aprs_log(count=200):
         except ValueError:
             continue
     return out
+
+# ---------- persistent station registry (every station ever received) ----
+
+_stations_file_lock = threading.Lock()
+_stations_save_at = 0.0
+
+def load_stations():
+    """Read the registry at startup: restores every station ever
+    received (with its frame history) from the aprs_stations table."""
+    try:
+        rows = db.query("SELECT data FROM aprs_stations")
+        with state.aprs_lock:
+            state.aprs_stations_all = {}
+            for r in rows:
+                s = json.loads(r["data"])
+                if isinstance(s, dict) and "call" in s:
+                    state.aprs_stations_all[s["call"]] = s
+        state.log_console(f"📡 APRS station registry: {len(state.aprs_stations_all)}"
+                          f" stations ever received, restored from the database")
+    except Exception as e:
+        state.log_console(f"APRS station registry could not be loaded: {e}",
+                          "warn")
+        with state.aprs_lock:
+            state.aprs_stations_all = {}
+
+def save_stations():
+    """Write the whole registry to the station database (aprs_stations
+    table). Never fatal: on an error the receiver keeps running with
+    the in-memory registry and warns once per save attempt."""
+    with state.aprs_lock:
+        snapshot = [dict(s, recent=list(s.get("recent", [])))
+                    for s in state.aprs_stations_all.values()]
+    with _stations_file_lock:
+        try:
+            now = time.time()
+            with db.write() as cur:
+                for s in snapshot:
+                    cur.execute("INSERT OR REPLACE INTO aprs_stations VALUES (?,?,?)",
+                                (s["call"], json.dumps(s, separators=(",", ":")), now))
+                calls = [s["call"] for s in snapshot]
+                if calls:
+                    cur.execute("DELETE FROM aprs_stations WHERE call NOT IN (%s)"
+                                % ",".join("?" * len(calls)), calls)
+        except Exception as e:
+            state.log_console(f"APRS station registry save failed: {e}", "warn")
+
+def _maybe_save_stations():
+    """Throttled save from the capture path: at most one write per
+    APRS_STATIONS_SAVE_SECS, so a restart loses at most that window
+    (the frames themselves are already safe in the rolling log)."""
+    global _stations_save_at
+    now = time.time()
+    if now < _stations_save_at:
+        return
+    _stations_save_at = now + APRS_STATIONS_SAVE_SECS
+    save_stations()
+
+def stations_registry():
+    """Snapshot for /aprs_stations.json: every station ever received,
+    newest activity first."""
+    with state.aprs_lock:
+        return sorted(state.aprs_stations_all.values(),
+                      key=lambda s: -s.get("last_seen", 0))
 
 def aprs_status():
     """Snapshot for /aprs.json: registry, stats, recent packets."""

@@ -30,11 +30,18 @@ tr:hover td { background: #16213e; }
 .txt { color: #e0e0e0; }
 .na { color: #555; }
 .muted { color: #666; padding: 10px; }
-#mapwrap { margin-bottom: 14px; }
-#mapinfo { font-size: 0.85em; color: #888; margin: 4px 0 6px; display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
-#fitbtn { background: #0f3460; color: #b39ddb; border: 1px solid #b39ddb; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
-#fitbtn:hover { background: #16294e; }
-#map { height: 460px; border: 1px solid #0f3460; border-radius: 4px; background: #000; }
+#mapwrap, #hmapwrap { margin-bottom: 14px; }
+#mapinfo, #hmapinfo { font-size: 0.85em; color: #888; margin: 4px 0 6px; display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
+#fitbtn, #hfitbtn { background: #0f3460; color: #b39ddb; border: 1px solid #b39ddb; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
+#fitbtn:hover, #hfitbtn:hover { background: #16294e; }
+#map, #hmap { height: 460px; border: 1px solid #0f3460; border-radius: 4px; background: #000; }
+#regwrap { margin: 16px 0 14px; }
+#regwrap h2 { font-size: 1.05em; color: #b39ddb; margin-bottom: 6px; font-weight: normal; }
+#regwrap h2 .cnt { color: #f39c12; }
+#regwrap summary { cursor: pointer; color: #b39ddb; }
+#regwrap summary:hover { text-decoration: underline; }
+#regwrap .regmsgs { margin: 4px 0 2px 12px; width: auto; }
+#regwrap .regmsgs td { font-size: 0.8em; }
 .leaflet-tile { filter: brightness(0.9) saturate(0.85); }
 .leaflet-container { background: #000; font-family: monospace; }
 .stnIcon { position: relative; width: 28px; height: 28px; }
@@ -64,6 +71,23 @@ tr:hover td { background: #16213e; }
         <button id="fitbtn" title="Zoom/pan the map to all stations">&#8690; fit stations</button>
     </div>
     <div id="map"></div>
+</div>
+<div id="regwrap">
+    <h2>&#128218; Station registry — <span class="cnt" id="regcount">&hellip;</span> stations ever received, with their last 10 packets</h2>
+    <div id="hmapwrap">
+        <div id="hmapinfo">
+            <span id="hmapstats">map: waiting for station positions…</span>
+            <button id="hfitbtn" title="Zoom/pan the map to every station ever received">&#8690; fit stations</button>
+        </div>
+        <div id="hmap"></div>
+    </div>
+    <table>
+    <thead><tr>
+        <th>callsign</th><th>position</th><th>frames</th>
+        <th>first seen</th><th>last seen</th><th>packet history</th>
+    </tr></thead>
+    <tbody id="regrows"><tr><td colspan="6" class="muted">Loading station registry…</td></tr></tbody>
+    </table>
 </div>
 <table>
 <thead><tr><th colspan="5">stations heard this run</th></tr>

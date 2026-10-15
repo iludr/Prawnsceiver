@@ -36,6 +36,9 @@ def main():
     # the log itself stays in the database, queried via /aprslog.json)
     from ..decoding import aprs as _aprs
     _aprs.load_log_summary()
+    # Every APRS station ever received (queried via /aprs_stations.json
+    # and the WS 'aprs_stations' topic)
+    _aprs.load_stations()
 
     # Start scheduler thread (TLE refresh + pass prediction + frequency switching)
     threading.Thread(target=scheduler_thread, daemon=True).start()
