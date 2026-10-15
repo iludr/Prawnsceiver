@@ -25,6 +25,14 @@ radios encoding the position in the destination field) are logged with
 callsign and text but without position - a follow-up if the local
 traffic turns out to be mostly Mic-E.
 
+Telemetry (APRS spec): T# beacons (sequence + 5 analog channels +
+8 digital bits) and the PARM/UNIT/EQNS/BITS definition messages are
+decoded into the all-time registry entry - channels scaled by the
+EQNS quadratic (value = a*raw^2 + b*raw + c), names/units from
+PARM/UNIT - so DB0BMW-style "T#099,188,..." frames read as
+"Batt. 14.1 Volt". The definitions are rare (sent every ~30 min),
+so they persist with the registry.
+
 Live data: state.aprs_stations (callsign -> newest info), the newest
 packets in state.aprs_packets, every frame appended to the aprs_messages
 table (trimmed to APRS_LOG_KEEP_HOURS), and the persistent every-
@@ -147,6 +155,46 @@ def parse_position(info):
     if m.group(5) == "W":
         lon = -lon
     return lat, lon, m.group(3) + m.group(6)
+
+
+# ---------- telemetry (APRS spec, chapter 13) ----------
+
+def parse_telemetry(info):
+    """`T#sss,aaa,bbb,ccc,ddd,eee,dddddddd` -> {seq, analog, bits},
+    or None if the info field is not a telemetry data frame:
+    sequence number, five analog channels (raw 0-255), eight
+    digital bits (0/1 each)."""
+    if not info.startswith("T#"):
+        return None
+    parts = info[2:].split(",")
+    if len(parts) < 2:
+        return None
+    try:
+        seq = int(parts[0])
+        analog = [int(v) for v in parts[1:6]]
+    except ValueError:
+        return None
+    bits = (parts[6] if len(parts) > 6 else "").ljust(8, "0")[:8]
+    return {"seq": seq, "analog": analog, "bits": bits}
+
+_TELEM_DEF_KINDS = ("PARM", "UNIT", "EQNS", "BITS")
+
+def parse_telemetry_definition(info):
+    """Telemetry definition message (an AX.25 message addressed to
+    the station whose telemetry it describes):
+    `:CALLSIGN  :PARM.Batt,Temp,...` / `UNIT.` / `EQNS.a,b,c,...` /
+    `BITS.11111111,label` -> (call, kind, payload), or None for any
+    other message. The addressee is exactly 9 chars, padded."""
+    if not info.startswith(":") or len(info) < 11 or info[10] != ":":
+        return None
+    addressee = info[1:10].strip()
+    if not addressee:
+        return None
+    text = info[11:]
+    for kind in _TELEM_DEF_KINDS:
+        if text.startswith(kind + "."):
+            return addressee, kind, text[len(kind) + 1:]
+    return None
 
 
 # ---------- AFSK demodulation ----------
@@ -291,6 +339,82 @@ def decode_burst(freq48):
 
 # ---------- decoded frames -> registry, log, marks ----------
 
+def _new_station_reg(call, now):
+    """Fresh all-time-registry entry for a callsign."""
+    return {"call": call, "first_seen": round(now, 2), "msgs": 0,
+            "lat": None, "lon": None, "sym": None, "recent": []}
+
+def _retel_channels(t):
+    """Recompute the display-ready telemetry channels: five analog
+    channels scaled by the EQNS quadratic (value = a*raw^2 + b*raw
+    + c; defaults a=0, b=1, c=0 = raw) with names/units from
+    PARM/UNIT, plus the eight digital bits named by PARM items 6+."""
+    parm = t.get("parm") or []
+    unit = t.get("unit") or []
+    eqns = t.get("eqns") or [(0.0, 1.0, 0.0)] * 5
+    raw = t.get("raw") or []
+    chans = []
+    for i in range(5):
+        name = parm[i] if i < len(parm) and parm[i] else "A%d" % (i + 1)
+        u = unit[i] if i < len(unit) else ""
+        r = raw[i] if i < len(raw) else None
+        if r is None:
+            chans.append({"name": name, "raw": None, "value": None,
+                           "unit": u})
+            continue
+        a, b, c = eqns[i] if i < len(eqns) else (0.0, 1.0, 0.0)
+        value = a * r * r + b * r + c
+        chans.append({"name": name, "raw": r, "value": round(value, 3),
+                       "unit": u})
+    t["channels"] = chans
+    bits = []
+    bits_raw = t.get("bits_raw") or ""
+    for i in range(8):
+        name = (parm[5 + i] if 5 + i < len(parm) and parm[5 + i]
+                else "B%d" % (i + 1))
+        value = int(bits_raw[i]) if i < len(bits_raw) and bits_raw[i] in "01" else None
+        bits.append({"name": name, "value": value})
+    t["bits"] = bits
+
+def _apply_telemetry(reg, tlm, entry):
+    """Merge one decoded T# frame into the station's registry entry,
+    recomputing the scaled channels from the current definitions."""
+    t = reg.setdefault("telemetry", {})
+    t["seq"] = tlm["seq"]
+    t["ts"] = entry["ts"]
+    t["time"] = entry["time"]
+    t["raw"] = tlm["analog"]
+    t["bits_raw"] = tlm["bits"]
+    _retel_channels(t)
+
+def _apply_telemetry_definition(reg, tdef):
+    """Merge one PARM/UNIT/EQNS/BITS message into the described
+    station's registry entry (created as a stub if the station
+    itself has not been heard yet)."""
+    kind, payload = tdef[1], tdef[2]
+    t = reg.setdefault("telemetry", {})
+    if kind == "PARM":
+        t["parm"] = [p.strip() for p in payload.split(",")]
+    elif kind == "UNIT":
+        t["unit"] = [u.strip() for u in payload.split(",")]
+    elif kind == "EQNS":
+        try:
+            nums = [float(x) for x in payload.split(",")]
+        except ValueError:
+            return
+        eqns = []
+        for i in range(5):
+            j = 3 * i
+            eqns.append(tuple(nums[j:j + 3]) if len(nums) >= j + 3
+                         else (0.0, 1.0, 0.0))
+        t["eqns"] = eqns
+    elif kind == "BITS":
+        parts = payload.split(",", 1)
+        t["bits_sense"] = parts[0][:8]
+        if len(parts) > 1:
+            t["label"] = parts[1][:40]
+    _retel_channels(t)
+
 def _display_entry(d, now):
     return {
         "call": d["src"], "dst": d["dst"],
@@ -320,6 +444,8 @@ def handle_frames(payloads, st, now=None):
         entry = _display_entry(d, now)
         entry["ts"] = round(now, 2)
         entry["time"] = datetime.now().strftime("%H:%M:%S")
+        tlm = parse_telemetry(d["info"])
+        tdef = None if tlm is not None else parse_telemetry_definition(d["info"])
         _log_message(entry)
         with state.aprs_lock:
             prev = state.aprs_stations.get(d["src"])
@@ -334,10 +460,8 @@ def handle_frames(payloads, st, now=None):
             # newest data merged over the old (position only from
             # frames that carry one), plus the last APRS_RECENT_MSGS
             # frames
-            reg = state.aprs_stations_all.setdefault(d["src"], {
-                "call": d["src"], "first_seen": round(now, 2),
-                "msgs": 0, "lat": None, "lon": None, "sym": None,
-                "recent": []})
+            reg = state.aprs_stations_all.setdefault(
+                d["src"], _new_station_reg(d["src"], now))
             reg["msgs"] += 1
             reg["last_seen"] = entry["last_seen"]
             reg.update({k: entry[k] for k in ("dst", "via", "type", "text")})
@@ -350,6 +474,12 @@ def handle_frames(payloads, st, now=None):
                                    "text", "lat", "lon", "sym")})
             if len(reg["recent"]) > APRS_RECENT_MSGS:
                 del reg["recent"][:len(reg["recent"]) - APRS_RECENT_MSGS]
+            if tlm is not None:
+                _apply_telemetry(reg, tlm, entry)
+            elif tdef is not None:
+                dreg = state.aprs_stations_all.setdefault(
+                    tdef[0], _new_station_reg(tdef[0], now))
+                _apply_telemetry_definition(dreg, tdef)
         state.log_console(f"📡 APRS {d['src']}>{d['dst']}"
                           + (f" via {entry['via']} " if d["digis"] else ": ")
                           + d["info"][:80])

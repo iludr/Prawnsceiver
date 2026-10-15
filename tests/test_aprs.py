@@ -21,6 +21,10 @@ Run: python3 tests/test_aprs.py (needs numpy). Asserts:
 - the all-time station registry (aprs_stations table): newest data
   merged over old, position kept only from frames that carry one,
   last-10 frame history, save/load round-trip through the database
+- telemetry: T# beacons decoded, channels scaled by the
+  PARM/UNIT/EQNS definition messages (value = a*raw^2 + b*raw + c),
+  digital bits named, plain messages ignored, persistence through
+  the registry round-trip
 
 Memory-light by design: the test signal is ~3 s of 2.4 MHz IQ (~30 MB
 of complex64) and everything else is bounded - it runs comfortably
@@ -169,5 +173,46 @@ assert [s["call"] for s in reg2] == ["DL1ABC-7", "OE9XYZ"], reg2
 d7b = reg2[0]
 assert d7b["msgs"] == 2 and len(d7b["recent"]) == 2 and d7b["lat"] is not None, d7b
 print("7. all-time station registry (aprs_stations table): ok")
+
+# --- 8. telemetry: T# beacons + PARM/UNIT/EQNS/BITS messages ---
+# raw forms copied from the DB0BMW digi the station actually hears
+T_RAW = "T#099,188,128,000,000,000,00000000"
+tm = aprs.parse_telemetry(T_RAW)
+assert tm == {"seq": 99, "analog": [188, 128, 0, 0, 0], "bits": "00000000"}, tm
+assert aprs.parse_telemetry(">status text is not telemetry") is None
+assert aprs.parse_telemetry("T#99,xxx") is None            # bad analog
+d = aprs.parse_telemetry_definition(":DB0BMW   :PARM.Batt.,Temp")
+assert d == ("DB0BMW", "PARM", "Batt.,Temp"), d
+assert aprs.parse_telemetry_definition(":DB0BMW   :hello there") is None
+assert aprs.parse_telemetry_definition("!4858.68N/01202.98E#") is None
+p_t = aprs.build_frame("DB0BMW", "APMI0A", T_RAW)
+aprs.handle_frames([p_t], st3, now=1250.0)
+with state.aprs_lock:
+    tlm = dict(state.aprs_stations_all["DB0BMW"]["telemetry"])
+assert tlm["seq"] == 99 and tlm["channels"][0]["raw"] == 188
+assert tlm["channels"][0]["value"] == 188      # no EQNS yet: identity
+p_defs = [
+    aprs.build_frame("DB0BMW", "APMI0A", ":DB0BMW   :PARM.Batt.,Temp,A3,A4,A5,O1,O2,O3,O4,I1,I2,I3,I4"),
+    aprs.build_frame("DB0BMW", "APMI0A", ":DB0BMW   :UNIT.Volt,C,None,None,None,On,On,On,On,Hi,Hi,Hi,Hi"),
+    aprs.build_frame("DB0BMW", "APMI0A", ":DB0BMW   :EQNS.0,0.075,0,0,0,0,0,0,0,0,0,0,0,0,0"),
+    aprs.build_frame("DB0BMW", "APMI0A", ":DB0BMW   :BITS.11111111,Telemetry DB0BMW"),
+    aprs.build_frame("DL1ABC", "APRS", ":DB0BMW   :hello there"),   # plain message
+]
+aprs.handle_frames(p_defs, st3, now=1251.0)
+with state.aprs_lock:
+    tlm = dict(state.aprs_stations_all["DB0BMW"]["telemetry"])
+c0 = tlm["channels"][0]
+assert c0 == {"name": "Batt.", "raw": 188, "value": 14.1, "unit": "Volt"}, c0
+assert tlm["channels"][1]["value"] == 0.0, tlm["channels"][1]   # EQNS all zero
+assert tlm["channels"][2]["name"] == "A3"
+assert [b["name"] for b in tlm["bits"]][:2] == ["O1", "O2"], tlm["bits"]
+assert all(b["value"] == 0 for b in tlm["bits"])
+assert tlm["label"] == "Telemetry DB0BMW"
+aprs.save_stations()
+aprs.load_stations()                            # restart round-trip
+with state.aprs_lock:
+    tlm2 = dict(state.aprs_stations_all["DB0BMW"]["telemetry"])
+assert tlm2["channels"][0]["value"] == 14.1 and tlm2["label"] == "Telemetry DB0BMW"
+print("8. telemetry decode (T#, PARM/UNIT/EQNS/BITS, persistence): ok")
 
 print("ALL APRS TESTS PASSED")

@@ -267,6 +267,30 @@ function applyRegistry(sts) {
             + '</details></td></tr>';
     }
     rows.innerHTML = html;
+    // telemetry section: stations with a decoded T# beacon
+    const telm = sts.filter(s => s.telemetry);
+    document.getElementById('telmwrap').style.display = telm.length ? '' : 'none';
+    if (!telm.length) return;
+    document.getElementById('telmcount').textContent =
+        '— ' + telm.length + ' station' + (telm.length === 1 ? '' : 's') + ' with telemetry';
+    let th = '';
+    for (const s of telm) {
+        const t = s.telemetry;
+        const chans = (t.channels || []).map(c =>
+            esc(c.name) + ' <b>' + (c.value === null || c.value === undefined ? '—' : esc(c.value))
+            + '</b>' + (c.unit ? ' ' + esc(c.unit) : '')).join(' · ');
+        const bits = (t.bits || []).map(b =>
+            esc(b.name) + '=' + (b.value === null || b.value === undefined ? '—' : esc(b.value)))
+            .join(' ');
+        th += '<tr>'
+            + cell(esc(s.call), 'call')
+            + cell(esc(t.time || ''), 't')
+            + cell(t.seq === null || t.seq === undefined ? null : esc(t.seq))
+            + cell(chans, 'txt')
+            + cell(bits ? bits + (t.label ? ' · ' + esc(t.label) : '') : null, 'txt')
+            + '</tr>';
+    }
+    document.getElementById('telmrows').innerHTML = th;
 }
 function regToggle(call, open) {
     if (open) regOpen.add(call); else regOpen.delete(call);

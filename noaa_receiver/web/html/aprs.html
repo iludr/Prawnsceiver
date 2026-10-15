@@ -35,9 +35,9 @@ tr:hover td { background: #16213e; }
 #fitbtn, #hfitbtn { background: #0f3460; color: #b39ddb; border: 1px solid #b39ddb; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
 #fitbtn:hover, #hfitbtn:hover { background: #16294e; }
 #map, #hmap { height: 460px; border: 1px solid #0f3460; border-radius: 4px; background: #000; }
-#regwrap { margin: 16px 0 14px; }
-#regwrap h2 { font-size: 1.05em; color: #b39ddb; margin-bottom: 6px; font-weight: normal; }
-#regwrap h2 .cnt { color: #f39c12; }
+#regwrap, #telmwrap { margin: 16px 0 14px; }
+#regwrap h2, #telmwrap h2 { font-size: 1.05em; color: #b39ddb; margin-bottom: 6px; font-weight: normal; }
+#regwrap h2 .cnt, #telmwrap h2 .cnt { color: #f39c12; }
 #regwrap summary { cursor: pointer; color: #b39ddb; }
 #regwrap summary:hover { text-decoration: underline; }
 #regwrap .regmsgs { margin: 4px 0 2px 12px; width: auto; }
@@ -87,6 +87,16 @@ tr:hover td { background: #16213e; }
         <th>first seen</th><th>last seen</th><th>packet history</th>
     </tr></thead>
     <tbody id="regrows"><tr><td colspan="6" class="muted">Loading station registry…</td></tr></tbody>
+    </table>
+</div>
+<div id="telmwrap" style="display:none">
+    <h2>&#128200; Station telemetry <span class="cnt" id="telmcount"></span></h2>
+    <table>
+    <thead><tr>
+        <th>station</th><th>last frame</th><th>seq</th>
+        <th>channels</th><th>digital bits</th>
+    </tr></thead>
+    <tbody id="telmrows"></tbody>
     </table>
 </div>
 <table>
