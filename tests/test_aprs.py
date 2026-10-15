@@ -28,6 +28,12 @@ Run: python3 tests/test_aprs.py (needs numpy). Asserts:
 - telemetry backfill: the rolling aprs_messages log replays
   through the telemetry parsers at registry load - a wiped
   registry table rebuilds the decoded channels from frames
+- Mic-E: position/speed/course decoded from the destination
+  field and packed info bytes (test encoder covers N/S, E/W,
+  the message bits and the minutes-60 wrap), end-to-end
+  through handle_frames with the decoded comment as text
+- APRS text messages: parse_message, the messages_view filter
+  (telemetry definitions out, acks flagged)
 
 Memory-light by design: the test signal is ~3 s of 2.4 MHz IQ (~30 MB
 of complex64) and everything else is bounded - it runs comfortably
@@ -233,5 +239,78 @@ assert c0 == {"name": "Batt.", "raw": 188, "value": 14.1, "unit": "Volt"}, c0
 assert tlm3["seq"] == 99 and tlm3["label"] == "Telemetry DB0BMW"
 assert [b["name"] for b in tlm3["bits"]][:2] == ["O1", "O2"]
 print("9. telemetry backfill from the aprs_messages log: ok")
+
+# --- 10. Mic-E: mobile positions from the destination field ---
+# Test encoders (inverse of the decoder tables): the dest letter
+# forms carry N/S, +100-deg and E/W; minutes < 10 ride the +60
+# wrap; the low speed digit hides in the course byte.
+def mice_dst(lat, lon):
+    d = int(abs(lat))
+    m = round((abs(lat) - d) * 60, 4)
+    mt, mh = int(m), int(round((m - int(m)) * 100))
+    return (str(d // 10) + str(d % 10) + str(mt // 10)
+            + (chr(80 + mt % 10) if lat >= 0 else str(mt % 10))
+            + (chr(80 + mh // 10) if abs(lon) >= 100 else str(mh // 10))
+            + (chr(80 + mh % 10) if lon < 0 else str(mh % 10)))
+def mice_info(lon, sym, speed_kn, course, comment):
+    lo = int(abs(lon))
+    lm = round((abs(lon) - lo) * 60, 4)
+    lmt = int(lm)
+    if lmt < 10:
+        lmt += 60                      # the [&-a] regex range
+    lht = int(round((lm - int(lm)) * 100))
+    b = [lo % 100 + 28, lmt + 28, lht + 28,
+         speed_kn // 10 + 28,
+         (speed_kn % 10) * 10 + course // 100 + 28,
+         course % 100 + 28]
+    return "".join(chr(x) for x in b) + sym + comment
+
+info_m = mice_info(12.05, ">/", 42, 123, "CrabArk mobile")
+assert mice_dst(49.05, 12.05) == "490S00", mice_dst(49.05, 12.05)
+m1 = aprs.parse_mice("490S00", info_m)
+assert abs(m1["lat"] - 49.05) < 1e-6 and abs(m1["lon"] - 12.05) < 1e-6, m1
+assert m1["sym"] == "/>" and m1["cse"] == 123, m1
+assert abs(m1["spd"] - 77.8) < 0.05, m1          # 42 kn -> km/h
+assert m1["msg"] is None and m1["comment"] == "CrabArk mobile", m1
+# south + west: digit-form N/S, letter-form E/W
+assert mice_dst(-49.05, -12.05) == "49030P", mice_dst(-49.05, -12.05)
+m2 = aprs.parse_mice("49030P", info_m)
+assert abs(m2["lat"] + 49.05) < 1e-6 and abs(m2["lon"] + 12.05) < 1e-6, m2
+# A-J message bits -> the custom table; degree digit still decodes
+m3 = aprs.parse_mice("E90S00", info_m)
+assert abs(m3["lat"] - 49.05) < 1e-6 and m3["msg"] == "C3: Custom-3", m3
+# a pure-digit destination is NOT the 000/Emergency message row
+assert aprs.parse_mice("490000", mice_info(12.05, ">/", 42, 123, ""))["msg"] is None
+# guards: tocalls and status text are not Mic-E
+assert aprs.parse_mice("APMI0A", info_m) is None
+assert aprs.parse_mice("490S00", ">status text here") is None
+# end-to-end: Mic-E fallback when no uncompressed position, comment
+# as text, speed/course through the registry merge
+p_m = aprs.build_frame("DL1MOB", mice_dst(49.05, 12.05), info_m,
+                      "WIDE1-1", src_ssid=9)
+aprs.handle_frames([p_m], st3, now=1260.0)
+with state.aprs_lock:
+    mob = dict(state.aprs_stations_all["DL1MOB-9"])   # keyed with SSID
+assert abs(mob["lat"] - 49.05) < 1e-6 and abs(mob["lon"] - 12.05) < 1e-6, mob
+assert mob["spd"] == 77.8 and mob["cse"] == 123 and mob["sym"] == "/>", mob
+assert mob["text"] == "CrabArk mobile", mob
+print("10. Mic-E positions (N/S, E/W, message bits, comment): ok")
+
+# --- 11. APRS text messages: parse + messages_view filter ---
+assert aprs.parse_message(":DL1DEF   :hi") == {"to": "DL1DEF", "text": "hi"}
+assert aprs.parse_message("!4858.68N/01202.98E#") is None
+p_c1 = aprs.build_frame("DL1ABC", "APRS", ":DL1DEF   :hi there, testing 1-2-3")
+p_c2 = aprs.build_frame("DL1DEF", "APRS", ":DL1ABC   :ack3")
+aprs.handle_frames([p_c1, p_c2], st3, now=1261.0)
+mv = aprs.messages_view(500)
+texts = [m["text"] for m in mv]
+assert "hi there, testing 1-2-3" in texts, texts
+assert not any(t.startswith(("PARM.", "UNIT.", "EQNS.", "BITS."))
+               for t in texts), texts
+chat = [m for m in mv if m["text"].startswith("hi there")][0]
+assert chat["from"] == "DL1ABC" and chat["to"] == "DL1DEF" and chat["ack"] is None
+ack = [m for m in mv if m["ack"]][0]
+assert ack["from"] == "DL1DEF" and ack["to"] == "DL1ABC" and ack["ack"] == "ack", ack
+print("11. APRS text messages (filter + ack flagging): ok")
 
 print("ALL APRS TESTS PASSED")

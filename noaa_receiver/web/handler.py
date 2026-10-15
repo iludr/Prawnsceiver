@@ -241,6 +241,7 @@ _WS_TOPICS = {
     'orbcommlog':   (10.0, lambda p: orbcomm.orbcomm_log(_aislog_count(p))),
     'aprslog':      (10.0, lambda p: aprs.aprs_log(_aislog_count(p))),
     'aprs_stations': (30.0, lambda p: aprs.stations_registry()),
+    'aprsmsgs':     (10.0, lambda p: aprs.messages_view(_aislog_count(p))),
     'pass_history': (8.0,  lambda p: _load_history()),
 }
 
@@ -581,6 +582,20 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps(aprs.aprs_log(count)).encode())
+        elif self.path.startswith('/aprsmsgs.json'):
+            # Person-to-person APRS text messages (':ADDRESSEE:text'
+            # frames from the persistent log, telemetry definitions
+            # filtered out, acks flagged)
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                count = int((query.get('count') or ['200'])[0])
+            except ValueError:
+                count = 200
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(aprs.messages_view(count)).encode())
         elif self.path == '/aprs_stations.json':
             # Persistent registry: every APRS station ever received,
             # each with its latest data and the last APRS_RECENT_MSGS

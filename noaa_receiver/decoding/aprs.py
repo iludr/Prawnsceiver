@@ -21,9 +21,12 @@ FM discriminator at 48 kHz, energy-gated bursts) with two differences:
 Payload: destination/source callsigns + SSIDs, digipeater chain,
 control/PID (UI frames only) and the info text. Positions are parsed
 from uncompressed beacons (`!`/`=` data types); Mic-E frames (mobile
-radios encoding the position in the destination field) are logged with
-callsign and text but without position - a follow-up if the local
-traffic turns out to be mostly Mic-E.
+radios packing lat/lon/speed/course into the destination field and the
+first info bytes) are decoded as the
+position fallback - tables ported from aprslib (aprs-python),
+including position ambiguity and the A-J message bits. Text
+messages (`:ADDRESSEE:text`, the same format as the telemetry
+definitions) feed the /aprsmsgs.json message view.
 
 Telemetry (APRS spec): T# beacons (sequence + 5 analog channels +
 8 digital bits) and the PARM/UNIT/EQNS/BITS definition messages are
@@ -195,6 +198,125 @@ def parse_telemetry_definition(info):
         if text.startswith(kind + "."):
             return addressee, kind, text[len(kind) + 1:]
     return None
+
+def parse_message(info):
+    """APRS text message `:ADDRESSEE:text` -> {to, text}, or None.
+    The addressee is exactly 9 chars, padded (the same layout as the
+    telemetry definition messages)."""
+    if not info.startswith(":") or len(info) < 11 or info[10] != ":":
+        return None
+    return {"to": info[1:10].strip(), "text": info[11:]}
+
+
+# ---------- Mic-E (position packed into the destination field) ----
+# Tables ported from aprslib (aprs-python, aprslib/parsing/mice.py):
+# the destination carries latitude + N/S / +100-deg / E-W flags in
+# dual-use char forms (digits = plain, P-Y = digits + flag, A-J =
+# digits + message bits, K/L/Z = position-ambiguity space), the
+# info field starts with 6 packed bytes (longitude, speed, course),
+# then symbol code + symbol table + free-text comment.
+
+_MICE_DST_RE = re.compile(r"^[0-9A-Z]{3}[0-9L-Z]{3}$")
+_MICE_BODY_RE = re.compile(
+    r"^[&-\x7f][&-a][\x1c-\x7f]{2}[\x1c-\x7d][\x1c-\x7f][\x21-\x7e]"
+    r"[/\\0-9A-Z]")
+_MTYPE_STD = {
+    "111": "M0: Off Duty", "110": "M1: En Route",
+    "101": "M2: In Service", "100": "M3: Returning",
+    "011": "M4: Committed", "010": "M5: Special",
+    "001": "M6: Priority", "000": "Emergency",
+}
+_MTYPE_CUSTOM = {
+    "111": "C0: Custom-0", "110": "C1: Custom-1",
+    "101": "C2: Custom-2", "100": "C3: Custom-3",
+    "011": "C4: Custom-4", "010": "C5: Custom-5",
+    "001": "C6: Custom-6", "000": "Emergency",
+}
+
+def parse_mice(dst, info):
+    """Mic-E destination field + info text -> {lat, lon, sym,
+    spd (km/h), cse, msg, comment}, or None if not Mic-E. Tried
+    only when no uncompressed position was found, so the strict
+    format regexes keep regular beacons and tocalls out."""
+    if len(dst) != 6 or len(info) < 8:
+        return None
+    if not _MICE_DST_RE.match(dst) or not _MICE_BODY_RE.match(info):
+        return None
+    # latitude digits: K/L/Z -> space (position ambiguity),
+    # P-Y -> digits, A-J -> digits
+    t = ""
+    for ch in dst:
+        if ch in "KLZ":
+            t += " "
+        elif ord(ch) > 76:
+            t += chr(ord(ch) - 32)
+        elif ord(ch) > 57:
+            t += chr(ord(ch) - 17)
+        else:
+            t += ch
+    m = re.match(r"^(\d+)( *)$", t)
+    if m is None or not t[0:2].isdigit():
+        return None
+    posamb = len(m.group(2))
+    tl = list(t)
+    if posamb >= 4:
+        tl[2] = "3"             # center of the ambiguity box
+    elif posamb > 0:
+        tl[6 - posamb] = "5"
+    t = "".join(tl)
+    lat = int(t[0:2]) + float((t[2:4] + "." + t[4:6]).replace(" ", "0")) / 60.0
+    if ord(dst[3]) <= 0x4C:    # dest byte 4 carries N/S
+        lat = -lat
+    # plain digits mean "no message" - an all-digit destination
+    # must NOT read as the 000/Emergency row)
+    msg = None
+    if any(c > "9" for c in dst[0:3]):
+        mb = re.sub(r"[0-9L]", "0", dst[0:3])
+        mb = re.sub(r"[P-Z]", "1", mb)
+        mb = re.sub(r"[A-K]", "2", mb)
+        if re.match(r"^[012]+$", mb):
+            if "2" in mb:
+                msg = _MTYPE_CUSTOM[mb.replace("2", "1")]
+            else:
+                msg = _MTYPE_STD[mb]
+    # longitude: degrees + 100 offset flag, minutes with the
+    # >= 60 wrap, hundredths
+    lon = ord(info[0]) - 28
+    if ord(dst[4]) >= 0x50:    # dest byte 5 carries +100 deg
+        lon += 100
+    if 180 <= lon <= 189:
+        lon -= 80
+    elif 190 <= lon <= 199:
+        lon -= 190
+    lm = ord(info[1]) - 28.0
+    if lm >= 60:
+        lm -= 60
+    lm += (ord(info[2]) - 28.0) / 100.0
+    if posamb == 4:
+        lm = 30.0
+    elif posamb == 3:
+        lm = (int(lm / 10) + 0.5) * 10
+    elif posamb == 2:
+        lm = int(lm) + 0.5
+    elif posamb == 1:
+        lm = (int(lm * 10) + 0.5) / 10.0
+    lon += lm / 60.0
+    if ord(dst[5]) >= 0x50:    # dest byte 6 carries E/W
+        lon = -lon
+    # speed (knots, +800 wrap) and course (+400 wrap): the low
+    # speed digit rides in the course byte
+    spd = (ord(info[3]) - 28) * 10
+    cse = ord(info[4]) - 28
+    q = int(cse / 10.0)
+    cse = (cse - q * 10) * 100 + ord(info[5]) - 28
+    spd += q
+    if spd >= 800:
+        spd -= 800
+    if cse >= 400:
+        cse -= 400
+    return {"lat": lat, "lon": lon, "sym": info[7] + info[6],
+            "spd": round(spd * 1.852, 1), "cse": cse, "msg": msg,
+            "comment": info[8:].strip(" ") or None}
 
 
 # ---------- AFSK demodulation ----------
@@ -416,12 +538,16 @@ def _apply_telemetry_definition(reg, tdef):
     _retel_channels(t)
 
 def _display_entry(d, now):
+    text = d.get("comment")          # Mic-E: decoded comment,
+    if text is None:                 # not the packed data bytes
+        text = d["info"][:120]
     return {
         "call": d["src"], "dst": d["dst"],
         "via": ",".join(d["digis"]),
         "type": (d["info"][0] if 32 <= ord(d["info"][0]) < 127 else "?"),
-        "text": d["info"][:120],
+        "text": text[:120],
         "lat": d.get("lat"), "lon": d.get("lon"), "sym": d.get("sym"),
+        "spd": d.get("spd"), "cse": d.get("cse"),
         "msgs": 1, "last_seen": round(now, 2),
     }
 
@@ -441,6 +567,17 @@ def handle_frames(payloads, st, now=None):
         pos = parse_position(d["info"])
         if pos:
             d["lat"], d["lon"], d["sym"] = pos
+        else:
+            mice = parse_mice(d["dst"].split("-")[0], d["info"])
+            if mice is not None:
+                d["lat"] = mice["lat"]
+                d["lon"] = mice["lon"]
+                d["sym"] = mice["sym"]
+                d["spd"] = mice["spd"]
+                d["cse"] = mice["cse"]
+                d["comment"] = mice["comment"] or ""
+                if mice["msg"]:
+                    d["comment"] = "[%s] %s" % (mice["msg"], d["comment"])
         entry = _display_entry(d, now)
         entry["ts"] = round(now, 2)
         entry["time"] = datetime.now().strftime("%H:%M:%S")
@@ -469,6 +606,9 @@ def handle_frames(payloads, st, now=None):
                 reg["lat"] = entry["lat"]
                 reg["lon"] = entry["lon"]
                 reg["sym"] = entry["sym"]
+                if entry.get("spd") is not None:
+                    reg["spd"] = entry["spd"]
+                    reg["cse"] = entry["cse"]
             reg["recent"].append({k: entry[k] for k in
                                   ("ts", "time", "dst", "via",
                                    "text", "lat", "lon", "sym")})
@@ -527,6 +667,37 @@ def aprs_log(count=200):
             out.append(json.loads(r["entry"]))
         except ValueError:
             continue
+    return out
+
+_MSG_ACK_RE = re.compile(r"^(ack|rej)[0-9]{1,5}$")
+
+def messages_view(count=200):
+    """Newest-first tail of the person-to-person text messages from
+    the persistent frame log, for /aprsmsgs.json: ':ADDRESSEE:text'
+    frames minus the telemetry definition keywords (T# data frames
+    never match - their type is not ':'). ack/rej confirmations are
+    flagged instead of shown as text."""
+    try:
+        count = max(1, min(int(count), 500))
+    except ValueError:
+        count = 200
+    out = []
+    for e in aprs_log(2000):
+        if e.get("type") != ":":
+            continue
+        m = parse_message(e.get("text") or "")
+        if m is None:
+            continue
+        text = m["text"]
+        if any(text.startswith(k + ".") for k in _TELEM_DEF_KINDS):
+            continue
+        ack = _MSG_ACK_RE.match(text)
+        out.append({"ts": e.get("ts"), "time": e.get("time"),
+                    "from": e.get("call"), "to": m["to"],
+                    "text": text[:200],
+                    "ack": ack.group(1) if ack else None})
+        if len(out) >= count:
+            break
     return out
 
 # ---------- persistent station registry (every station ever received) ----

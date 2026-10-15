@@ -144,7 +144,8 @@ function stationPopup(e, count) {
     return '<b>' + esc(e.call) + '</b> · ' + count + ' frame' + (count === 1 ? '' : 's') + '<br>'
         + 'last: ' + fmtTime(e.ts) + ' · ' + esc(e.dst) + (e.via ? ' via ' + esc(e.via) : '') + '<br>'
         + '<a href="https://www.google.com/maps?q=' + e.lat + ',' + e.lon + '" target="_blank" rel="noopener">'
-        + e.lat.toFixed(4) + ', ' + e.lon.toFixed(4) + '</a>' + (e.sym ? ' · ' + esc(e.sym) : '') + '<br>'
+        + e.lat.toFixed(4) + ', ' + e.lon.toFixed(4) + '</a>' + (e.sym ? ' · ' + esc(e.sym) : '')
+        + (e.spd !== null && e.spd !== undefined ? ' · ' + esc(e.spd) + ' km/h · ' + esc(e.cse) + '\u00b0' : '') + '<br>'
         + esc(e.text || '');
 }
 function fitStations() {
@@ -212,7 +213,8 @@ function regPopup(s) {
     const link = regPosLink(s);
     return '<b>' + esc(s.call) + '</b> · ' + s.msgs + ' frame' + (s.msgs === 1 ? '' : 's') + ' ever<br>'
         + 'first seen ' + fmtDateTime(s.first_seen) + '<br>'
-        + 'last seen ' + fmtDateTime(s.last_seen) + ' · ' + esc(s.dst) + (s.via ? ' via ' + esc(s.via) : '') + '<br>'
+        + 'last seen ' + fmtDateTime(s.last_seen) + ' · ' + esc(s.dst) + (s.via ? ' via ' + esc(s.via) : '')
+        + (s.spd !== null && s.spd !== undefined ? ' · ' + esc(s.spd) + ' km/h · ' + esc(s.cse) + '\u00b0' : '') + '<br>'
         + (link ? link + (s.sym ? ' · ' + esc(s.sym) : '') : '—') + '<br>'
         + esc(s.text || '');
 }
@@ -315,6 +317,36 @@ initHistoryMap();
 setInterval(() => { if (!aprsWsLive()) loadRegistry(); }, 30000);
 loadRegistry();
 
+// ---------- person-to-person text messages (':ADDRESSEE:text') ----
+// fed by /aprsmsgs.json and the WS 'aprsmsgs' topic push; the
+// section hides itself until a real message arrives (the local
+// channel carries only telemetry definitions).
+function applyMessages(msgs) {
+    document.getElementById('msgwrap').style.display = msgs.length ? '' : 'none';
+    if (!msgs.length) return;
+    document.getElementById('msgcount').textContent =
+        '— ' + msgs.length + ' message' + (msgs.length === 1 ? '' : 's') + ' (last 24 h)';
+    let html = '';
+    for (const m of msgs) {
+        html += '<tr>'
+            + cell(fmtTime(m.ts), 't')
+            + cell(esc(m.from || ''), 'call')
+            + cell(esc(m.to || ''), 'via')
+            + cell(m.ack ? '<span class="muted">' + esc(m.ack) + '</span>' : esc(m.text || ''), 'txt')
+            + '</tr>';
+    }
+    document.getElementById('msgrows').innerHTML = html;
+}
+async function loadMessages() {
+    try {
+        applyMessages(await (await fetch('/aprsmsgs.json?count=200')).json());
+    } catch (err) {
+        console.error('APRS messages load failed:', err);
+    }
+}
+setInterval(() => { if (!aprsWsLive()) loadMessages(); }, 10000);
+loadMessages();
+
 async function load() {
     try {
         const n = document.getElementById('count').value;
@@ -346,7 +378,7 @@ setTimer();
 let aprsSocket = null, aprsWsBackoff = 2000;
 function aprsWsLive() { return aprsSocket && aprsSocket.readyState === 1; }
 function sendAprsSub() {
-    try { aprsSocket.send('sub=aprs,aprs_stations,aprslog=' + (document.getElementById('count').value || 200)); } catch (e) {}
+    try { aprsSocket.send('sub=aprs,aprs_stations,aprsmsgs=200,aprslog=' + (document.getElementById('count').value || 200)); } catch (e) {}
 }
 function connectAprsWs() {
     try {
@@ -367,6 +399,7 @@ function connectAprsWs() {
                 if (topic === 'aprs') applyStatus(data);
                 else if (topic === 'aprslog') applyLog(data);
                 else if (topic === 'aprs_stations') applyRegistry(data);
+                else if (topic === 'aprsmsgs') applyMessages(data);
             } catch (e) { console.error('WS topic ' + topic + ' failed:', e); }
         };
         ws.onclose = () => {
