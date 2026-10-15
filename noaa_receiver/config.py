@@ -130,6 +130,15 @@ APRS_FREQ_HZ = 144800000
 ISS_APRS_FREQ_HZ = 145825000
 # Rolling decoded-frame log (aprs_messages table), trimmed by ts
 APRS_LOG_KEEP_HOURS = 24
+
+# POCSAG paging (see noaa_receiver/decoding/pocsag.py): a dongle
+# in the POCSAG role tunes here - one 2.4 MHz capture covers the
+# whole local paging ecosystem (2026-10-16: idle-keyed channels
+# from 465.69 to 466.25 MHz around a local site) and EVERY
+# channel found is decoded in parallel.
+PAGING_CENTER_HZ = 466_000_000
+# Rolling decoded-page log (pocsag_messages table), trimmed by ts
+POCSAG_LOG_KEEP_HOURS = 24
 # Persistent registry of EVERY APRS station ever received
 # (aprs_stations table, like the AIS ships registry), each with
 # its latest data plus the last APRS_RECENT_MSGS decoded frames.

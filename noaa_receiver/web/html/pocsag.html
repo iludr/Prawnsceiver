@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOAAh's CrabArk — POCSAG Paging</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 12px 15px; }
+h1 { font-size: 1.2em; color: #f39c12; margin-bottom: 4px; }
+.sub { font-size: 1em; color: #888; margin-bottom: 12px; }
+.sub a { color: #f39c12; }
+#stats { color: #4da6ff; font-size: 0.9em; margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-bottom: 20px; }
+th { text-align: left; color: #888; border-bottom: 1px solid #0f3460; padding: 4px 6px; position: sticky; top: 0; background: #1a1a2e; }
+td { padding: 3px 6px; border-bottom: 1px solid #16213e; white-space: nowrap; }
+td.txt { white-space: normal; word-break: break-all; }
+tr:hover td { background: #16213e; }
+.t { color: #666; }
+.ch { color: #f39c12; }
+.ric { color: #e0e0e0; font-weight: bold; }
+.type { color: #888; }
+.txt { color: #e0e0e0; }
+.muted { color: #666; padding: 10px; }
+#chwrap { margin-bottom: 14px; }
+#chwrap h2 { font-size: 1.05em; color: #f39c12; margin-bottom: 6px; font-weight: normal; }
+#chwrap h2 .cnt { color: #4da6ff; }
+</style>
+</head>
+<body>
+<h1>📟 POCSAG — Paging Channels</h1>
+<div class="sub"><a href="/">&#8592; dashboard</a> &nbsp;|&nbsp; <a href="/pocsag.json">live status (JSON)</a> &nbsp;|&nbsp; <a href="/pocsaglog.json">page log (JSON)</a> &nbsp;|&nbsp; 466.0 MHz ± 1200 kHz · every channel decoded in parallel · 1200 baud 2-FSK</div>
+<div id="stats">Loading...</div>
+<div id="chwrap">
+    <h2>📡 Tracked channels — <span class="cnt" id="chcount">&hellip;</span></h2>
+    <table>
+    <thead><tr>
+        <th>frequency</th><th>level</th><th>last seen</th><th>pages</th>
+    </tr></thead>
+    <tbody id="chrows"><tr><td colspan="4" class="muted">Loading channels...</td></tr></tbody>
+    </table>
+</div>
+<table>
+<thead><tr>
+    <th>time</th><th>channel</th><th>RIC</th><th>func</th><th>type</th><th>message</th>
+</tr></thead>
+<tbody id="rows"><tr><td colspan="6" class="muted">Loading pages...</td></tr></tbody>
+</table>
+<script src="/pocsag.js"></script>
+</body>
+</html>

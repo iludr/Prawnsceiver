@@ -107,5 +107,41 @@ assert pocsag.decode_band(lambda k0, n: noise[k0:k0 + n],
                           len(noise), 0.0, fs) is None
 print("5. noise-only band rejected OK")
 
+# ---- 6. BandDecoder: two paging channels in one 2.4 MHz capture ----
+# The live-role DSP core: channel discovery + parallel decode,
+# fed whole IQ batches like pocsag_capture_thread does
+fs = 2_400_000
+TUNER = 466_060_000.0          # raw-stream center
+rng = np.random.default_rng(11)
+n_iq = int(4.0 * fs)
+band = (rng.normal(0, 6, n_iq) + 1j * rng.normal(0, 6, n_iq)).astype(np.complex64)
+tx1 = build_transmission([(123456, 0, '01234')], n_batches=2)
+tx2 = build_transmission([(200003, 3, 'HELLO')], n_batches=2)
+def fsk_tx(bits, offset_hz, amp=60.0, dev=2400.0):
+    f = np.where(np.array([int(c) for c in bits]) == 1, dev, -dev)
+    f_rep = np.repeat(f, fs // 1200) + offset_hz
+    ph = 2 * np.pi * np.cumsum(f_rep) / fs
+    return (amp * np.exp(1j * ph)).astype(np.complex64)
+sig1 = fsk_tx(tx1, (466_220_000.0 - TUNER))    # raw +160 kHz
+sig2 = fsk_tx(tx2, (465_970_000.0 - TUNER))    # raw -90 kHz
+band[:len(sig1)] += sig1[:len(band)]
+band[:len(sig2)] += sig2[:len(band)]
+dec = pocsag.BandDecoder("test:0", TUNER, fs)
+pages_all = []
+t_sim = 0.0
+for k in range(0, n_iq, 32768):
+    t_sim += 32768 / fs
+    pages_all.extend(dec.feed(band[k:k + 32768], now=t_sim))
+chan_mhz = sorted(dec.channel_status().values(), key=lambda c: c['freq_mhz'])
+assert len(chan_mhz) == 2, chan_mhz            # both channels found
+freqs = [c['freq_mhz'] for c in chan_mhz]
+assert abs(freqs[0] - 465.970) < 0.02 and abs(freqs[1] - 466.220) < 0.02, freqs
+got = {}
+for p in pages_all:
+    got.setdefault(round(p['channel_mhz'], 2), {})[p['addr']] = p
+assert 123456 in got.get(466.22, {}) and got[466.22][123456]['text'] == '01234', got
+assert 200003 in got.get(465.97, {}) and got[465.97][200003]['text'] == 'HELLO', got
+print("6. BandDecoder: two paging channels discovered + both pages decoded OK")
+
 print("ALL POCSAG TESTS PASSED")
 os._exit(0)

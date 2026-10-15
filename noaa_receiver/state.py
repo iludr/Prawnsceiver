@@ -161,3 +161,15 @@ aprs_stations = {}
 aprs_stations_all = {}
 aprs_packets = deque(maxlen=60)
 aprs_stats = {}       # frames / bad / floor of the running demodulator
+
+# POCSAG paging (see noaa_receiver/decoding/pocsag.py): a dongle in
+# the POCSAG role tunes to config.PAGING_CENTER_HZ and decodes every
+# paging channel in the 2.4 MHz capture. pocsag_channels maps kHz ->
+# live channel status, pocsag_pages keeps the most recent decoded
+# pages (the newest 100 are restored from the pocsag_messages log at
+# startup).
+pocsag_lock = threading.Lock()
+pocsag_enabled = False
+pocsag_dongle = None
+pocsag_channels = {}
+pocsag_pages = deque(maxlen=100)

@@ -393,6 +393,20 @@ wait_for(lambda: entry['last_data'] > 0 and not entry['ais'], what='satellite ca
 expect_cmd(137620000)         # back on the shared idle frequency
 print("9b AIS toggle: role flip both ways, 162 MHz tune, recording flag dropped OK")
 
+# 9c. POCSAG role switch: unknown dongle rejected, the flag flips and
+# persists, switching to AIS clears it (one dedicated role per dongle)
+assert radio.set_dongle_pocsag("nope:1", True) is False
+assert radio.set_dongle_pocsag(DID, True) is True
+with state.status_lock:
+    assert entry["pocsag"] and not entry["ais"]
+rows = db.query("SELECT pocsag FROM dongles")
+assert rows and rows[0]["pocsag"] == 1, "role must persist"
+assert radio.set_dongle_ais(DID, True) is True
+with state.status_lock:
+    assert entry["ais"] and not entry["pocsag"], "AIS must clear the POCSAG role"
+assert radio.set_dongle_ais(DID, False) is True
+print("9c POCSAG role switch: flag, persistence, role exclusivity OK")
+
 # 11. pause/play (dashboard button): pause closes the stream, the capture
 # thread exits (recording closed, no reconnect while paused - the
 # supervisor skips paused dongles); play clears the flag and capture

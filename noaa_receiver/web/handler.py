@@ -12,12 +12,12 @@ from .. import state
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    PASS_HISTORY_FILE, RECORD_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
 
-from ..decoding import ais, aprs, orbcomm
+from ..decoding import ais, aprs, orbcomm, pocsag
 from ..sdr import scan
 from ..decoding.decode import decode_recording, forget_decode_marker
 from .history import _load_history, get_recordings, quality_map, set_recording_quality
 from .pages import (AIS_HTML, APRS_HTML, CONSOLE_HTML, HISTORY_HTML,
-                    ORBCOMM_HTML)
+                    ORBCOMM_HTML, POCSAG_HTML)
 from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
@@ -50,6 +50,7 @@ def _dongle_list():
                 "orbcomm": bool(e.get("orbcomm")),
                 "aprs": bool(e.get("aprs")),
                 "aprs_iss": bool(e.get("aprs_iss")),
+                "pocsag": bool(e.get("pocsag")),
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
                 "connected": bool(e.get("connected")),
@@ -244,6 +245,8 @@ _WS_TOPICS = {
     'aprslog':      (10.0, lambda p: aprs.aprs_log(_aislog_count(p))),
     'aprs_stations': (30.0, lambda p: aprs.stations_registry()),
     'aprsmsgs':     (10.0, lambda p: aprs.messages_view(_aislog_count(p))),
+    'pocsag':       (5.0,  lambda p: pocsag.pocsag_status()),
+    'pocsaglog':    (10.0, lambda p: pocsag.pocsag_log(_aislog_count(p))),
     'pass_history': (8.0,  lambda p: _load_history()),
 }
 
@@ -572,6 +575,13 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps(aprs.aprs_status()).encode())
+        elif self.path == '/pocsag.json':
+            # POCSAG: tracked paging channels + recent pages
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(pocsag.pocsag_status()).encode())
         elif self.path.startswith('/aprslog.json'):
             # Tail of the persistent decoded-frame log (?count=N, max 2000)
             query = parse_qs(urlparse(self.path).query)
@@ -584,6 +594,18 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps(aprs.aprs_log(count)).encode())
+        elif self.path.startswith('/pocsaglog.json'):
+            # Newest-first tail of the persistent decoded-page log
+            query = parse_qs(urlparse(self.path).query)
+            try:
+                count = int((query.get('count') or ['200'])[0])
+            except ValueError:
+                count = 200
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(pocsag.pocsag_log(count)).encode())
         elif self.path.startswith('/aprsmsgs.json'):
             # Person-to-person APRS text messages (':ADDRESSEE:text'
             # frames from the persistent log, telemetry definitions
@@ -647,6 +669,12 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(APRS_HTML.encode())
+        elif self.path == '/pocsag' or self.path == '/pocsag.html':
+            # POCSAG page: tracked paging channels + decoded pages
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(POCSAG_HTML.encode())
         elif self.path.split('?')[0] == '/ship_tracks.json':
             # 24 h position tracks for the AIS page's 'path on map'
             # multi-select: ?mmsi=123,456&hours=24
@@ -1252,13 +1280,14 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
                 return
-            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
-                # A dedicated capture thread (AIS/Orbcomm/APRS) does not
-                # record raw IQ
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') \
+                    or entry.get('pocsag'):
+                # A dedicated capture thread (AIS/Orbcomm/APRS/POCSAG)
+                # does not record raw IQ
                 self.send_response(400)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Dongle is in a dedicated role (AIS/Orbcomm/APRS)'}).encode())
+                self.wfile.write(json.dumps({'success': False, 'error': 'Dongle is in a dedicated role (AIS/Orbcomm/APRS/POCSAG)'}).encode())
                 return
             stop = (query.get('stop') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
             with state.status_lock:
@@ -1275,6 +1304,20 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'success': True, 'manual_recording': not stop}).encode())
+        elif self.path.split('?')[0] == '/pocsag_dongle':
+            # Switch one dongle between satellite tracking and the
+            # POCSAG paging role: /pocsag_dongle?d=<id>&on=1 parks it
+            # on the paging band and decodes every paging channel
+            # found in the 2.4 MHz capture; on=0 returns to satellites.
+            query = parse_qs(urlparse(self.path).query)
+            dev = (query.get('d') or [''])[0]
+            on = (query.get('on') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
+            ok = radio.set_dongle_pocsag(dev, on)
+            self.send_response(200 if ok else 404)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'success': ok}).encode())
         elif self.path.split('?')[0] == '/fit_bw':
             # Fit the recorded (demod) bandwidth of one dongle to the signal
             # currently on its tune: measures the live spectrum and sets the

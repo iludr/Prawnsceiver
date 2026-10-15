@@ -1242,8 +1242,8 @@
                     // 137.0-138.0 MHz downlink band), the APRS dongle on
                     // 144.8 MHz (145.825 with the ISS checkbox set) —
                     // none follow the shared satellite tune
-                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_iss ? 145.825 : 144.8) : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
-                        ? d.manual_frequency_mhz : lastSharedMHz)));
+                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_iss ? 145.825 : 144.8) : (d.pocsag ? 466.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
+                        ? d.manual_frequency_mhz : lastSharedMHz))));
                     updateDongleCard(d);
                 }
                 // the overlay follows per-dongle geometry (recorded
@@ -1807,6 +1807,25 @@
             aprsIssBox.style.cssText = 'accent-color:#53d769;margin-right:6px;';
             const aprsIssTxt = document.createElement('span');
             aprsIssTxt.textContent = '🛰 ISS digipeater (145.825 MHz)';
+            // POCSAG role button (like AIS/Orbcomm/APRS): parks the
+            // dongle on the paging band, decodes every channel
+            const pocsagBtn = document.createElement('button');
+            pocsagBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
+            pocsagBtn.title = 'Tune this dongle to the paging band (466.0 MHz) and decode every POCSAG channel found — satellite reception on it pauses until you switch back';
+            pocsagBtn.onclick = () => {
+                const on = !(c.lastD && c.lastD.pocsag);
+                fetch('/pocsag_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(on ? '📟 Switching this dongle to POCSAG — paging channels decoded live'
+                                     : '📟 Dongle back to satellite tracking');
+                        } else {
+                            toast('POCSAG switch failed', true);
+                        }
+                    })
+                    .catch(() => toast('POCSAG switch failed: receiver unreachable', true));
+            };
             aprsIssRow.appendChild(aprsIssBox); aprsIssRow.appendChild(aprsIssTxt);
             aprsIssBox.onchange = () => {
                 const on = aprsIssBox.checked;
@@ -1843,12 +1862,12 @@
                     })
                     .catch(() => toast('Pause failed: receiver unreachable', true));
             };
-            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(orbBtn); card.appendChild(aprsBtn); card.appendChild(aprsIssRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
+            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(orbBtn); card.appendChild(aprsBtn); card.appendChild(aprsIssRow); card.appendChild(pocsagBtn); card.appendChild(pauseBtn); card.appendChild(removeBtn);
             col.appendChild(card);
             c = dongleCards[d.id] = {
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
-                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, orbBtn, aprsBtn, aprsIssRow, aprsIssBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
+                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, orbBtn, aprsBtn, aprsIssRow, aprsIssBox, pocsagBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secBw, secScan, modeRow, modeSel, modeHint,
             };
@@ -1894,6 +1913,13 @@
             // already flipped it locally; this only follows external
             // changes, e.g. a second browser tab)
             if (c.issLast !== !!d.aprs_iss) { c.issLast = !!d.aprs_iss; c.aprsIssBox.checked = c.issLast; }
+            // POCSAG role button mirrors the dongle's pocsag flag
+            const poc = !!d.pocsag;
+            const pocTxt = poc ? '📟 Back to satellites' : '📟 Decode POCSAG paging';
+            if (c.pocsagBtn._last !== pocTxt) { c.pocsagBtn._last = pocTxt; c.pocsagBtn.textContent = pocTxt; }
+            c.pocsagBtn.style.background = poc ? '#1a2a3e' : '#0f3460';
+            c.pocsagBtn.style.color = poc ? '#f39c12' : '#4da6ff';
+            c.pocsagBtn.style.borderColor = poc ? '#f39c12' : '#4da6ff';
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
             // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise
@@ -1976,6 +2002,7 @@
             if (d.ais) { fTxt = '🚢 AIS 161.975 / 162.025 MHz'; fCol = '#4da6ff'; }
             else if (d.orbcomm) { fTxt = '🛰 Orbcomm 137.0-138.0 MHz (center 137.5)'; fCol = '#b39ddb'; }
             else if (d.aprs) { fTxt = '📡 APRS ' + (d.aprs_iss ? '145.825 MHz (ISS)' : '144.800 MHz'); fCol = '#53d769'; }
+            else if (d.pocsag) { fTxt = '📟 POCSAG 466.0 MHz (±1.2 MHz)'; fCol = '#f39c12'; }
             else if (eff !== null) {
                 fTxt = eff.toFixed(4) + ' MHz' + (d.manual_frequency_mhz ? ' (manual)' : '');
                 fCol = d.manual_frequency_mhz ? '#f39c12' : '#53d769';

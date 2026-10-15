@@ -319,12 +319,14 @@ def _persist_dongles():
                 else:
                     host, port = e['host'], int(e['port'])
                 cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
-                            " aprs, aprs_iss, added_ts) VALUES (?,?,?,?,?,?,?)",
+                            " aprs, aprs_iss, pocsag, added_ts)"
+                            " VALUES (?,?,?,?,?,?,?,?)",
                             (host, port,
                              1 if e.get('ais') else 0,
                              1 if e.get('orbcomm') else 0,
                              1 if e.get('aprs') else 0,
-                             1 if e.get('aprs_iss') else 0, time.time()))
+                             1 if e.get('aprs_iss') else 0,
+                             1 if e.get('pocsag') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -478,6 +480,7 @@ def set_dongle_ais(did, on):
             # set_dongle_orbcomm / set_dongle_aprs)
             entry['orbcomm'] = False
             entry['aprs'] = False
+            entry['pocsag'] = False
         if on:
             # An AIS capture thread neither records nor demodulates FM —
             # a manual recording left over from satellite mode would sit
@@ -512,6 +515,7 @@ def set_dongle_orbcomm(did, on):
         if on:
             entry['ais'] = False     # one dedicated role per dongle
             entry['aprs'] = False
+            entry['pocsag'] = False
             state.manual_recording.pop(did, None)
     if on:
         state.log_console(f"🛰 Dongle {did} switched to Orbcomm (137.0-138.0 MHz) — satellite reception on it paused")
@@ -540,6 +544,7 @@ def set_dongle_aprs(did, on):
         if on:
             entry['ais'] = False     # one dedicated role per dongle
             entry['orbcomm'] = False
+            entry['pocsag'] = False
             state.manual_recording.pop(did, None)
     if on:
         freq = ("145.825 MHz (ISS digipeater)" if entry.get('aprs_iss')
@@ -550,6 +555,38 @@ def set_dongle_aprs(did, on):
     _persist_dongles()
     _stop_capture(entry)
     return True
+
+
+def set_dongle_pocsag(did, on):
+    """Switch one dongle between satellite tracking and the POCSAG
+    paging role (dashboard button, mirroring set_dongle_ais): on=1
+    parks it on config.PAGING_CENTER_HZ - one 2.4 MHz capture covers
+    the whole local paging ecosystem - and EVERY paging channel
+    found there is decoded in parallel (see
+    noaa_receiver/decoding/pocsag.py). The capture thread restarts
+    in the new role within ~2 s; the dongle stays registered.
+    Unknown id: False; a no-op request still succeeds."""
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return False
+    on = bool(on)
+    if bool(entry.get('pocsag')) == on:
+        return True
+    with state.status_lock:
+        entry['pocsag'] = on
+        if on:
+            entry['ais'] = False     # one dedicated role per dongle
+            entry['orbcomm'] = False
+            entry['aprs'] = False
+            state.manual_recording.pop(did, None)
+    if on:
+        state.log_console(f"📟 Dongle {did} switched to POCSAG paging (466.0 MHz) — satellite reception on it paused")
+    else:
+        state.log_console(f"📟 Dongle {did} switched back to satellite tracking")
+    _persist_dongles()
+    _stop_capture(entry)
+    return True
+
 
 def set_dongle_aprs_iss(did, on):
     """Flip one dongle's APRS channel between the European simplex
@@ -583,12 +620,15 @@ def load_dongles():
     it has rows, else calibration.DEFAULT_DONGLES (persisted right away,
     so later dashboard additions update the database)."""
     entries = [(r['host'], r['port'], bool(r['ais']), bool(r['orbcomm']),
-                bool(r['aprs']), bool(r['aprs_iss']))
+                bool(r['aprs']), bool(r['aprs_iss']), bool(r['pocsag']))
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
-                                 " aprs_iss FROM dongles ORDER BY port, host")]
+                                 " aprs_iss, pocsag FROM dongles"
+                                 " ORDER BY port, host")]
     if not entries:
-        entries = [(h, p, False, False, False, False) for h, p in DEFAULT_DONGLES]
-    for host, port, was_ais, was_orbcomm, was_aprs, was_iss in entries:
+        entries = [(h, p, False, False, False, False, False)
+                   for h, p in DEFAULT_DONGLES]
+    for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_pocsag \
+            in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -615,6 +655,13 @@ def load_dongles():
                 state.sdrs[did]['aprs_iss'] = was_iss
             state.log_console(f"Dongle {did} restored to APRS (ham packet radio)"
                               + (" — ISS digipeater 145.825 MHz" if was_iss else "")
+                              + " - persisted role")
+        elif was_pocsag:
+            # and the POCSAG role: the receiver resumes on the paging
+            # band (every channel decoded, see decoding/pocsag.py)
+            with state.status_lock:
+                state.sdrs[did]['pocsag'] = True
+            state.log_console(f"Dongle {did} restored to POCSAG (paging)"
                               + " - persisted role")
     _persist_dongles()
 
@@ -680,6 +727,10 @@ def sdr_thread():
                     from ..decoding.aprs import aprs_capture_thread
                     t = threading.Thread(target=aprs_capture_thread, args=(did,),
                                          daemon=True, name=f'aprs-{did}')
+                elif entry.get('pocsag'):
+                    from ..decoding.pocsag import pocsag_capture_thread
+                    t = threading.Thread(target=pocsag_capture_thread, args=(did,),
+                                         daemon=True, name=f'pocsag-{did}')
                 else:
                     t = threading.Thread(target=sdr_capture_thread, args=(did,),
                                          daemon=True, name=f'sdr-{did}')
@@ -976,8 +1027,8 @@ def sdr_capture_thread(did):
             close_wav()
             finalize_manual_rec()
             return
-        if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
-            # AIS or Orbcomm was switched on from the dashboard after this
+        if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or entry.get('pocsag'):
+            # AIS, Orbcomm or POCSAG was switched on from the dashboard after this
             # thread started: hand the dongle over to the supervisor's
             # dedicated capture thread for the new role
             close_wav()
@@ -1045,7 +1096,7 @@ def sdr_capture_thread(did):
                 # in its reconnect backoff (the socket close missed it)
                 # — without this check the thread would reconnect as
                 # a ghost and hold the dongle forever
-                if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
+                if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or entry.get('pocsag'):
                     break
                 raw = reader.read_batch(CAPTURE_BATCH)
                 if raw is None:
@@ -1301,7 +1352,8 @@ def sdr_capture_thread(did):
 
         except Exception as e:
             if not entry.get('closed') and not entry.get('ais') \
-                    and not entry.get('orbcomm') and not entry.get('paused'):   # a removed/role-switched/paused dongle's socket is
+                    and not entry.get('orbcomm') and not entry.get('paused') \
+                    and not entry.get('pocsag'):   # a removed/role-switched/paused dongle's socket is
                 state.log_console(f"SDR thread error (dongle {did}): {e}", "error")  # closed under the thread — not an error
         entry['connected'] = False
         entry['sock'] = None

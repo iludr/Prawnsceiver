@@ -92,6 +92,11 @@ CREATE TABLE IF NOT EXISTS orbcomm_messages (
     id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
 CREATE INDEX IF NOT EXISTS orbcomm_messages_ts ON orbcomm_messages(ts);
 
+-- Rolling decoded POCSAG page log; trimmed by ts
+CREATE TABLE IF NOT EXISTS pocsag_messages (
+    id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
+CREATE INDEX IF NOT EXISTS pocsag_messages_ts ON pocsag_messages(ts);
+
 -- Rolling APRS decoded-frame log; trimmed by ts
 CREATE TABLE IF NOT EXISTS aprs_messages (
     id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
@@ -135,6 +140,11 @@ def connect():
                 # (145.825 MHz instead of 144.800 MHz)
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN aprs_iss INTEGER DEFAULT 0")
+                _conn.commit()
+            if "pocsag" not in cols:
+                # POCSAG dongle role (see decoding/pocsag.py)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN pocsag INTEGER DEFAULT 0")
                 _conn.commit()
             # One-time repair: the pre-explicit-column positional
             # INSERTs wrote the orbcomm flag into added_ts and the

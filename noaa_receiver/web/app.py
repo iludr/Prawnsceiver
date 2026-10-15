@@ -39,6 +39,10 @@ def main():
     # Every APRS station ever received (queried via /aprs_stations.json
     # and the WS 'aprs_stations' topic)
     _aprs.load_stations()
+    # Startup summary of the persistent POCSAG page log (count only)
+    # plus the newest pages into the live ring
+    from ..decoding import pocsag as _pocsag
+    _pocsag.load_pages()
 
     # Start scheduler thread (TLE refresh + pass prediction + frequency switching)
     threading.Thread(target=scheduler_thread, daemon=True).start()
