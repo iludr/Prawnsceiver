@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NOAAh's CrabArk — APRS Packet Log</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 12px 15px; }
@@ -20,6 +21,7 @@ td { padding: 3px 6px; border-bottom: 1px solid #16213e; white-space: nowrap; }
 td.txt { white-space: normal; }
 tr:hover td { background: #16213e; }
 .t { color: #666; }
+.cnt { color: #f39c12; }
 .call { color: #b39ddb; font-weight: bold; }
 .via { color: #888; font-size: 0.8em; }
 .pos a { color: #4da6ff; text-decoration: none; }
@@ -28,6 +30,16 @@ tr:hover td { background: #16213e; }
 .txt { color: #e0e0e0; }
 .na { color: #555; }
 .muted { color: #666; padding: 10px; }
+#mapwrap { margin-bottom: 14px; }
+#mapinfo { font-size: 0.85em; color: #888; margin: 4px 0 6px; display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
+#fitbtn { background: #0f3460; color: #b39ddb; border: 1px solid #b39ddb; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
+#fitbtn:hover { background: #16294e; }
+#map { height: 460px; border: 1px solid #0f3460; border-radius: 4px; background: #000; }
+.leaflet-tile { filter: brightness(0.9) saturate(0.85); }
+.leaflet-container { background: #000; font-family: monospace; }
+.stnIcon { position: relative; width: 28px; height: 28px; }
+.stnIcon .dot { position: absolute; left: 8px; top: 8px; width: 12px; height: 12px; background: #b39ddb; border: 2px solid #10131f; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+.stnIcon .lbl { position: absolute; top: 26px; left: 50%; transform: translateX(-50%); white-space: nowrap; font: 10px monospace; color: #e0e0e0; text-shadow: 0 1px 2px #000, 0 0 2px #000; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -46,6 +58,13 @@ tr:hover td { background: #16213e; }
     <span id="loadinfo"></span>
 </div>
 <div id="stats">Loading...</div>
+<div id="mapwrap">
+    <div id="mapinfo">
+        <span id="mapstats">map: waiting for station positions…</span>
+        <button id="fitbtn" title="Zoom/pan the map to all stations">&#8690; fit stations</button>
+    </div>
+    <div id="map"></div>
+</div>
 <table>
 <thead><tr><th colspan="5">stations heard this run</th></tr>
     <tr>
@@ -56,10 +75,11 @@ tr:hover td { background: #16213e; }
 </table>
 <table>
 <thead><tr>
-    <th>time</th><th>from</th><th>to</th><th>via</th><th>position</th><th>text</th>
+    <th>time</th><th>&times;</th><th>from</th><th>to</th><th>via</th><th>position</th><th>text</th>
 </tr></thead>
-<tbody id="rows"><tr><td colspan="6" class="muted">Loading APRS log...</td></tbody>
+<tbody id="rows"><tr><td colspan="7" class="muted">Loading APRS log...</td></tr></tbody>
 </table>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/aprs.js"></script>
 </body>
 </html>

@@ -44,33 +44,132 @@ function applyStatus(s) {
 }
 
 // Log tail render — shared by the /aprslog.json fallback poll and the
-// WS 'aprslog' topic push (the server pushes the subscribed count)
+// WS 'aprslog' topic push. Identical frames (same call, destination,
+// path and text — the typical beacon repeated every few minutes)
+// collapse into one row: ×count, newest time, position from the newest
+// frame that carries one. The map is fed per-callsign from the same
+// window (latest decoded position of each station).
 function applyLog(log) {
-    document.getElementById('loadinfo').textContent = ' · showing ' + log.length + ' frames';
+    const groups = [];               // unique frames, newest occurrence first
+    const byKey = new Map();
+    const callPos = new Map();       // call -> newest log entry with a position
+    const callCount = new Map();     // call -> frames in this window
+    for (const e of log) {
+        callCount.set(e.call, (callCount.get(e.call) || 0) + 1);
+        if (e.lat !== null && e.lat !== undefined && !callPos.has(e.call))
+            callPos.set(e.call, e);            // iteration is newest -> oldest
+        const k = e.call + '\u0001' + e.dst + '\u0001' + (e.via || '') + '\u0001' + (e.text || '');
+        let g = byKey.get(k);
+        if (!g) {
+            g = { newest: e, oldest: e, count: 0, pos: null };
+            byKey.set(k, g);
+            groups.push(g);
+        }
+        g.count++;
+        g.oldest = e;
+        if (g.pos === null && e.lat !== null && e.lat !== undefined) g.pos = e;
+    }
+    document.getElementById('loadinfo').textContent =
+        ' · ' + log.length + ' frame' + (log.length === 1 ? '' : 's')
+        + ' → ' + groups.length + ' unique';
     const rows = document.getElementById('rows');
-    if (!log.length) {
-        rows.innerHTML = '<tr><td colspan="6" class="muted">No APRS frames decoded yet — the log fills as stations beacon.</td></tr>';
+    if (!groups.length) {
+        rows.innerHTML = '<tr><td colspan="7" class="muted">No APRS frames decoded yet — the log fills as stations beacon.</td></tr>';
+        updateMap(callPos, callCount);
         return;
     }
     let html = '';
-    for (const e of log) {
+    for (const g of groups) {
         let pos = null;
-        if (e.lat !== null && e.lat !== undefined) {
-            pos = '<a href="https://www.google.com/maps?q=' + e.lat + ',' + e.lon
-                + '" target="_blank" rel="noopener">' + e.lat.toFixed(4) + ', ' + e.lon.toFixed(4) + '</a>'
-                + ' ' + esc(e.sym || '');
+        if (g.pos) {
+            pos = '<a href="https://www.google.com/maps?q=' + g.pos.lat + ',' + g.pos.lon
+                + '" target="_blank" rel="noopener">' + g.pos.lat.toFixed(4) + ', ' + g.pos.lon.toFixed(4) + '</a>'
+                + ' ' + esc(g.pos.sym || '');
         }
+        const cnt = g.count > 1
+            ? '<td class="cnt" title="first ' + esc(g.oldest.time) + ' · newest ' + esc(g.newest.time) + '">&times;' + g.count + '</td>'
+            : '<td></td>';
         html += '<tr>'
-            + cell(esc(e.time), 't')
-            + cell(esc(e.call), 'call')
-            + cell(esc(e.dst), 'via')
-            + cell(esc(e.via || ''), 'via')
+            + cell(esc(g.newest.time), 't')
+            + cnt
+            + cell(esc(g.newest.call), 'call')
+            + cell(esc(g.newest.dst), 'via')
+            + cell(esc(g.newest.via || ''), 'via')
             + cell(pos, 'pos')
-            + cell(esc(e.text || ''), 'txt')
+            + cell(esc(g.newest.text || ''), 'txt')
             + '</tr>';
     }
     rows.innerHTML = html;
+    updateMap(callPos, callCount);
 }
+
+// ---------- station map (Leaflet + OpenStreetMap, like the AIS page) ----
+// One marker per callsign at its newest decoded position; the popup
+// shows the frame count of the loaded window and the last frame text.
+let map = null, markers = {}, fitted = false;
+function initMap() {
+    if (typeof L === 'undefined') {
+        const d = document.getElementById('map');
+        d.innerHTML = '<div class="muted">Map library (Leaflet CDN) unreachable — the log below still works.</div>';
+        d.style.height = 'auto';
+        return;
+    }
+    map = L.map('map').setView([48.99, 12.09], 13);   // Regensburg, refit to stations on data
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+    document.getElementById('fitbtn').onclick = () => { fitted = false; fitStations(); };
+}
+function stationIcon(call) {
+    return L.divIcon({
+        className: '',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+        popupAnchor: [0, -12],
+        html: '<div class="stnIcon"><div class="dot"></div>'
+            + '<div class="lbl">' + esc(call) + '</div></div>'
+    });
+}
+function stationPopup(e, count) {
+    return '<b>' + esc(e.call) + '</b> · ' + count + ' frame' + (count === 1 ? '' : 's') + '<br>'
+        + 'last: ' + esc(e.time) + ' · ' + esc(e.dst) + (e.via ? ' via ' + esc(e.via) : '') + '<br>'
+        + '<a href="https://www.google.com/maps?q=' + e.lat + ',' + e.lon + '" target="_blank" rel="noopener">'
+        + e.lat.toFixed(4) + ', ' + e.lon.toFixed(4) + '</a>' + (e.sym ? ' · ' + esc(e.sym) : '') + '<br>'
+        + esc(e.text || '');
+}
+function fitStations() {
+    if (!map || !fitted) return;
+    const ms = Object.values(markers);
+    if (!ms.length) return;
+    map.fitBounds(L.latLngBounds(ms.map(m => m.getLatLng())).pad(0.25));
+}
+function updateMap(callPos, callCount) {
+    if (!map) return;
+    const seen = new Set();
+    let onMap = 0;
+    for (const [call, e] of callPos) {
+        seen.add(call);
+        onMap++;
+        let m = markers[call];
+        if (!m) {
+            m = markers[call] = L.marker([e.lat, e.lon], { title: call }).addTo(map);
+            m.bindPopup(stationPopup(e, callCount.get(call) || 1));
+        } else {
+            m.setLatLng([e.lat, e.lon]);
+            m.setPopupContent(stationPopup(e, callCount.get(call) || 1));
+        }
+    }
+    for (const k of Object.keys(markers)) {
+        if (!seen.has(k)) { map.removeLayer(markers[k]); delete markers[k]; }
+    }
+    const noPos = callCount.size - onMap;
+    if (onMap && !fitted) { fitted = true; fitStations(); }
+    document.getElementById('mapstats').textContent =
+        onMap + ' station' + (onMap === 1 ? '' : 's') + ' with position on the map'
+        + (noPos > 0 ? ' · ' + noPos + ' without position yet' : '');
+}
+initMap();
 
 async function load() {
     try {
