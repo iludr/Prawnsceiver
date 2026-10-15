@@ -7,6 +7,13 @@ in it with per-signal timing, and a modulation probe that recognizes
 the PT2262/EV1527-family fixed-code OOK remotes and pre-decodes their
 repeated codes.
 
+The spectrum center is the TUNER frequency (display center plus the
+offset tuning and the calibration correction): in the raw stream
+the dongle's LO/DC spike sits at 0 Hz and the displayed center at
+-offset. Sparse bursts (radar, DME, impulsive noise) average away,
+so a per-bin max-hold is tracked as well and peaks that only stand
+out there are reported as sparse_signals; the LO spike is flagged.
+
 Memory-safe by design: the uint8 IQ file is memmapped and processed
 FFT-window by FFT-window, and the number of windows is capped
 (max_windows) regardless of recording length - a 120 s capture costs
@@ -30,18 +37,29 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
     fixed codes)."""
     out = {
         "center_freq_hz": center_hz,
+        "center_note": ("the raw stream's center = the tuner command "
+                        "frequency (display center + offset tuning + "
+                        "calibration correction)"),
         "sample_rate_hz": fs,
         "how_to_use": (
-            "Read this first: 'emitters' lists every signal found in the "
-            "capture with absolute frequency, level, duty cycle and "
-            "modulation. 'spectrum.dbfs_x10' is the time-averaged spectrum "
-            "(dBFS*10, bins of 'spectrum.bin_hz', offset from "
-            "center_freq_hz). raw_iq.u8 is only needed for deep dives the "
-            "pre-computed hints cannot answer; decoded codes are heuristic "
-            "- verify against the raw file before acting on them."),
-        "spectrum": {"bins": _N, "bin_hz": fs // _N, "dbfs_x10": []},
+            "Read this first: 'emitters' lists every signal found in "
+            "the capture with absolute RF frequency, level, duty cycle "
+            "and modulation; 'sparse_signals' the ones only visible in "
+            "the max-hold (radar, DME, impulsive interference - "
+            "averaged away in the average spectrum). "
+            "'spectrum.dbfs_x10' is the time-averaged spectrum, "
+            "'spectrum.peak_dbfs_x10' the per-bin max-hold (both "
+            "dBFS*10, bins of 'spectrum.bin_hz', offsets from "
+            "center_freq_hz = the tuner frequency, the raw stream's "
+            "center). 'dc_or_lo_spike' marks the dongle's own LO "
+            "leakage at the tuner frequency. raw_iq.u8 is only needed "
+            "for deep dives; decoded codes are heuristic - verify "
+            "against the raw file before acting on them."),
+        "spectrum": {"bins": _N, "bin_hz": fs // _N, "dbfs_x10": [],
+               "peak_dbfs_x10": []},
         "noise_floor_dbfs": None,
         "emitters": [],
+        "sparse_signals": [],
     }
     try:
         mm = np.memmap(iq_path, dtype=np.uint8, mode="r")
@@ -59,21 +77,24 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
 
     win = np.hanning(_N).astype(np.float32)
     step = max(_N, (n_cplx - _N) // max_windows + 1)
+    # Full scale: a Hann-windowed sine spanning the uint8 range
+    # (+/-127.5 after the DC offset) - the same dBFS convention as the
+    # live waterfall's dBFS rows
+    full_scale = 0.25 * _N * 127.5
 
-    # Capped spectrogram rows + averaged power spectrum
+    # Capped spectrogram rows + averaged power spectrum + max-hold
     rows, acc, acc_n = [], np.zeros(_N), 0
+    peak = np.full(_N, -999.0)
     k = 0
     while k + _N <= n_cplx:
         m = np.abs(np.fft.fftshift(np.fft.fft(getc(k, _N) * win)))
         rows.append(m)
         acc += m * m
         acc_n += 1
+        np.maximum(peak, 20.0 * np.log10(m / full_scale + 1e-9),
+                   out=peak)
         k += step
     S = np.asarray(rows)
-    # Full scale: a Hann-windowed sine spanning the uint8 range
-    # (+/-127.5 after the DC offset) - the same dBFS convention as the
-    # live waterfall's dBFS rows
-    full_scale = 0.25 * _N * 127.5
     # acc holds summed POWER: RMS amplitude = sqrt(mean power), and
     # dBFS is 20*log10(amplitude / full_scale)
     avg_db = 20.0 * np.log10(np.sqrt(acc / acc_n) / full_scale + 1e-9)
@@ -81,6 +102,8 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
     out["noise_floor_dbfs"] = round(floor, 1)
     out["spectrum"]["dbfs_x10"] = [int(v) for v in
                                    np.clip(avg_db * 10, -3276, 3276)]
+    out["spectrum"]["peak_dbfs_x10"] = [int(v) for v in
+                                        np.clip(peak * 10, -3276, 3276)]
 
     # Emitter clustering: bins 12 dB over the floor, dilated a few bins
     hot = avg_db > floor + 12.0
@@ -88,7 +111,8 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
     for d in range(1, 5):
         dil[d:] |= hot[:-d]
         dil[:-d] |= hot[d:]
-    emitters = []
+    covered = np.zeros(_N, dtype=bool)   # avg-detected bins (excluded
+    emitters = []                        # from the sparse pass)
     i = 0
     while i < _N:
         if not dil[i]:
@@ -145,9 +169,11 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
             "period_s": (round(float(np.median(np.diff(starts))) * step / fs, 2)
                          if len(starts) > 2 else None),
             "modulation": None,
+            "dc_or_lo_spike": abs(pk - _N // 2) <= 2,
             "_pk": pk,
             "_row": r_start,
         }
+        covered[i:j] = True
         emitters.append(e)
         i = j
     emitters.sort(key=lambda x: -x["peak_dbfs"])
@@ -161,6 +187,44 @@ def analyze_recording(iq_path, center_hz, fs, max_windows=4000):
         e.pop("_pk", None)
         e.pop("_row", None)
     out["emitters"] = emitters
+
+    # Sparse signals: peaks standing out only in the max-hold -
+    # radar, DME, impulsive interference average below the emitter
+    # threshold but are unmistakable per-bin peaks (observed live:
+    # 2026-10-15, the L-band recordings). Bins already covered by an
+    # avg-detected emitter are excluded; the dongle's own LO spike
+    # is flagged instead of reported as a signal.
+    sparse = []
+    ph = peak > floor + 15.0
+    ph &= ~covered
+    pd = ph.copy()
+    for d in range(1, 5):
+        pd[d:] |= ph[:-d]
+        pd[:-d] |= ph[d:]
+    i = 0
+    while i < _N:
+        if not pd[i]:
+            i += 1
+            continue
+        j = i
+        while j < _N and pd[j]:
+            j += 1
+        pk = i + int(np.argmax(peak[i:j]))
+        if ph[i:j].sum() < 3:
+            i = j
+            continue     # single-bin outlier: max-hold noise extreme
+        sparse.append({
+            "abs_mhz": round(center_hz / 1e6
+                             + (pk - _N // 2) * (fs / _N) / 1e6, 5),
+            "offset_khz": round((pk - _N // 2) * (fs / _N) / 1000.0, 1),
+            "peak_dbfs": round(float(peak[pk]), 1),
+            "width_khz": round((j - i) * (fs / _N) / 1000.0, 1),
+            "dc_or_lo_spike": abs(pk - _N // 2) <= 2,
+        })
+        if len(sparse) >= 12:
+            break
+        i = j
+    out["sparse_signals"] = sparse
     return out
 
 

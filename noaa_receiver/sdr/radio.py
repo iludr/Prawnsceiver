@@ -863,11 +863,12 @@ def sdr_capture_thread(did):
             "how_to_read": (
                 "raw_iq.u8 is the untouched dongle stream: interleaved "
                 "unsigned 8-bit I/Q pairs, DC level 127.5, "
-                f"{SDR_RATE} complex samples/s. The center frequency is "
-                "center_freq_hz (tuner command frequency minus the "
-                "offset tuning and the calibration correction); the "
-                "tuned signal sits at 0 Hz, the DC spike at "
-                "+offset_tuning_hz."),
+                f"{SDR_RATE} complex samples/s. The stream is centered "
+                "on tuner_freq_hz (the displayed center_freq_hz plus "
+                "the offset tuning and the calibration correction): "
+                "the dongle's LO/DC spike sits at 0 Hz, the displayed "
+                "center at -offset_tuning_hz. analysis.json lists "
+                "absolute RF frequencies on that convention."),
             "preflight": ("analysis.json - the server-side pre-flight "
                           "analysis (averaged spectrum, detected emitters "
                           "with modulation and decoded codes): read this "
@@ -929,7 +930,8 @@ def sdr_capture_thread(did):
             state.log_console(f"description.json write failed (dongle {did}): {e}", "warn")
 
         def _build_zip(base=base, iq_path=iq_path, png_path=png_path,
-                      freq_hz=meta['freq_hz']):
+                      tune_hz=meta['freq_hz'],
+                      corr_hz=meta['correction']):
             # Server-side pre-flight analysis first: the spectrum,
             # the emitters and pre-decoded codes let an analyst (or
             # an AI) start from a small JSON instead of crunching
@@ -938,7 +940,12 @@ def sdr_capture_thread(did):
             apath = base + '.analysis.json'
             try:
                 from ..analysis.iqscan import analyze_recording
-                analysis = analyze_recording(iq_path, freq_hz, SDR_RATE)
+                # The raw stream is centered on the TUNER frequency,
+                # not the displayed tune: pass center + offset +
+                # correction so analysis.json lists absolute RF
+                analysis = analyze_recording(
+                    iq_path,
+                    int(tune_hz + SDR_OFFSET_HZ + corr_hz), SDR_RATE)
                 with open(apath, 'w', encoding='utf-8') as jf:
                     json.dump(analysis, jf, indent=1)
             except Exception as e:
