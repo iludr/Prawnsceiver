@@ -190,35 +190,63 @@ for p in wavs():
     with wave.open(p) as w: assert w.getnframes() > 0, p
 print(f"6 pass end: WAV closed, {len(wavs())} valid WAVs: {[os.path.basename(p) for p in wavs()]}")
 
-# 6b. manual recording (dashboard Record button): records the idle tune,
-# is named for the tune (never the idle satellite, so pass attribution
-# cannot pick it up), survives the global recording pause, and stops on
-# command
+# 6b. manual raw recording (dashboard Record button): captures the idle
+# tune's UNTOUCHED uint8 IQ (no audio WAV any more), survives the global
+# recording pause, and stops into the analysis zip (raw_iq.u8 +
+# description.json + waterfall.png) that the dashboard auto-downloads
+import zipfile as zf
 with state.status_lock: state.manual_recording[DID] = True
-wait_for(lambda: entry['is_recording'] and state.is_recording, what='manual recording starts while idle')
-assert 'Manual_137.6200_MHz' in os.path.basename(entry['wav_path'] or ''), entry['wav_path']
-manual_wav = entry['wav_path']
+wait_for(lambda: entry.get('manual_iq') is not None, what='manual raw recording starts while idle')
+assert 'Manual_137.6200MHz' in entry['manual_meta']['base'], entry['manual_meta']['base']
+assert not entry['is_recording'], "manual raw recording must not open an audio WAV"
 with state.status_lock: state.recordings_paused = True      # pause must not stop it
 time.sleep(0.5)
-assert entry['is_recording'], "manual recording must survive the global pause"
+assert entry.get('manual_iq') is not None, "manual raw recording must survive the global pause"
 with state.status_lock: state.recordings_paused = False
 with state.status_lock: state.manual_recording.pop(DID, None)
-wait_for(lambda: not entry['is_recording'] and state.current_wav_path is None, what='manual recording stops on command')
-with wave.open(manual_wav) as w: assert w.getnframes() > 0 and w.getframerate() == 48000
-print("6b manual record: starts while idle, named for the tune, survives pause, stops OK")
+wait_for(lambda: entry.get('manual_iq') is None and entry.get('manual_zip'),
+         secs=8, what='manual recording finalizes into a zip')
+mzip6b = entry['manual_zip']
+with zf.ZipFile(os.path.join(radio.RECORD_DIR, 'manual', os.path.basename(mzip6b))) as z:
+    names = z.namelist()
+    assert 'raw_iq.u8' in names and 'description.json' in names, names
+    desc = json.loads(z.read('description.json'))
+    iqbytes = z.getinfo('raw_iq.u8').file_size
+assert iqbytes > 0 and desc['format']['complex_samples'] == iqbytes // 2, (iqbytes, desc['format'])
+assert desc['radio']['center_freq_hz'] == 137620000, desc['radio']
+assert desc['format']['sample_rate_hz'] == SDR_RATE, desc['format']
+assert 'waterfall.png' in names, names      # PIL present, rows collected
+print("6b manual raw record: raw IQ + zip + description.json + waterfall OK")
 
-# 6c. manual recording on a frequency override records the override band
+# 6c. manual recording on a frequency override records the override band;
+# the retune back finalizes it (a raw file must never span two tunes)
 with state.status_lock:
     state.manual_dongle_freq[DID] = 100000000
     state.manual_recording[DID] = True
 expect_cmd(100000000)
-wait_for(lambda: 'Manual_100.0000_MHz' in os.path.basename(entry['wav_path'] or ''), what='manual recording on the override band')
+wait_for(lambda: entry.get('manual_meta') is not None
+         and 'Manual_100.0000MHz' in entry['manual_meta']['base'],
+         what='manual raw recording on the override band')
 with state.status_lock:
-    state.manual_recording.pop(DID, None)
     state.manual_dongle_freq.pop(DID, None)
+    state.manual_recording.pop(DID, None)
 expect_cmd(137620000)
-wait_for(lambda: not entry['is_recording'], what='manual recording stops after the override is cleared')
-print("6c manual record on a frequency override: records the override band, stops OK")
+wait_for(lambda: entry.get('manual_iq') is None, what='retune finalizes the manual recording')
+wait_for(lambda: entry.get('manual_zip') not in (None, mzip6b),
+         secs=8, what='override-band zip built')
+print("6c manual raw record on a frequency override: records the override band, retune finalizes OK")
+
+# 6d. the MANUAL_REC_MAX_SECS cap auto-finalizes a forgotten recording
+_prev_cap = radio.MANUAL_REC_MAX_SECS
+radio.MANUAL_REC_MAX_SECS = 2
+_prev_zip = entry['manual_zip']
+with state.status_lock: state.manual_recording[DID] = True
+wait_for(lambda: entry.get('manual_iq') is not None, what='cap-test recording starts')
+wait_for(lambda: DID not in state.manual_recording
+         and entry.get('manual_zip') not in (None, _prev_zip),
+         secs=10, what='cap auto-finalizes into a fresh zip')
+radio.MANUAL_REC_MAX_SECS = _prev_cap
+print("6d manual raw recording cap: auto-finalized at the limit OK")
 
 # 7. WAV open failure must not kill the receiver; retried later
 # (wave.open is monkeypatched to fail while the flag is set: a chmod'd
@@ -270,11 +298,12 @@ print("9 unique names on fast re-split:", [n for n in names if 'Meteor-M_2-4' in
 from noaa_receiver.decoding import ais as _ais
 assert radio.set_dongle_ais('nope:1', True) is False    # unknown dongle
 with state.status_lock: state.manual_recording[DID] = True
-wait_for(lambda: entry['is_recording'], what='manual recording before the AIS switch')
+wait_for(lambda: entry.get('manual_iq') is not None, what='manual raw recording before the AIS switch')
 assert radio.set_dongle_ais(DID, True) is True
 assert db.query_one("SELECT ais FROM dongles")["ais"] == 1, "the AIS role must persist"
 wait_for(lambda: not t.is_alive(), secs=5, what='satellite thread exits after the AIS switch')
 assert entry['ais'] and not entry['is_recording']
+assert entry.get('manual_iq') is None, "the raw capture must be finalized on the role switch"
 assert DID not in state.manual_recording, "the manual recording flag must be dropped with the role"
 t = threading.Thread(target=_ais.ais_capture_thread, args=(DID,), daemon=True); t.start()
 wait_for(lambda: state.ais_enabled and state.ais_dongle == DID, what='AIS thread marks the receiver enabled')

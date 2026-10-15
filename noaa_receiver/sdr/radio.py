@@ -29,16 +29,18 @@ import subprocess
 import threading
 import time
 import wave
+import zipfile
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .. import db
 from .. import state
 from ..calibration import (AIRBAND, AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMARY_DONGLE,
                           SDR_DONGLE_GAIN, correction_info, tuning_correction)
 from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION, DONGLES_FILE,
-                     FFT_SIZE, IQ_BLOCK, IQ_RECORD_FREQS, LOGDIR, RECORD_DIR,
-                     SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE, WATERFALL_ROWS)
+                     FFT_SIZE, IQ_BLOCK, IQ_RECORD_FREQS, LAT, LOGDIR, LON,
+                     MANUAL_REC_MAX_SECS, RECORD_DIR, SDR_GAIN, SDR_OFFSET_HZ,
+                     SDR_RATE, WATERFALL_ROWS)
 
 from ..decoding.decode import sat_short_name
 from .dsp import (am_demodulate, doppler_shift, fm_demodulate, frequency_shift,
@@ -774,15 +776,184 @@ def sdr_capture_thread(did):
         state.log_console(f"🎬 Recording started (dongle {did}): {path}")
         return True
 
+    def open_manual_rec(freq_hz):
+        """Start the dashboard Record button's raw-IQ capture: the
+        UNTOUCHED uint8 IQ stream (pre offset-shift, pre Doppler -
+        the true RF baseband as the dongle sampled it) is written to
+        RECORD_DIR/manual/, wrapped into an analysis zip (raw IQ +
+        description.json + waterfall.png) when it finishes."""
+        manual_dir = os.path.join(RECORD_DIR, "manual")
+        os.makedirs(manual_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = os.path.join(manual_dir, "Manual_%.4fMHz_%s"
+                            % (freq_hz / 1e6, timestamp))
+        n = 1
+        while os.path.exists(base + ".iq.u8"):
+            n += 1
+            base = os.path.join(manual_dir, "Manual_%.4fMHz_%s-%d"
+                                % (freq_hz / 1e6, timestamp, n))
+        try:
+            f = open(base + ".iq.u8", "wb", buffering=1 << 20)
+        except Exception as e:
+            state.log_console(f"Manual raw recording could not start (dongle {did}): {e}", "warn")
+            return False
+        mode = state.manual_dongle_mode.get(did)
+        if mode is None:
+            mode = 'am' if AIRBAND[0] <= freq_hz <= AIRBAND[1] else 'fm'
+        entry['manual_iq'] = f
+        entry['manual_zip'] = None
+        entry['manual_meta'] = {
+            "base": base,
+            "start_ts": time.time(),
+            "start_utc": datetime.now(timezone.utc).isoformat(),
+            "freq_hz": freq_hz,
+            "correction": entry.get('correction', 0),
+            "mode": mode,
+            "bw_hz": state.manual_dongle_bw.get(did),
+            "gain_db": gain_db,
+            "bytes": 0,
+            "wf": deque(maxlen=600),
+        }
+        entry['manual_rec_start'] = entry['manual_meta']['start_ts']
+        state.log_console(f"⏺ Manual raw recording started (dongle {did}): "
+                          f"{os.path.basename(base)} "
+                          f"({MANUAL_REC_MAX_SECS:.0f} s cap, zip on stop)")
+        return True
+
+    def finalize_manual_rec():
+        """Close the manual raw-IQ capture, write description.json and
+        the waterfall PNG, then build the analysis zip in a background
+        thread (the STORED payload can be hundreds of MB - the capture
+        loop must not wait for it). entry['manual_zip'] points at the
+        finished zip; the dashboard auto-downloads it when it appears."""
+        f = entry.pop('manual_iq', None)
+        meta = entry.pop('manual_meta', None)
+        entry.pop('manual_rec_start', None)
+        if f is None or meta is None:
+            return
+        try:
+            f.close()
+        except Exception:
+            pass
+        base = meta['base']
+        iq_path = base + '.iq.u8'
+        rows = (np.frombuffer(b"".join(meta['wf']), dtype=np.int16)
+                .reshape(-1, FFT_SIZE)
+                if len(meta['wf']) else
+                np.zeros((0, FFT_SIZE), dtype=np.int16))
+        png_path = None
+        if len(rows) >= 8:
+            try:
+                from PIL import Image
+                lo = float(rows.max()) - 600.0    # 60 dB display window
+                img = np.clip((rows - lo) * (255.0 / 600.0),
+                              0, 255).astype(np.uint8)
+                Image.fromarray(img[::-1], mode='L').save(base + '.png')
+                png_path = base + '.png'
+            except Exception as e:
+                state.log_console(f"Waterfall PNG skipped (dongle {did}): {e}", "warn")
+        desc = {
+            "recording": os.path.basename(base),
+            "description": "Raw RTL-SDR baseband captured by the "
+                           "prawnceiver station for offline / AI "
+                           "signal analysis",
+            "start_utc": meta['start_utc'],
+            "stop_utc": datetime.now(timezone.utc).isoformat(),
+            "duration_s": round(time.time() - meta['start_ts'], 2),
+            "how_to_read": (
+                "raw_iq.u8 is the untouched dongle stream: interleaved "
+                "unsigned 8-bit I/Q pairs, DC level 127.5, "
+                f"{SDR_RATE} complex samples/s. The center frequency is "
+                "center_freq_hz (tuner command frequency minus the "
+                "offset tuning and the calibration correction); the "
+                "tuned signal sits at 0 Hz, the DC spike at "
+                "+offset_tuning_hz."),
+            "format": {
+                "file": "raw_iq.u8",
+                "encoding": "interleaved unsigned 8-bit I/Q",
+                "dc_level": 127.5,
+                "sample_rate_hz": SDR_RATE,
+                "bytes": meta['bytes'],
+                "complex_samples": meta['bytes'] // 2,
+            },
+            "radio": {
+                "center_freq_hz": meta['freq_hz'],
+                "center_freq_mhz": round(meta['freq_hz'] / 1e6, 6),
+                "tuner_freq_hz": int(meta['freq_hz'] + SDR_OFFSET_HZ
+                                     + meta['correction']),
+                "offset_tuning_hz": SDR_OFFSET_HZ,
+                "frequency_correction_hz": meta['correction'],
+                "capture_span_hz": SDR_RATE,
+                "selected_bandwidth_hz": meta['bw_hz'],
+                "selected_bandwidth_note": ("demod low-pass chosen on "
+                                            "the dashboard (null = mode "
+                                            "default); the raw capture "
+                                            "always spans capture_span_hz"),
+                "demod_mode": meta['mode'],
+                "gain_db": meta['gain_db'],
+                "doppler_note": "the raw stream is pre-Doppler: "
+                                "hardware correction is never applied, "
+                                "software Doppler only touches the demod path",
+            },
+            "dongle": {
+                "id": did,
+                "label": entry['label'],
+                "tuner": entry['tuner'],
+                "usb_name": entry.get('usb_name'),
+                "usb_serial": entry.get('usb_serial'),
+                "primary": primary,
+                "source": 'usb(rtl_sdr)' if entry.get('usb_idx') is not None else 'rtl_tcp',
+                "host": entry['host'], "port": entry['port'],
+            },
+            "station": {
+                "name": "prawnceiver",
+                "lat": LAT, "lon": LON,
+            },
+            "signal": {
+                "waterfall_png": "waterfall.png" if png_path else None,
+                "waterfall_rows": len(rows),
+                "waterfall_note": "the last dBFS FFT rows of the "
+                                  "recording, 60 dB window, newest at top",
+                "peak_dbfs": round(float(rows.max()) / 10.0, 1) if len(rows) else None,
+                "mean_dbfs": round(float(rows.mean()) / 10.0, 1) if len(rows) else None,
+            },
+        }
+        try:
+            with open(base + '.json', 'w', encoding='utf-8') as jf:
+                json.dump(desc, jf, indent=2)
+        except Exception as e:
+            state.log_console(f"description.json write failed (dongle {did}): {e}", "warn")
+
+        def _build_zip(base=base, iq_path=iq_path, png_path=png_path):
+            try:
+                zpath = base + '.zip'
+                # STORED, not deflated: like the station backup,
+                # the IQ payload does not compress and the wait
+                # would be pure CPU
+                with zipfile.ZipFile(zpath, 'w', zipfile.ZIP_STORED) as z:
+                    z.write(iq_path, arcname='raw_iq.u8')
+                    z.write(base + '.json', arcname='description.json')
+                    if png_path:
+                        z.write(png_path, arcname='waterfall.png')
+                entry['manual_zip'] = '/manual/' + os.path.basename(zpath)
+                state.log_console(f"📦 Manual raw recording ready (dongle {did}): "
+                                  f"{os.path.basename(zpath)} "
+                                  f"({os.path.getsize(zpath) / 1e6:.1f} MB)")
+            except Exception as e:
+                state.log_console(f"Manual recording zip failed (dongle {did}): {e}", "error")
+        threading.Thread(target=_build_zip, daemon=True).start()
+
     while True:
         if entry.get('closed'):
             close_wav()
+            finalize_manual_rec()
             return
         if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
             # AIS or Orbcomm was switched on from the dashboard after this
             # thread started: hand the dongle over to the supervisor's
             # dedicated capture thread for the new role
             close_wav()
+            finalize_manual_rec()
             return
         if entry.get('paused'):
             # Paused from the dashboard (pause/play button): two dongles
@@ -790,6 +961,7 @@ def sdr_capture_thread(did):
             # - stop streaming and free the bandwidth. The supervisor
             # restarts this thread when the dongle is played again.
             close_wav()
+            finalize_manual_rec()
             return
         run_started = time.time()
         sock = None
@@ -859,6 +1031,14 @@ def sdr_capture_thread(did):
                         try: entry['iq'].close()
                         except Exception: pass
                         entry['iq'] = None
+                miq = entry.get('manual_iq')
+                if miq is not None:
+                    try:
+                        miq.write(raw)
+                        entry['manual_meta']['bytes'] += len(raw)
+                    except Exception as e:
+                        state.log_console(f"Manual IQ write error (dongle {did}): {e} — finalizing", "error")
+                        finalize_manual_rec()
                 now_ts = time.time()
                 entry['last_data'] = now_ts
 
@@ -955,6 +1135,9 @@ def sdr_capture_thread(did):
                             entry['waterfall'].append(row)
                             entry['wf_db'].append(db_row)
                             entry['wf_db_seq'] += 1
+                            mm = entry.get('manual_meta')
+                            if mm is not None:
+                                mm['wf'].append(db_row)
                     except Exception:
                         pass
 
@@ -977,7 +1160,7 @@ def sdr_capture_thread(did):
                 # receiving (and never collides with pass attribution).
                 if pass_active and not override:
                     rec_name = sat_now
-                elif entry['is_recording'] or manual_rec:
+                elif entry['is_recording']:
                     rec_name = f"Manual {freq_now / 1e6:.4f} MHz"
                 else:
                     rec_name = None
@@ -987,6 +1170,11 @@ def sdr_capture_thread(did):
                     if entry['is_recording']:
                         close_wav()
                     if switch_band:
+                        if entry.get('manual_iq') is not None:
+                            # a raw file must never span two tunes
+                            with state.status_lock:
+                                state.manual_recording.pop(did, None)
+                            finalize_manual_rec()
                         if entry.get('usb_idx') is not None:
                             # rtl_sdr cannot retune live: break to the
                             # reconnect loop, which respawns it on the
@@ -1014,17 +1202,33 @@ def sdr_capture_thread(did):
                 # with the wrong band. The dashboard's global pause
                 # (rec_paused) skips the automatic WAV entirely: mid-pass it
                 # closes a running file within one block, and no new one
-                # opens until it is cleared. The dashboard's manual record
-                # button (manual_rec) records this dongle's current tune
-                # regardless: the operator asked for it by hand, so it also
-                # works while paused and on an overridden frequency (the
-                # file is named after the tune, see rec_name above).
-                should_record = (pass_active and not override and not rec_paused) or manual_rec
+                # opens until it is cleared.
+                should_record = pass_active and not override and not rec_paused
                 if should_record and not entry['is_recording']:
                     if now_ts >= wav_retry_at and open_wav(rec_name):
                         record_name = rec_name
                 elif not should_record and entry['is_recording']:
                     close_wav()
+
+                # Manual raw-IQ recording (dashboard Record button): the
+                # UNTOUCHED uint8 IQ stream of the current tune, with its
+                # own open/close independent of the pass WAV machinery —
+                # no audio WAV, the analysis zip replaces it. Works while
+                # paused and on an overridden frequency (the operator
+                # asked by hand); a retune finalizes it (see switch_band
+                # above), and the MANUAL_REC_MAX_SECS cap stops a
+                # forgotten recording from filling the disk.
+                if manual_rec and entry.get('manual_iq') is None:
+                    open_manual_rec(freq_now)
+                elif not manual_rec and entry.get('manual_iq') is not None:
+                    finalize_manual_rec()
+                elif entry.get('manual_meta') is not None \
+                        and now_ts - entry['manual_meta']['start_ts'] >= MANUAL_REC_MAX_SECS:
+                    with state.status_lock:
+                        state.manual_recording.pop(did, None)
+                    state.log_console(f"⏺ Manual raw recording reached the "
+                                      f"{MANUAL_REC_MAX_SECS:.0f} s cap (dongle {did}) — finalizing")
+                    finalize_manual_rec()
 
                 # Demodulate the batch (every dongle: each feeds its own
                 # live audio ring and its own WAV). Mode dispatch:
@@ -1078,6 +1282,7 @@ def sdr_capture_thread(did):
             except Exception: pass
         _kill_rtl_sdr(entry.pop('proc', None))
         close_wav()
+        finalize_manual_rec()
         if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or entry.get('paused'):
             # a removed/role-switched/paused dongle never reconnects;
             # a dongle removed mid-backoff also needs its WAV closed here

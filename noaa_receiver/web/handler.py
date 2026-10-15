@@ -55,6 +55,8 @@ def _dongle_list():
                 "connected": bool(e.get("connected")),
                 "recording": e["is_recording"],
                 "manual_recording": did in state.manual_recording,
+                "manual_rec_since": e.get("manual_rec_start"),
+                "manual_zip": e.get("manual_zip"),
                 "wav": os.path.basename(e["wav_path"]) if e["wav_path"] else None,
                 "correction_hz": e.get("correction", 0),
                 "correction_src": e.get("correction_src", "none"),
@@ -679,6 +681,35 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(HISTORY_HTML.encode())
+        elif self.path.startswith('/manual/'):
+            # Manual raw-IQ recording zips (dashboard Record button):
+            # the finished analysis packages (raw IQ + description.json
+            # + waterfall.png), auto-downloaded by the dashboard when a
+            # recording stops. One sanitized path segment, no traversal.
+            from urllib.parse import unquote
+            filename = unquote(self.path[8:]).split('?', 1)[0]
+            if '..' in filename or '/' in filename or not filename.endswith('.zip'):
+                self.send_response(400)
+                self.end_headers()
+                return
+            zpath = os.path.join(RECORD_DIR, 'manual', filename)
+            if not os.path.isfile(zpath):
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b'Recording zip not found')
+                return
+            self.send_response(200)
+            self.send_header('Content-type', 'application/zip')
+            self.send_header('Content-Disposition',
+                             'attachment; filename="%s"' % filename)
+            self.send_header('Content-Length', str(os.path.getsize(zpath)))
+            self.end_headers()
+            with open(zpath, 'rb') as f:
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
         elif self.path.startswith('/audio/'):
             filename = self.path[7:]
             if '..' in filename or '/' in filename:
@@ -1206,10 +1237,12 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({'success': True, 'from_mhz': start_mhz, 'to_mhz': end_mhz, 'step_khz': step_khz}).encode())
         elif self.path.split('?')[0] == '/record_dongle':
             # Manual recording (dashboard Record button on a dongle card):
-            # /record_dongle?d=<id> records this dongle's current tune to a
-            # WAV outside passes (named Manual_<freq>_MHz, so it is never
-            # attributed to a satellite pass); &stop=1 stops it again. An
-            # automatic pass recording is unaffected — the flag only adds.
+            # /record_dongle?d=<id> starts this dongle's manual raw-IQ
+            # capture (the Record button): the untouched uint8 IQ of the
+            # current tune until stopped, capped at MANUAL_REC_MAX_SECS,
+            # finalized into an analysis zip the dashboard downloads.
+            # &stop=1 stops it. An automatic pass recording is
+            # unaffected — the flag only adds.
             query = parse_qs(urlparse(self.path).query)
             dev = (query.get('d') or [''])[0]
             entry = state.sdrs.get(dev)
@@ -1220,11 +1253,12 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
                 return
             if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
-                # A dedicated capture thread (AIS/Orbcomm) does not record
+                # A dedicated capture thread (AIS/Orbcomm/APRS) does not
+                # record raw IQ
                 self.send_response(400)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Dongle is dedicated to AIS'}).encode())
+                self.wfile.write(json.dumps({'success': False, 'error': 'Dongle is in a dedicated role (AIS/Orbcomm/APRS)'}).encode())
                 return
             stop = (query.get('stop') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
             with state.status_lock:

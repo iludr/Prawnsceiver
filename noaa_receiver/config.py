@@ -71,6 +71,14 @@ IQ_RECORD_FREQS = {
     137912500,    # Meteor-M 2-3 / 2-4 LRPT
 }
 
+# Manual raw-IQ recording (dashboard Record button, see radio.py):
+# the UNTOUCHED uint8 IQ stream of the current tune is captured for
+# at most this many seconds, then finalized into a zip (raw IQ +
+# description.json + waterfall.png) that the dashboard downloads
+# automatically - sized so a forgotten recording cannot fill the
+# disk (~4.8 MB/s at 2.4 Msps u8 IQ).
+MANUAL_REC_MAX_SECS = 120
+
 # ISS only transmits SSTV during ARISS events; outside events its passes would
 # be recorded as empty WAVs (~350 MB/day). Set False to track ISS in the pass
 # list without recording it.

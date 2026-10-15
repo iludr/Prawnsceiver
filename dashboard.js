@@ -1451,13 +1451,14 @@
             recTxt.style.cssText = 'color:#a8b8d8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
             recTxt.textContent = 'Idle';
             recRow.appendChild(recLed); recRow.appendChild(recTxt);
-            // Manual recording (/record_dongle): records this dongle's
-            // current tune to a WAV outside passes; Stop ends it and the
-            // file is finalized. The recording line above shows the live
-            // file name while it runs.
+            // Manual raw-IQ recording (/record_dongle): captures this
+            // dongle's untouched baseband IQ (no audio) until stopped;
+            // the finished analysis zip (raw IQ + description.json +
+            // waterfall) downloads automatically. The recording line
+            // above still shows the live pass WAV, if any.
             const recBtn = document.createElement('button');
             recBtn.textContent = '⏺ Record';
-            recBtn.title = 'Record this dongle\'s current tune to WAV until stopped';
+            recBtn.title = 'Record this dongle\'s raw baseband IQ — the analysis zip (raw IQ + description.json + waterfall) downloads when stopped';
             recBtn.style.cssText = 'flex:0 0 auto;margin-left:auto;padding:2px 8px;background:rgba(231,76,60,0.15);color:#e07890;border:1px solid #e07890;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
             const sn_rec = d.id;
             recBtn.onclick = () => {
@@ -1466,8 +1467,8 @@
                     .then(r => r.json())
                     .then(data => {
                         if (data.success) {
-                            toast(cur ? 'Manual recording stopping \u2014 the WAV is finalized within a moment'
-                                      : `Recording dongle ${d.index}${d.primary ? ' \u2605' : ''} \u2014 the current tune is written to a WAV until stopped`);
+                            toast(cur ? 'Stopping \u2014 finalizing the raw recording, the zip download starts in a moment'
+                                      : `Recording raw IQ on dongle ${d.index}${d.primary ? ' \u2605' : ''} \u2014 stop it (or wait for the cap) and the analysis zip downloads`);
                         } else {
                             toast('Record failed: ' + (data.error || 'unknown error'), true);
                         }
@@ -1910,10 +1911,41 @@
             const rec = d.recording ? (d.wav || 'Recording…') : (d.paused ? '⏸ Paused' : 'Idle');
             if (c.recTxt._last !== rec) { c.recTxt._last = rec; c.recTxt.textContent = rec; }
             // Record button mirrors the manual flag (a running pass
-            // recording is independent of it)
+            // recording is independent of it); while recording it
+            // counts up from manual_rec_since (the raw-IQ capture's
+            // start time)
             const recOn = !!d.manual_recording;
-            const recBtnTxt = recOn ? '⏹ Stop Rec' : '⏺ Record';
+            let recBtnTxt = '⏺ Record';
+            if (recOn && d.manual_rec_since) {
+                const el = Math.max(0, Math.floor(Date.now() / 1000 - d.manual_rec_since));
+                recBtnTxt = '⏹ ' + Math.floor(el / 60) + ':' + String(el % 60).padStart(2, '0');
+            } else if (recOn) {
+                recBtnTxt = '⏹ Stop Rec';
+            }
             if (c.recBtn._last !== recBtnTxt) { c.recBtn._last = recBtnTxt; c.recBtn.textContent = recBtnTxt; }
+            // Raw recording finished → wait for the zip, then download
+            // it automatically (the server builds it a few seconds
+            // after the stop; the wait also covers the retune and
+            // role-switch paths, where the recording is finalized
+            // without a Stop click)
+            const _wasRec = c._prevManualRec;
+            c._prevManualRec = recOn;
+            if (_wasRec === true && !recOn) {
+                c._manualZipWait = Date.now() + 120000;
+            }
+            if (c._manualZipWait && !recOn && d.manual_zip
+                && d.manual_zip !== c._lastManualZip) {
+                c._manualZipWait = 0;
+                c._lastManualZip = d.manual_zip;
+                const a = document.createElement('a');
+                a.href = d.manual_zip;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                toast('\uD83D\uDCE6 ' + d.manual_zip.split('/').pop() + ' \u2014 download started');
+            } else if (c._manualZipWait && Date.now() > c._manualZipWait) {
+                c._manualZipWait = 0;    // zip never appeared (build failed?)
+            }
             c.recBtn.style.background = recOn ? '#e74c3c' : 'rgba(231,76,60,0.15)';
             c.recBtn.style.color = recOn ? '#1a1a2e' : '#e07890';
             // Pause/Play button mirrors the paused flag (orange while paused)
