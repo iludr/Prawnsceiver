@@ -451,36 +451,39 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.close_connection = True
             state.log_console(f"Waterfall WebSocket client disconnected ({self.client_address[0]}, {why})")
 
+    def _send_json(self, obj, code=200):
+        """The one JSON response shape every API route answers in:
+        status code, content-type, CORS (the dashboard pages sit behind
+        the notebook's prefix proxy, so cross-origin reads stay allowed),
+        then the encoded payload."""
+        self.send_response(code)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(obj).encode())
+
+    def _query(self):
+        """Parsed query string of the current request."""
+        return parse_qs(urlparse(self.path).query)
+
     def do_GET(self):
         if self.path == '/status.json':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(get_status()).encode())
+            self._send_json(get_status(), code=200)
         elif self.path == '/usb_dongles.json':
             # USB dongles on this host as rtl_sdr itself sees them
             # (device index + name + serial) - feeds the header's
             # add-dongle picker and its refresh button
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'dongles': usb_dongles()}).encode())
+            self._send_json({'dongles': usb_dongles()}, code=200)
         elif self.path == '/power.json':
             # Host power state (notebooks) - see _power_data()
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(_power_data()).encode())
+            self._send_json(_power_data(), code=200)
         elif self.path.split('?')[0] == '/waterfall.ws':
             # WebSocket push of dBFS spectrum rows (see _waterfall_websocket)
             self._waterfall_websocket()
         elif self.path.startswith('/waterfall.json'):
             # Optional ?d=<dongle serial> (default: primary) and last=1 for
             # the newest row only (the dashboard scrolls client-side)
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0] or (state.primary_dongle or '')
             entry = state.sdrs.get(dev)
             if entry is None:
@@ -492,158 +495,86 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 with entry['lock']:
                     data = list(entry['waterfall'])
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(data).encode())
+            self._send_json(data, code=200)
         elif self.path == '/dongles.json':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(_dongle_list()).encode())
+            self._send_json(_dongle_list(), code=200)
         elif self.path == '/passes.json':
             passes = _passes_data()
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(passes).encode())
+            self._send_json(passes, code=200)
         elif self.path == '/recordings.json':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(get_recordings()).encode())
+            self._send_json(get_recordings(), code=200)
         elif self.path == '/signal_history.json':
             with state.signal_lock:
                 history = list(state.signal_history)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(history).encode())
+            self._send_json(history, code=200)
         elif self.path == '/pass_history.json':
             history = _load_history()
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(history).encode())
+            self._send_json(history, code=200)
         elif self.path == '/track.json':
             # Polar (az/el) track of the currently active pass - see
             # _track_data() (shared with the WS 'track' topic)
             result = _track_data()
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(result).encode())
+            self._send_json(result, code=200)
         elif self.path == '/ais.json':
             # Danube ship traffic: ship table + per-channel stats + raw feed
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(ais.ais_status()).encode())
+            self._send_json(ais.ais_status(), code=200)
         elif self.path == '/orbcomm.json':
             # Orbcomm satellite downlink: tracked channels (satellite ID,
             # live position from the Ephemeris packets) + recent packets
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(orbcomm.orbcomm_status()).encode())
+            self._send_json(orbcomm.orbcomm_status(), code=200)
         elif self.path.startswith('/orbcommlog.json'):
             # Tail of the persistent decoded-packet log (?count=N, max 2000)
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             try:
                 count = int((query.get('count') or ['200'])[0])
             except ValueError:
                 count = 200
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(orbcomm.orbcomm_log(count)).encode())
+            self._send_json(orbcomm.orbcomm_log(count), code=200)
         elif self.path == '/aprs.json':
             # APRS: heard-station registry (callsigns, positions) +
             # recent frames
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(aprs.aprs_status()).encode())
+            self._send_json(aprs.aprs_status(), code=200)
         elif self.path == '/pocsag.json':
             # POCSAG: tracked paging channels + recent pages
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(pocsag.pocsag_status()).encode())
+            self._send_json(pocsag.pocsag_status(), code=200)
         elif self.path.startswith('/aprslog.json'):
             # Tail of the persistent decoded-frame log (?count=N, max 2000)
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             try:
                 count = int((query.get('count') or ['200'])[0])
             except ValueError:
                 count = 200
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(aprs.aprs_log(count)).encode())
+            self._send_json(aprs.aprs_log(count), code=200)
         elif self.path.startswith('/pocsaglog.json'):
             # Newest-first tail of the persistent decoded-page log
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             try:
                 count = int((query.get('count') or ['200'])[0])
             except ValueError:
                 count = 200
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(pocsag.pocsag_log(count)).encode())
+            self._send_json(pocsag.pocsag_log(count), code=200)
         elif self.path.startswith('/aprsmsgs.json'):
             # Person-to-person APRS text messages (':ADDRESSEE:text'
             # frames from the persistent log, telemetry definitions
             # filtered out, acks flagged)
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             try:
                 count = int((query.get('count') or ['200'])[0])
             except ValueError:
                 count = 200
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(aprs.messages_view(count)).encode())
+            self._send_json(aprs.messages_view(count), code=200)
         elif self.path == '/aprs_stations.json':
             # Persistent registry: every APRS station ever received,
             # each with its latest data and the last APRS_RECENT_MSGS
             # frames
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(aprs.stations_registry()).encode())
+            self._send_json(aprs.stations_registry(), code=200)
         elif self.path == '/ais_ships.json':
             # Persistent registry: every ship ever received, each with
             # its latest data and the last AIS_RECENT_MSGS messages
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(ais.ships_registry()).encode())
+            self._send_json(ais.ships_registry(), code=200)
         elif self.path == '/console.json':
             lines = _console_lines()
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(lines).encode())
+            self._send_json(lines, code=200)
         elif self.path == '/console' or self.path == '/console.html':
             self.send_response(200)
             self.send_header('Content-type', 'text/html; charset=utf-8')
@@ -678,7 +609,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path.split('?')[0] == '/ship_tracks.json':
             # 24 h position tracks for the AIS page's 'path on map'
             # multi-select: ?mmsi=123,456&hours=24
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             mmsis = [m.strip() for m in (query.get('mmsi') or [''])[0].split(',')
                       if m.strip()][:50]
             try:
@@ -686,24 +617,16 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 hours = 24.0
             tracks = ais.ship_tracks(mmsis, hours)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(tracks).encode())
+            self._send_json(tracks, code=200)
 
         elif self.path.startswith('/aislog.json'):
             # Tail of the persistent AIS message log (?count=N, max 2000)
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             try:
                 count = int((query.get('count') or ['200'])[0])
             except ValueError:
                 count = 200
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(ais.ais_log(count)).encode())
+            self._send_json(ais.ais_log(count), code=200)
         elif self.path == '/history' or self.path == '/history.html':
             self.send_response(200)
             self.send_header('Content-type', 'text/html; charset=utf-8')
@@ -756,10 +679,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             with state.status_lock:
                 recording_now = state.is_recording and state.current_wav_path == wav_path
             if recording_now:
-                self.send_response(409)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Recording in progress"}).encode())
+                self._send_json({"success": False, "error": "Recording in progress"}, code=409)
                 return
             size = os.path.getsize(wav_path)
             # Audio elements need Content-Length + range support to seek
@@ -802,56 +722,36 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # /add_dongle?host=192.168.3.245&port=1234
             # A dongle plugged into the receiver host itself is registered
             # by its rtl_sdr device index instead: /add_dongle?host=usb&port=0
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             host = (query.get('host') or query.get('ip') or [''])[0].strip()
             port = (query.get('port') or [''])[0].strip()
             try:
                 did, created = add_dongle(host, port)
             except ValueError as e:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': str(e)}).encode())
+                self._send_json({'success': False, 'error': str(e)}, code=400)
                 return
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'id': did, 'created': created}).encode())
+            self._send_json({'success': True, 'id': did, 'created': created}, code=200)
         elif self.path.split('?')[0] == '/remove_dongle':
             # Unregister a dongle: /remove_dongle?d=192.168.3.245:1234
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0].strip()
             removed = remove_dongle(dev)
-            self.send_response(200 if removed else 404)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': removed}).encode())
+            self._send_json({'success': removed}, code=200 if removed else 404)
         elif self.path.split('?')[0] == '/ais_dongle':
             # Switch one dongle between satellite tracking and AIS ship
             # traffic (dashboard button on the dongle card — with a single
             # dongle this is how it listens for AIS): /ais_dongle?d=<id>&on=1
             # dedicates it to 161.975/162.025 MHz, on=0 returns it to the
             # satellites. The capture thread restarts in the new role.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0].strip()
             on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             set_dongle_ais(dev, on)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'ais': bool(entry.get('ais'))}).encode())
+            self._send_json({'success': True, 'ais': bool(entry.get('ais'))}, code=200)
         elif self.path.split('?')[0] == '/orbcomm_dongle':
             # Switch one dongle between satellite tracking and Orbcomm
             # satellite-IoT downlink reception (dashboard button on the
@@ -860,69 +760,45 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # 2.4 MHz capture covers the whole 137.0-138.0 MHz downlink
             # band — on=0 returns it to the satellites. The capture
             # thread restarts in the new role.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0].strip()
             on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             set_dongle_orbcomm(dev, on)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'orbcomm': bool(entry.get('orbcomm'))}).encode())
+            self._send_json({'success': True, 'orbcomm': bool(entry.get('orbcomm'))}, code=200)
         elif self.path.split('?')[0] == '/aprs_dongle':
             # Switch one dongle between satellite tracking and the APRS
             # role (dashboard button, mirroring the AIS/Orbcomm ones):
             # /aprs_dongle?d=<id>&on=1 parks it on 144.800 MHz and
             # decodes Bell 202 AFSK AX.25 frames; on=0 returns it to
             # the satellites. The capture thread restarts in the new role.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0].strip()
             on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             set_dongle_aprs(dev, on)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'aprs': bool(entry.get('aprs'))}).encode())
+            self._send_json({'success': True, 'aprs': bool(entry.get('aprs'))}, code=200)
         elif self.path.split('?')[0] == '/aprs_iss':
             # Flip one dongle's APRS channel between the DL simplex
             # channel (144.800 MHz) and the ISS digipeater
             # (145.825 MHz) — the checkbox below the APRS button.
             # /aprs_iss?d=<id>&on=1 selects the ISS channel and
             # retunes a running APRS capture; on=0 returns to 144.800.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0].strip()
             on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             set_dongle_aprs_iss(dev, on)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'aprs_iss': bool(entry.get('aprs_iss'))}).encode())
+            self._send_json({'success': True, 'aprs_iss': bool(entry.get('aprs_iss'))}, code=200)
         elif self.path.split('?')[0] == '/pause_dongle':
             # Temporarily stop one dongle's capture (dashboard
             # pause/play button): two dongles recording at the same
@@ -930,28 +806,20 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # /pause_dongle?d=<id>&on=1 closes the stream and any
             # recording (the supervisor restarts the capture on
             # on=0, within ~2 s). The dongle stays registered.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0].strip()
             on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             set_dongle_paused(dev, on)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'paused': bool(entry.get('paused'))}).encode())
+            self._send_json({'success': True, 'paused': bool(entry.get('paused'))}, code=200)
         elif self.path.split('?')[0] == '/tune':
             # Manual tune (dongle reception test, e.g. FM broadcast radio):
             # /tune?f=89.7 parks the dongle on a frequency and pauses the
             # satellite scheduler; /tune?f=auto hands control back to it.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             f = (query.get('f') or [''])[0].strip().lower()
             with state.status_lock:
                 pass_active = state.is_pass_active
@@ -964,32 +832,19 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                         state.current_frequency = 137912500
                         state.current_sat_name = "idle"
                 state.log_console("🛰 Manual tune off — satellite tracking resumed")
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": True, "mode": "auto"}).encode())
+                self._send_json({"success": True, "mode": "auto"}, code=200)
                 return
             try:
                 mhz = float(f)
             except ValueError:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Invalid frequency"}).encode())
+                self._send_json({"success": False, "error": "Invalid frequency"}, code=400)
                 return
             if not 24.0 <= mhz <= 1766.0:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Frequency out of R820T range (24-1766 MHz)"}).encode())
+                self._send_json({"success": False, "error": "Frequency out of R820T range (24-1766 MHz)"}, code=400)
                 return
             if pass_active:
                 state.log_console("Tune rejected: satellite pass in progress", "warn")
-                self.send_response(409)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Satellite pass in progress — try again after it ends"}).encode())
+                self._send_json({"success": False, "error": "Satellite pass in progress — try again after it ends"}, code=409)
                 return
             # Auto-reject near a predicted pass too: a manual tune pauses the
             # scheduler, so a tune that sticks right before a rise silently
@@ -1003,10 +858,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 if (rise - now).total_seconds() <= lockout:
                     mins = max(1, round((rise - now).total_seconds() / 60))
                     state.log_console(f"Tune rejected: next pass {p.get('sat_name')} rises in {mins} min", "warn")
-                    self.send_response(409)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"success": False, "error": f"Next pass {p.get('sat_name')} rises in {mins} min — tune again after it ends (Auto is still available)"}).encode())
+                    self._send_json({"success": False, "error": f"Next pass {p.get('sat_name')} rises in {mins} min — tune again after it ends (Auto is still available)"}, code=409)
                     return
                 break  # passes are sorted: the first future one decides
             freq_hz = int(round(mhz * 1e6))
@@ -1015,34 +867,24 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 state.current_frequency = freq_hz
                 state.current_sat_name = f"Manual {mhz:.4f} MHz"
             state.log_console(f"📻 Manual tune: {mhz:.4f} MHz — satellite tracking paused")
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "mode": "manual", "frequency_mhz": mhz}).encode())
+            self._send_json({"success": True, "mode": "manual", "frequency_mhz": mhz}, code=200)
         elif self.path.split('?')[0] == '/sync_tle':
             # Manual TLE refresh: sets a flag; the scheduler picks it up
             # within its 10 s tick and refetches + re-predicts. The network
             # fetch can take minutes, so it must never block this handler.
             if state.tle_sync_requested or (state.tle_progress or {}).get("active"):
-                self.send_response(409)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "A TLE sync is already running"}).encode())
+                self._send_json({"success": False, "error": "A TLE sync is already running"}, code=409)
                 return
             state.tle_sync_requested = True
             state.log_console("🔄 Manual TLE sync requested — fetching fresh elements")
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "mode": "queued"}).encode())
+            self._send_json({"success": True, "mode": "queued"}, code=200)
         elif self.path.split('?')[0] == '/record_pause':
             # Global recording pause (dashboard switch): paused=1 stops the
             # capture threads from opening WAV/IQ files during passes (a
             # running WAV is closed within ~one IQ block); paused=0 resumes.
             # Tracking, waterfall, Doppler and live audio keep running either
             # way, so reception quality stays observable while paused.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             p = (query.get('paused') or [''])[0].strip().lower()
             paused = p in ('1', 'true', 'on', 'yes')
             with state.status_lock:
@@ -1051,26 +893,19 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 state.log_console("⏸ Automatic recordings paused — passes are received but not written to disk")
             else:
                 state.log_console("▶ Automatic recordings resumed")
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "recordings_paused": paused}).encode())
+            self._send_json({"success": True, "recordings_paused": paused}, code=200)
         elif self.path.startswith('/tune_dongle'):
             # Per-dongle manual frequency override:
             # /tune_dongle?d=<serial>&f=<mhz> tunes just that dongle (e.g.
             # to compare receive quality around a signal); f=auto clears
             # the override and the dongle rejoins the shared frequency.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0]
             f = (query.get('f') or [''])[0].strip().lower()
             bw = (query.get('bw') or [''])[0].strip().lower()
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Unknown dongle"}).encode())
+                self._send_json({"success": False, "error": "Unknown dongle"}, code=404)
                 return
             # Optional demod (recorded) bandwidth override in kHz — the IQ
             # low-pass cutoff ahead of the FM discriminator. bw=auto clears.
@@ -1081,16 +916,10 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                     try:
                         khz = float(bw)
                     except ValueError:
-                        self.send_response(400)
-                        self.send_header('Content-type', 'application/json')
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"success": False, "error": "Invalid bandwidth"}).encode())
+                        self._send_json({"success": False, "error": "Invalid bandwidth"}, code=400)
                         return
                     if not 1.0 <= khz <= 120.0:
-                        self.send_response(400)
-                        self.send_header('Content-type', 'application/json')
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"success": False, "error": "Bandwidth out of range (1-120 kHz)"}).encode())
+                        self._send_json({"success": False, "error": "Bandwidth out of range (1-120 kHz)"}, code=400)
                         return
                     bw_hz = int(khz * 1000)
                 with state.status_lock:
@@ -1104,10 +933,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             mode = (query.get('mode') or [''])[0].strip().lower()
             if mode:
                 if mode not in ('auto', 'am', 'usb', 'lsb', 'cw', 'fm'):
-                    self.send_response(400)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({'success': False, 'error': 'Unknown mode (auto/am/usb/lsb/cw/fm)'}).encode())
+                    self._send_json({'success': False, 'error': 'Unknown mode (auto/am/usb/lsb/cw/fm)'}, code=400)
                     return
                 with state.status_lock:
                     if mode == 'auto':
@@ -1116,90 +942,57 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                         state.manual_dongle_mode[dev] = mode
                 state.log_console(f"Dongle {dev} demod mode: {mode}")
                 if not f:
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({'success': True, 'mode': 'demod', 'demod_mode': mode}).encode())
+                    self._send_json({'success': True, 'mode': 'demod', 'demod_mode': mode}, code=200)
                     return
                 state.log_console(f"🎚 Dongle {dev} demod bandwidth: {bw_hz / 1000:g} kHz" if bw_hz else f"🎚 Dongle {dev} demod bandwidth back to auto")
                 if not f:
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"success": True, "mode": "bw", "bandwidth_khz": bw_hz / 1000 if bw_hz else None}).encode())
+                    self._send_json({"success": True, "mode": "bw", "bandwidth_khz": bw_hz / 1000 if bw_hz else None}, code=200)
                     return
             if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
                 # A dongle dedicated to AIS or Orbcomm reception is parked
                 # on its mode's band - retuning it would stop reception
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Dongle is dedicated to AIS'}).encode())
+                self._send_json({'success': False, 'error': 'Dongle is dedicated to AIS'}, code=400)
                 return
             if f in ('', 'auto', 'sync'):
                 with state.status_lock:
                     state.manual_dongle_freq.pop(dev, None)
                 state.log_console(f"🎛 Dongle {dev} frequency override cleared — back to the shared frequency")
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": True, "mode": "sync"}).encode())
+                self._send_json({"success": True, "mode": "sync"}, code=200)
                 return
             try:
                 mhz = float(f)
             except ValueError:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Invalid frequency"}).encode())
+                self._send_json({"success": False, "error": "Invalid frequency"}, code=400)
                 return
             if not 24.0 <= mhz <= 1766.0:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Frequency out of R820T range (24-1766 MHz)"}).encode())
+                self._send_json({"success": False, "error": "Frequency out of R820T range (24-1766 MHz)"}, code=400)
                 return
             with state.status_lock:
                 state.manual_dongle_freq[dev] = int(round(mhz * 1e6))
             state.log_console(f"🎛 Dongle {dev} frequency override: {mhz:.4f} MHz")
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True, "mode": "manual", "frequency_mhz": mhz}).encode())
+            self._send_json({"success": True, "mode": "manual", "frequency_mhz": mhz}, code=200)
         elif self.path.split('?')[0] == '/scan_dongle':
             # Frequency scan for one dongle (dashboard card Scan button):
             # /scan_dongle?d=<serial>&start=<mhz>&end=<mhz>&step=<khz>&ratio=<n>
             # sweeps the dongle's override from start to end and parks it on
             # the next strong signal (see scan.py); &stop=1 stops a running
             # scan at its current frequency (Sync on the card rejoins).
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0]
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
                 # A dongle dedicated to AIS or Orbcomm reception is parked
                 # on its mode's band - scanning it would stop reception
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Dongle is dedicated to AIS'}).encode())
+                self._send_json({'success': False, 'error': 'Dongle is dedicated to AIS'}, code=400)
                 return
             if (query.get('stop') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes'):
                 stopped = scan.stop_scan(dev)
                 if stopped:
                     state.log_console(f'Scan stop requested (dongle {dev})')
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': True, 'stopped': stopped}).encode())
+                self._send_json({'success': True, 'stopped': stopped}, code=200)
                 return
             f_start = (query.get('start') or [''])[0].strip()
             f_end = (query.get('end') or [''])[0].strip()
@@ -1211,34 +1004,19 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 step_khz = float(f_step)
                 ratio = float(f_ratio) if f_ratio else scan.SCAN_RATIO
             except ValueError:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Invalid scan parameters (start/end/step/ratio)'}).encode())
+                self._send_json({'success': False, 'error': 'Invalid scan parameters (start/end/step/ratio)'}, code=400)
                 return
             if not (24.0 <= start_mhz <= 1766.0 and 24.0 <= end_mhz <= 1766.0):
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Frequencies out of R820T range (24-1766 MHz)'}).encode())
+                self._send_json({'success': False, 'error': 'Frequencies out of R820T range (24-1766 MHz)'}, code=400)
                 return
             if start_mhz == end_mhz:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Scan start and end must differ'}).encode())
+                self._send_json({'success': False, 'error': 'Scan start and end must differ'}, code=400)
                 return
             if not scan.STEP_MIN_HZ / 1000.0 <= step_khz <= scan.STEP_MAX_HZ / 1000.0:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': f'Step out of range ({scan.STEP_MIN_HZ // 1000}-{scan.STEP_MAX_HZ // 1000} kHz)'}).encode())
+                self._send_json({'success': False, 'error': f'Step out of range ({scan.STEP_MIN_HZ // 1000}-{scan.STEP_MAX_HZ // 1000} kHz)'}, code=400)
                 return
             if not 1.5 <= ratio <= 20.0:
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Ratio out of range (1.5-20)'}).encode())
+                self._send_json({'success': False, 'error': 'Ratio out of range (1.5-20)'}, code=400)
                 return
             with state.status_lock:
                 pass_active = state.is_pass_active
@@ -1246,23 +1024,13 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 # Scanning the primary suppresses its pass recording - the
                 # same protection /tune has (reject while a pass is up; the
                 # scan thread also aborts itself when a pass rises mid-scan)
-                self.send_response(409)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Satellite pass in progress - scan again after it ends'}).encode())
+                self._send_json({'success': False, 'error': 'Satellite pass in progress - scan again after it ends'}, code=409)
                 return
             if (state.scans.get(dev) or {}).get('active'):
-                self.send_response(409)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'This dongle is already scanning'}).encode())
+                self._send_json({'success': False, 'error': 'This dongle is already scanning'}, code=409)
                 return
             scan.start_scan(dev, start_mhz, end_mhz, step_khz, ratio)
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'from_mhz': start_mhz, 'to_mhz': end_mhz, 'step_khz': step_khz}).encode())
+            self._send_json({'success': True, 'from_mhz': start_mhz, 'to_mhz': end_mhz, 'step_khz': step_khz}, code=200)
         elif self.path.split('?')[0] == '/record_dongle':
             # Manual recording (dashboard Record button on a dongle card):
             # /record_dongle?d=<id> starts this dongle's manual raw-IQ
@@ -1271,23 +1039,17 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # finalized into an analysis zip the dashboard downloads.
             # &stop=1 stops it. An automatic pass recording is
             # unaffected — the flag only adds.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0]
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') \
                     or entry.get('pocsag'):
                 # A dedicated capture thread (AIS/Orbcomm/APRS/POCSAG)
                 # does not record raw IQ
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Dongle is in a dedicated role (AIS/Orbcomm/APRS/POCSAG)'}).encode())
+                self._send_json({'success': False, 'error': 'Dongle is in a dedicated role (AIS/Orbcomm/APRS/POCSAG)'}, code=400)
                 return
             stop = (query.get('stop') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
             with state.status_lock:
@@ -1299,62 +1061,41 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 state.log_console(f"⏹ Manual recording stop requested (dongle {dev})")
             else:
                 state.log_console(f"⏺ Manual recording requested (dongle {dev}) — records the current tune until stopped")
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': True, 'manual_recording': not stop}).encode())
+            self._send_json({'success': True, 'manual_recording': not stop}, code=200)
         elif self.path.split('?')[0] == '/pocsag_dongle':
             # Switch one dongle between satellite tracking and the
             # POCSAG paging role: /pocsag_dongle?d=<id>&on=1 parks it
             # on the paging band and decodes every paging channel
             # found in the 2.4 MHz capture; on=0 returns to satellites.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0]
             on = (query.get('on') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
             ok = set_dongle_pocsag(dev, on)
-            self.send_response(200 if ok else 404)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps({'success': ok}).encode())
+            self._send_json({'success': ok}, code=200 if ok else 404)
         elif self.path.split('?')[0] == '/fit_bw':
             # Fit the recorded (demod) bandwidth of one dongle to the signal
             # currently on its tune: measures the live spectrum and sets the
             # per-dongle demod low-pass cutoff (scan.fit_bandwidth).
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0]
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Unknown dongle'}).encode())
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
-                self.send_response(400)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': False, 'error': 'Dongle is dedicated to AIS/Orbcomm'}).encode())
+                self._send_json({'success': False, 'error': 'Dongle is dedicated to AIS/Orbcomm'}, code=400)
                 return
             result = scan.fit_bandwidth(dev)
-            self.send_response(200 if result.get('success') else 409)
-            self.send_header('Content-type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(json.dumps(result).encode())
+            self._send_json(result, code=200 if result.get('success') else 409)
         elif self.path.split('?')[0] == '/live.wav':
             # Endless WAV stream of the live FM-demodulated audio of one
             # dongle (default: the primary). WAV header with a maxed-out
             # size; browsers play it progressively.
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             dev = (query.get('d') or [''])[0] or (state.primary_dongle or '')
             entry = state.sdrs.get(dev)
             if entry is None:
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Unknown dongle"}).encode())
+                self._send_json({"error": "Unknown dongle"}, code=404)
                 return
             state.log_console(f"🔊 Live audio listener connected ({self.client_address[0]}, dongle {dev})")
             self.send_response(200)
@@ -1393,7 +1134,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path.startswith('/decode/'):
             filename = self.path[8:].split('?')[0]
             # ?force=1 re-runs a decode whose attempt marker says it failed
-            force = (parse_qs(urlparse(self.path).query).get('force') or [''])[0] == '1'
+            force = (self._query().get('force') or [''])[0] == '1'
             if '..' in filename or '/' in filename:
                 state.log_console(f"Decode rejected invalid filename: {filename!r}", "warn")
                 self.send_response(400)
@@ -1443,20 +1184,14 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             wav_path = os.path.join(RECORD_DIR, filename)
             if not os.path.exists(wav_path):
                 state.log_console(f"Delete requested missing recording: {filename}", "warn")
-                self.send_response(404)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Recording not found"}).encode())
+                self._send_json({"success": False, "error": "Recording not found"}, code=404)
                 return
             # Never delete the file that is currently being written
             with state.status_lock:
                 recording_now = state.is_recording and state.current_wav_path == wav_path
             if recording_now:
                 state.log_console(f"Delete refused, recording in progress: {filename}", "warn")
-                self.send_response(409)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": "Recording in progress"}).encode())
+                self._send_json({"success": False, "error": "Recording in progress"}, code=409)
                 return
             deleted = []
             try:
@@ -1485,21 +1220,15 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                         shutil.rmtree(d)
                         deleted.append(os.path.basename(d) + '/')
                 state.log_console(f"🗑 Deleted: {', '.join(deleted)}")
-                self.send_response(200)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": True, "deleted": deleted}).encode())
+                self._send_json({"success": True, "deleted": deleted}, code=200)
             except Exception as e:
                 state.log_console(f"Delete error for {filename}: {e}", "error")
-                self.send_response(500)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode())
+                self._send_json({"success": False, "error": str(e)}, code=500)
         elif self.path.startswith('/satnogs.json'):
             # SatNOGS DB metadata for the tracked satellite (proxied and
             # cached server-side — the DB has no CORS headers and the
             # dashboard would otherwise hammer it on every poll)
-            query = parse_qs(urlparse(self.path).query)
+            query = self._query()
             try:
                 catnr = int((query.get('catnr') or ['0'])[0])
             except ValueError:
@@ -1603,10 +1332,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 _, total = db.build_backup(dest, None)
             except Exception as e:
                 state.log_console(f'Backup failed: {e}', 'error')
-                self.send_response(500)
-                self.send_header('Content-type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({'error': str(e)}).encode())
+                self._send_json({'error': str(e)}, code=500)
                 return
             state.log_console(f'\U0001f4be Station backup built: {os.path.basename(dest)}'
                               f' ({total / 1e6:.1f} MB)')
@@ -1661,17 +1387,11 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                     remaining -= len(chunk)
             summary = db.restore_backup(tmp, None)
         except ValueError as e:
-            self.send_response(400)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode())
+            self._send_json({'error': str(e)}, code=400)
             return
         except Exception as e:
             state.log_console(f'Restore failed: {e}', 'error')
-            self.send_response(500)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': str(e)}).encode())
+            self._send_json({'error': str(e)}, code=500)
             return
         finally:
             try:
