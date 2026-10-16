@@ -1076,7 +1076,6 @@
 
         function updateFreqLabels(freqMHz) {
             document.getElementById('wf-freq').textContent = freqMHz.toFixed(3) + ' MHz';
-            document.getElementById('freq-current').textContent = freqMHz.toFixed(4) + ' MHz';
             // Per-block labels reflect each dongle's own center frequency
             // (manual overrides retune dongles independently)
             for (const idx in wfBlocks) {
@@ -2195,7 +2194,6 @@
                             + ': ' + (d.connected ? 'live' : 'offline')).join(' · '))
                         : 'no dongles — add one below';
                 }
-                document.getElementById('sat-current').textContent = data.satellite;
                 tleInfo = data.tle || null;
                 renderTleBar();
                 updateTleSyncBar(tleInfo);
@@ -2206,9 +2204,6 @@
                 // Update frequency display
                 updateFreqLabels(data.frequency_mhz);
                 lastSharedMHz = data.frequency_mhz;
-                // Band allocation of the shared tune frequency
-                document.getElementById('band-current').innerHTML = '📶 ' + bandLabel(bandFor(data.frequency_mhz));
-
                 // Waterfall recording-band highlight (the primary block is
                 // built dynamically, so guard for it not existing yet)
                 const hl = document.getElementById('wf-highlight');

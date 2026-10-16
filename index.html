@@ -116,11 +116,8 @@
         .wf-hover { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
         .wf-wrap { cursor: crosshair; }
         #conn-banner { display: none; padding: 8px 20px; text-align: center; background: #4a1e1e; color: #e74c3c; font-weight: bold; flex-shrink: 0; }
-        /* Header band allocation readout + the band jump dropdown */
-        #band-current { color: #a8b8d8; font-size: 0.8em; margin-top: 2px; max-width: 300px; }
-        #band-current .band-range { color: #666; }
+        /* Band jump dropdown in the header */
         .band-select { background: #0f3460; color: #53d769; border: 1px solid #53d769; border-radius: 3px; padding: 3px; font-family: monospace; font-size: 0.85em; max-width: 300px; cursor: pointer; }
-        #band-jump { margin-top: 5px; }
         /* Dongle picker: one row, one height — select, inputs and buttons line up exactly */
         #add-dongle-box select, #add-dongle-box input, #add-dongle-box button { height: 30px; font-size: 0.9em; }
         #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px); background: #16213e; color: #e0e0e0; border: 1px solid #53d769; border-radius: 4px; padding: 8px 14px; font-size: 0.9em; opacity: 0; transition: opacity 0.25s, transform 0.25s; pointer-events: none; z-index: 2000; max-width: 90vw; }
@@ -173,9 +170,6 @@
             </div>
         </div>
         <div id="freq-display" style="text-align:right;font-size:1em;">
-            <div style="color:#53d769;font-weight:bold;" id="freq-current">137.9125 MHz</div>
-            <div style="color:#888;" id="sat-current">idle</div>
-            <div id="band-current"></div>
             <select id="band-jump" class="band-select" aria-label="Jump to a band / typical use case"></select>
             <div id="power-status" style="font-size:0.85em;color:#888;margin-top:4px;display:none;"></div>
         </div>
