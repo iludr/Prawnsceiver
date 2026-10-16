@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlparse
 from .. import db
 from .. import state
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
-                   PASS_HISTORY_FILE, RECORD_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
+                   RECORD_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
 
 from ..decoding import ais, aprs, orbcomm, pocsag
 from ..sdr import scan
@@ -1407,7 +1407,6 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'Recording not found')
                 return
-            output_png = wav_path.replace('.wav', '.png')
             decoded, png_path, err = decode_recording(wav_path, force=force)
             # Reception quality: only the stored pass-end value remains
             # (the APT sync-quality scorer was retired with APT)

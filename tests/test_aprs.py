@@ -51,7 +51,6 @@ os.environ.setdefault("PRAWN_DB_FILE",
                       os.path.join(tempfile.mkdtemp(), "station.db"))
 from noaa_receiver.decoding import aprs
 from noaa_receiver import state
-from noaa_receiver.config import APRS_FREQ_HZ
 import threading  # noqa: E402
 from collections import deque  # noqa: E402
 

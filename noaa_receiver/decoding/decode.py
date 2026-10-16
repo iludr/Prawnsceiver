@@ -7,7 +7,6 @@ import threading
 import time
 
 from .. import db
-from .. import db
 from .. import state
 
 from ..config import SDR_OFFSET_HZ, SDR_RATE, TRACKED_SATS

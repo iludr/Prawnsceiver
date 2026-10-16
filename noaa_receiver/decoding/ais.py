@@ -38,7 +38,6 @@ noise floor per channel, buffers 48 kHz discriminator samples while a
 channel is active and decodes each closed burst offline.
 """
 import json
-import os
 import threading
 import time
 from collections import deque
@@ -52,8 +51,7 @@ from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
 from ..config import (AIS_CENTER_HZ, AIS_CHANNEL_HZ, 
                      AIS_LOG_KEEP_HOURS, AIS_RECENT_MSGS, 
                      AIS_SHIPS_SAVE_SECS, AIS_SHIP_TTL_SECS,
-                     FFT_SIZE, IQ_BLOCK, LOGDIR, SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE,
-                     WATERFALL_ROWS)
+                     FFT_SIZE, IQ_BLOCK, SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE)
 
 # Discriminator decimation: 2.4 MHz -> 48 kHz = 50x decimation
 AIS_BITRATE = 9600
@@ -776,7 +774,7 @@ def ais_capture_thread(did):
     from ..sdr.dsp import iq_to_complex, frequency_shift
     from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
                         _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
-                        CAPTURE_BATCH, IQ_BLOCK,
+                        CAPTURE_BATCH,
                         RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
     from ..config import FFT_SIZE, IQ_BLOCK
 

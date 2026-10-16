@@ -1,6 +1,5 @@
 """Satellite TLE handling and pass prediction (skyfield)."""
 import json
-import os
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone

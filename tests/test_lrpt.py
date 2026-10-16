@@ -14,7 +14,6 @@ Run: python -u tests/test_lrpt.py
 """
 import os
 import sys
-import tempfile
 
 import numpy as np
 

@@ -37,7 +37,7 @@ from .. import db
 from .. import state
 from ..calibration import (AIRBAND, AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMARY_DONGLE,
                           SDR_DONGLE_GAIN, correction_info, tuning_correction)
-from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION, DONGLES_FILE,
+from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION,
                      FFT_SIZE, IQ_BLOCK, IQ_RECORD_FREQS, LAT, LOGDIR, LON,
                      MANUAL_REC_MAX_SECS, RECORD_DIR, SDR_GAIN, SDR_OFFSET_HZ,
                      SDR_RATE, WATERFALL_ROWS)

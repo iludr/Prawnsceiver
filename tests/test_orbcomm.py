@@ -34,7 +34,7 @@ os.environ.setdefault("PRAWN_DB_FILE",
                      os.path.join(tempfile.mkdtemp(), "station.db"))
 from noaa_receiver.decoding import orbcomm
 from noaa_receiver import state
-from noaa_receiver.config import ORBCOMM_CENTER_HZ, SDR_RATE, FFT_SIZE
+from noaa_receiver.config import ORBCOMM_CENTER_HZ, FFT_SIZE
 import threading  # noqa: E402
 
 # --- 1. Fletcher-16 (mod 256): hand-computed vector + tail property ---

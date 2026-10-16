@@ -4,7 +4,6 @@ Run: python3 tests/test_history.py
 """
 import os
 import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))

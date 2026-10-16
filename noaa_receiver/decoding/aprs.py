@@ -1026,7 +1026,6 @@ def afsk_modulate(data_bits, fs=SDR_RATE, dev=2400.0, amp=0.6):
             level ^= 1                 # NRZI: 0 = tone change
         tones.append(APRS_MARK_HZ if level else APRS_SPACE_HZ)
     tone = np.repeat(np.array(tones), fs // APRS_BITRATE)
-    t = np.arange(len(tone)) / fs
     audio = np.sin(2 * np.pi * np.cumsum(tone) / fs)   # phase-continuous tone
     phase = 2 * np.pi * np.cumsum(dev * audio) / fs   # ...as FM deviation
     return (amp * np.exp(1j * phase)).astype(np.complex64)

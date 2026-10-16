@@ -180,7 +180,6 @@ print("11. single-bit corruption fails the frame CRC: ok")
 
 # --- 13. 24 h traffic-log trim + persistent ship registry ---
 import json as _json, time as _time
-import json as _json, time as _time
 state.ais_ships_all = {}
 now13 = _time.time()
 # a 25 h old log row plus two fresh appends: the trim (fires on append

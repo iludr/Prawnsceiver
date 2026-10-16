@@ -5,7 +5,6 @@ Run: python -u tests/test_ws.py  (no hardware; binds an ephemeral localhost port
 import base64
 import os
 import socket
-import struct
 import sys
 import tempfile
 import threading
@@ -141,7 +140,6 @@ assert buf3[2:6] == b"ping", buf3[:6]
 print("4. ping answered with pong: ok")
 
 # --- 5. status.json carries the span field ---
-st = json.loads if False else None
 import json as _json
 st = _json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/status.json").read())
 assert st.get("sdr_khz") == 2400, st.get("sdr_khz")

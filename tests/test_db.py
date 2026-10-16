@@ -2,7 +2,6 @@
 
 Run: python -u tests/test_db.py
 """
-import io
 import json
 import os
 import sys
@@ -10,7 +9,6 @@ import tempfile
 import time
 from datetime import datetime, timezone
 
-import tempfile
 os.environ.setdefault("PRAWN_DB_FILE",
                      os.path.join(tempfile.mkdtemp(), "station.db"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
