@@ -76,6 +76,40 @@ def _get_fft_window():
         _fft_window = np.hamming(FFT_SIZE)
     return _fft_window
 
+
+def push_wf_row(entry, c, k, sig_bins):
+    """One dongle-card feed update from FFT block k of complex batch c —
+    the waterfall/signal block shared by the decode capture threads
+    (AIS/APRS/Orbcomm/POCSAG; the satellite thread keeps its own richer
+    variant inline in sdr_capture_thread, with scanner + signal-history
+    extras). Emits the display row peak-normalized to 0..255 (rolled by
+    the display offset so the card's center label matches), the true
+    dBFS row for the WS feed (absolute level, computed pre-normalization
+    — the normalization destroys level, useless for the spectrum display)
+    and the signal metric from sig_bins around the band center. Returns
+    the rolled pre-normalized magnitude for callers riding extra
+    analysis on the same FFT (Orbcomm's channel scan)."""
+    import numpy as np
+    window = _get_fft_window()
+    magnitude = np.abs(np.fft.fftshift(np.fft.fft(
+        c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window)))
+    center = len(magnitude) // 2
+    rot = int(SDR_OFFSET_HZ / SDR_RATE * FFT_SIZE)
+    db_row = np.roll((20 * np.log10(
+        np.maximum(magnitude, 1e-6)
+        / (31.875 * FFT_SIZE)) * 10).astype(np.int16), rot).tobytes()
+    rolled = np.roll(magnitude, rot)
+    with entry["lock"]:
+        entry["signal"] = float(
+            magnitude[center - sig_bins:center + sig_bins].mean())
+        peak = magnitude.max()
+        if peak > 0:
+            magnitude *= 255.0 / peak
+        entry["waterfall"].append(np.roll(magnitude, rot).astype(int).tolist())
+        entry["wf_db"].append(db_row)
+        entry["wf_db_seq"] += 1
+    return rolled
+
 # ---------- rtl_tcp control protocol ----------
 # rtl_tcp exposes a dongle over TCP: a continuous IQ stream plus a tiny
 # command channel (1-byte command + 4-byte big-endian value). Frequency

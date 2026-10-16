@@ -772,8 +772,8 @@ def ais_capture_thread(did):
     the dongle card shows the AIS spectrum like any other.
     """
     from ..sdr.dsp import iq_to_complex, frequency_shift
-    from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
-                        _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
+    from ..sdr.radio import (_IQReader, _PipeRecv, _kill_rtl_sdr,
+                        _rtl_tcp_connect, _spawn_rtl_sdr, push_wf_row,
                         CAPTURE_BATCH,
                         RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
     from ..config import FFT_SIZE, IQ_BLOCK
@@ -814,7 +814,6 @@ def ais_capture_thread(did):
     state.log_console(f"📡 AIS receiver on dongle {did}: "
                       f"{AIS_CHANNEL_HZ[0]/1e6:.3f} + {AIS_CHANNEL_HZ[1]/1e6:.3f} MHz")
     restart_backoff = 5.0
-    block_count = 0
     while True:
         if entry.get("closed") or not entry.get("ais") or entry.get("paused"):
             ais_reception_off()
@@ -870,37 +869,12 @@ def ais_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
-                # Waterfall + signal for the dongle card. The raw band is
-                # truly centered at AIS_CENTER + SDR_OFFSET_HZ (each
-                # dongle's correction cancels its crystal error at the
-                # tuner); the card labels the center as AIS_CENTER, so the
-                # displayed row rotates by +SDR_OFFSET_HZ - the same
-                # convention as the satellite cards (their thread shifts
-                # the baseband to the tracked frequency before the FFT).
-                block_count += CAPTURE_BATCH
+                # Waterfall + signal for the dongle card (rows rolled by
+                # +SDR_OFFSET_HZ so the card's center label reads the AIS
+                # channel - see push_wf_row)
                 for k in range(0, len(c) // FFT_SIZE, AIS_WF_BLOCKS):
                     try:
-                        window = _get_fft_window()
-                        magnitude = np.abs(np.fft.fftshift(np.fft.fft(c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window)))
-                        center = len(magnitude) // 2
-                        # dBFS row (absolute level, pre-normalization - see
-                        # the satellite thread) rolled exactly like the
-                        # display row, so the dB feed matches the card's
-                        # frequency labels
-                        rot = int(SDR_OFFSET_HZ / SDR_RATE * FFT_SIZE)
-                        db_row = np.roll((20 * np.log10(
-                            np.maximum(magnitude, 1e-6)
-                            / (31.875 * FFT_SIZE)) * 10).astype(np.int16), rot).tobytes()
-                        with entry["lock"]:
-                            entry["signal"] = float(
-                                magnitude[center - _SIG_BINS:center + _SIG_BINS].mean())
-                            peak = magnitude.max()
-                            if peak > 0:
-                                magnitude *= 255.0 / peak
-                            entry["waterfall"].append(
-                                np.roll(magnitude, rot).astype(int).tolist())
-                            entry["wf_db"].append(db_row)
-                            entry["wf_db_seq"] += 1
+                        push_wf_row(entry, c, k, _SIG_BINS)
                     except Exception:
                         pass
                 # Demodulate both AIS channels from the same batch

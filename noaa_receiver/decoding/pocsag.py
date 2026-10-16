@@ -564,7 +564,7 @@ def pocsag_capture_thread(did):
     backoff, role handover); instead of satellite carriers it tracks
     every paging channel in the 2.4 MHz capture."""
     from ..sdr.dsp import iq_to_complex
-    from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
+    from ..sdr.radio import (_IQReader, _PipeRecv, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, IQ_BLOCK,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
@@ -630,8 +630,7 @@ def pocsag_capture_thread(did):
                                   f"correction {correction:+d}Hz)")
                 reader = _IQReader(sock, IQ_BLOCK)
             dec = BandDecoder(did, tune, SDR_RATE)
-            rot = int(SDR_OFFSET_HZ / SDR_RATE * FFT_SIZE)
-            _SIG_BINS = max(1, round(39375 / (SDR_RATE / FFT_SIZE)))
+            sig_bins = max(1, round(39375 / (SDR_RATE / FFT_SIZE)))
             while True:
                 if entry.get("closed") or not entry.get("pocsag"):
                     break
@@ -642,30 +641,11 @@ def pocsag_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
-                # waterfall + signal for the dongle card (same rows and
-                # dBFS feed as every other capture thread)
+                # waterfall + signal for the dongle card
+                # (see push_wf_row)
                 for k in range(0, len(c) // FFT_SIZE, _WF_EVERY):
                     try:
-                        window = _get_fft_window()
-                        magnitude = np.abs(np.fft.fftshift(np.fft.fft(
-                            c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window)))
-                        center = len(magnitude) // 2
-                        db_row = np.roll((20 * np.log10(
-                            np.maximum(magnitude, 1e-6)
-                            / (31.875 * FFT_SIZE)) * 10).astype(np.int16),
-                            rot).tobytes()
-                        rolled = np.roll(magnitude, rot)
-                        with entry["lock"]:
-                            entry["signal"] = float(
-                                magnitude[center - _SIG_BINS:
-                                          center + _SIG_BINS].mean())
-                            peak = magnitude.max()
-                            if peak > 0:
-                                magnitude *= 255.0 / peak
-                            entry["waterfall"].append(
-                                rolled.astype(int).tolist())
-                            entry["wf_db"].append(db_row)
-                            entry["wf_db_seq"] += 1
+                        push_wf_row(entry, c, k, sig_bins)
                     except Exception:
                         pass
                 pages = dec.feed(c)

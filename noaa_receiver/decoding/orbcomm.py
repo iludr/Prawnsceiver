@@ -654,7 +654,7 @@ def orbcomm_capture_thread(did):
     backoff); instead of two fixed channels it tracks every carrier it
     finds in the 137.0-138.0 MHz downlink band."""
     from ..sdr.dsp import iq_to_complex
-    from ..sdr.radio import (_IQReader, _PipeRecv, _get_fft_window,
+    from ..sdr.radio import (_IQReader, _PipeRecv, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, IQ_BLOCK,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
@@ -715,7 +715,7 @@ def orbcomm_capture_thread(did):
                                   f"(offset +{SDR_OFFSET_HZ + correction}Hz, correction {correction:+d}Hz)")
                 reader = _IQReader(sock, IQ_BLOCK)
             k_lo, k_hi, bin_hz = _band_bin_range(correction)
-            rot = int(SDR_OFFSET_HZ / SDR_RATE * FFT_SIZE)
+            sig_bins = max(1, round(39375 / (SDR_RATE / FFT_SIZE)))
             while True:
                 if entry.get("closed") or not entry.get("orbcomm"):
                     break
@@ -725,29 +725,12 @@ def orbcomm_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
-                # Waterfall + signal for the dongle card (same rows and
-                # dBFS feed as the satellite/AIS threads), plus the band
-                # energy scan riding on the same FFTs
+                # Waterfall + signal for the dongle card, plus the band
+                # energy scan riding on the same FFTs (push_wf_row hands
+                # back the rolled pre-normalization magnitude)
                 for k in range(0, len(c) // FFT_SIZE, ORBCOMM_WF_BLOCKS):
                     try:
-                        window = _get_fft_window()
-                        magnitude = np.abs(np.fft.fftshift(np.fft.fft(
-                            c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window)))
-                        center = len(magnitude) // 2
-                        db_row = np.roll((20 * np.log10(
-                            np.maximum(magnitude, 1e-6)
-                            / (31.875 * FFT_SIZE)) * 10).astype(np.int16), rot).tobytes()
-                        rolled = np.roll(magnitude, rot)
-                        _SIG_BINS = max(1, round(39375 / (SDR_RATE / FFT_SIZE)))
-                        with entry["lock"]:
-                            entry["signal"] = float(
-                                magnitude[center - _SIG_BINS:center + _SIG_BINS].mean())
-                            peak = magnitude.max()
-                            if peak > 0:
-                                magnitude *= 255.0 / peak
-                            entry["waterfall"].append(rolled.astype(int).tolist())
-                            entry["wf_db"].append(db_row)
-                            entry["wf_db_seq"] += 1
+                        rolled = push_wf_row(entry, c, k, sig_bins)
                         for freq, _snr in _detect_channels(
                                 rolled, det, k_lo, k_hi, bin_hz, correction):
                             _track_candidate(det, did, freq, bin_hz)
