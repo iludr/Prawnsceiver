@@ -616,6 +616,7 @@ def load_dongles():
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
                                  " aprs_iss, pocsag, adsb FROM dongles"
                                  " ORDER BY port, host")]
+    from_db = bool(entries)   # persisted rows are the source of truth
     if not entries:
         entries = [(h, p, False, False, False, False, False, False)
                    for h, p in DEFAULT_DONGLES]
@@ -626,6 +627,17 @@ def load_dongles():
         except ValueError as e:
             state.log_console(f"Skipping persisted dongle {host}:{port}: {e}", "warn")
             continue
+        if from_db:
+            # the persisted role flags are authoritative: clear the
+            # calibration AIS pin (_new_entry marks AIS_DONGLE) and any
+            # other default before restoring what the operator last
+            # chose — otherwise a dongle moved to another role comes
+            # back up with BOTH flags (the supervisor would run AIS on
+            # the ADS-B dongle, measured live 2026-10-17)
+            with state.status_lock:
+                for flag in ('ais', 'orbcomm', 'aprs', 'aprs_iss',
+                             'pocsag', 'adsb'):
+                    state.sdrs[did][flag] = False
         if was_ais:
             # the AIS switch is persisted too - a restart must not silently
             # put a dongle the operator dedicated to ship traffic back on
