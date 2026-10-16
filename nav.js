@@ -19,6 +19,7 @@
         ['/ais',     '🚢',  'AIS Ship Traffic',          'img/thumbs/AIS.jpg',     'img/AIS.png'],
         ['/orbcomm', '🛰',  'Orbcomm Downlink',          'img/thumbs/Orbcomm.jpg', 'img/Orbcomm.png'],
         ['/aprs',    '📡',  'APRS Packet Log',           'img/thumbs/APRS.jpg',    'img/APRS.png'],
+        ['/adsb',    '✈️',  'ADS-B Aircraft Tracking',   'img/thumbs/ADSB.jpg',    'img/ADSB.png'],
         ['/pocsag',  '📟',  'POCSAG Paging',            'img/thumbs/POCSAG.jpg',  'img/POCSAG.png'],
         ['/adsb',    '✈️',  'ADS-B Aircraft',           null,                      null],
         ['/console', '🛠️', 'Debug Console',             'img/thumbs/debug.jpg',   'img/debug.png']
