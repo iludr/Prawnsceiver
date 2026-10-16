@@ -689,11 +689,18 @@ def decode_batch(mag, st):
         st["tail"] = x
         return []
     st["tail"] = x[-_TAIL:]
-    floor = float(np.percentile(x, 20))
+    # Noise-PEAK level: the magnitude of |IQ| is Rayleigh-distributed,
+    # so a low percentile sits deep inside the noise (a third of all
+    # samples crossed the first 2.2 x p20 threshold in the field,
+    # 444k bogus candidates in 6 s). The 90th percentile anchors the
+    # threshold above the noise peaks: 2 x p90 (~4.3 sigma) is crossed
+    # by ~1e-4 of noise samples, and the 4-pulse pattern (4 crossings at
+    # exact offsets) makes false preambles vanishingly rare.
+    floor = float(np.percentile(x, 90))
     st["floor"] = floor if st["floor"] is None \
         else 0.85 * st["floor"] + 0.15 * floor
-    hi = 2.2 * max(st["floor"], 1e-9)
-    lo = 1.35 * max(st["floor"], 1e-9)
+    hi = 2.0 * max(st["floor"], 1e-9)
+    lo = hi
     out = []
     last_end = st["last_end_abs"]           # absolute skip mark
     for q in np.flatnonzero(x > hi):
