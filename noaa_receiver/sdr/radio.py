@@ -454,138 +454,85 @@ def remove_dongle(did):
     _persist_dongles()
     return True
 
-def set_dongle_ais(did, on):
-    """Switch one dongle between satellite tracking and AIS reception
-    (dashboard button — with a single dongle this is how it listens for
-    ship traffic without a dedicated second receiver).
+# The four dedicated decode roles a dongle can take (dashboard role
+# dropdown): flag name -> console prefix + band description. One dongle,
+# one role — switching one on ends every other role session on it.
+_ROLE_DEFS = {
+    'ais': ('🚢', 'AIS (161.975/162.025 MHz)'),
+    'orbcomm': ('🛰', 'Orbcomm (137.0-138.0 MHz)'),
+    'aprs': ('📡', 'APRS ({})'),
+    'pocsag': ('📟', 'POCSAG paging (466.0 MHz)'),
+}
+
+
+def _set_dongle_role(did, role, on):
+    """Switch one dongle between satellite tracking and a dedicated
+    decode role (AIS / Orbcomm / APRS / POCSAG — the dashboard's role
+    dropdown; with a single dongle this is how it listens for ships,
+    Orbcomm, packet radio or pagers without a dedicated receiver).
 
     Flips the registry flag and closes the running capture thread's
-    socket under it: the thread leaves its read loop, notices the flag no
-    longer matches its role and exits; the supervisor loop (sdr_thread)
-    then starts the capture thread for the new role within ~2 s. The
-    dongle stays registered — its id, waterfall and card survive the
-    switch. Unknown id: False; a no-op request still succeeds.
+    socket under it: the thread leaves its read loop, notices the flag
+    no longer matches its role and exits; the supervisor loop
+    (sdr_thread) then starts the capture thread for the new role
+    within ~2 s. The dongle stays registered — its id, waterfall and
+    card survive the switch. On=1 also ends every other role on the
+    dongle and drops a dangling manual recording (a decode capture
+    neither records nor demodulates FM — the flag would sit there and
+    resume the moment the dongle is switched back). Unknown id: False;
+    a no-op request still succeeds.
     """
     entry = state.sdrs.get(did)
     if entry is None:
         return False
     on = bool(on)
-    if bool(entry.get('ais')) == on:
+    if bool(entry.get(role)) == on:
         return True
+    emoji, band = _ROLE_DEFS[role]
+    if role == 'aprs':      # APRS names its live channel (ISS preset or DL)
+        band = band.format('145.825 MHz (ISS digipeater)' if entry.get('aprs_iss')
+                           else '144.800 MHz')
     with state.status_lock:
-        entry['ais'] = on
+        entry[role] = on
         if on:
-            # one dongle, one dedicated role: switching to AIS ends an
-            # Orbcomm/APRS session on the same dongle (and vice versa in
-            # set_dongle_orbcomm / set_dongle_aprs)
-            entry['orbcomm'] = False
-            entry['aprs'] = False
-            entry['pocsag'] = False
-        if on:
-            # An AIS capture thread neither records nor demodulates FM —
-            # a manual recording left over from satellite mode would sit
-            # as a dangling flag and resume the moment the dongle is
-            # switched back, so it is dropped here instead
+            for other in _ROLE_DEFS:
+                if other != role:
+                    entry[other] = False
             state.manual_recording.pop(did, None)
     if on:
-        state.log_console(f"🚢 Dongle {did} switched to AIS (161.975/162.025 MHz) — satellite reception on it paused")
+        state.log_console(f"{emoji} Dongle {did} switched to {band} — satellite reception on it paused")
     else:
         state.log_console(f"🛰 Dongle {did} switched back to satellite tracking")
     _persist_dongles()
     _stop_capture(entry)
     return True
+
+
+def set_dongle_ais(did, on):
+    """Dedicate this dongle to the marine AIS channels (161.975/162.025
+    MHz, both decoded) and back — see _set_dongle_role."""
+    return _set_dongle_role(did, 'ais', on)
+
 
 def set_dongle_orbcomm(did, on):
-    """Switch one dongle between satellite tracking and Orbcomm
-    reception (dashboard button, mirroring set_dongle_ais): on=1 parks
-    it on 137.5 MHz — one 2.4 MHz capture covers the whole Orbcomm
-    downlink band — and every satellite carrier it finds there is
-    demodulated (see noaa_receiver/orbcomm.py). The capture thread
-    restarts in the new role within ~2 s; the dongle stays registered.
-    Unknown id: False; a no-op request still succeeds.
-    """
-    entry = state.sdrs.get(did)
-    if entry is None:
-        return False
-    on = bool(on)
-    if bool(entry.get('orbcomm')) == on:
-        return True
-    with state.status_lock:
-        entry['orbcomm'] = on
-        if on:
-            entry['ais'] = False     # one dedicated role per dongle
-            entry['aprs'] = False
-            entry['pocsag'] = False
-            state.manual_recording.pop(did, None)
-    if on:
-        state.log_console(f"🛰 Dongle {did} switched to Orbcomm (137.0-138.0 MHz) — satellite reception on it paused")
-    else:
-        state.log_console(f"🛰 Dongle {did} switched back to satellite tracking")
-    _persist_dongles()
-    _stop_capture(entry)
-    return True
+    """Dedicate this dongle to the Orbcomm satellite downlink band
+    (137.0-138.0 MHz, one 2.4 MHz capture covers it, every carrier
+    decoded) and back — see _set_dongle_role."""
+    return _set_dongle_role(did, 'orbcomm', on)
+
 
 def set_dongle_aprs(did, on):
-    """Switch one dongle between satellite tracking and the APRS role
-    (dashboard button, mirroring set_dongle_ais): on=1 parks it on
-    144.800 MHz (or 145.825 MHz, the ISS digipeater, when the dongle's
-    aprs_iss flag is set — see set_dongle_aprs_iss) and decodes Bell 202
-    AFSK AX.25 frames (see noaa_receiver/decoding/aprs.py). The capture
-    thread restarts in the new role within ~2 s; the dongle stays
-    registered. Unknown id: False; a no-op request still succeeds."""
-    entry = state.sdrs.get(did)
-    if entry is None:
-        return False
-    on = bool(on)
-    if bool(entry.get('aprs')) == on:
-        return True
-    with state.status_lock:
-        entry['aprs'] = on
-        if on:
-            entry['ais'] = False     # one dedicated role per dongle
-            entry['orbcomm'] = False
-            entry['pocsag'] = False
-            state.manual_recording.pop(did, None)
-    if on:
-        freq = ("145.825 MHz (ISS digipeater)" if entry.get('aprs_iss')
-                else "144.800 MHz")
-        state.log_console(f"📡 Dongle {did} switched to APRS ({freq}) — satellite reception on it paused")
-    else:
-        state.log_console(f"📡 Dongle {did} switched back to satellite tracking")
-    _persist_dongles()
-    _stop_capture(entry)
-    return True
+    """Dedicate this dongle to the APRS channel (144.800 MHz, or
+    145.825 MHz ISS digipeater when aprs_iss is set — see
+    set_dongle_aprs_iss) and back — see _set_dongle_role."""
+    return _set_dongle_role(did, 'aprs', on)
 
 
 def set_dongle_pocsag(did, on):
-    """Switch one dongle between satellite tracking and the POCSAG
-    paging role (dashboard button, mirroring set_dongle_ais): on=1
-    parks it on config.PAGING_CENTER_HZ - one 2.4 MHz capture covers
-    the whole local paging ecosystem - and EVERY paging channel
-    found there is decoded in parallel (see
-    noaa_receiver/decoding/pocsag.py). The capture thread restarts
-    in the new role within ~2 s; the dongle stays registered.
-    Unknown id: False; a no-op request still succeeds."""
-    entry = state.sdrs.get(did)
-    if entry is None:
-        return False
-    on = bool(on)
-    if bool(entry.get('pocsag')) == on:
-        return True
-    with state.status_lock:
-        entry['pocsag'] = on
-        if on:
-            entry['ais'] = False     # one dedicated role per dongle
-            entry['orbcomm'] = False
-            entry['aprs'] = False
-            state.manual_recording.pop(did, None)
-    if on:
-        state.log_console(f"📟 Dongle {did} switched to POCSAG paging (466.0 MHz) — satellite reception on it paused")
-    else:
-        state.log_console(f"📟 Dongle {did} switched back to satellite tracking")
-    _persist_dongles()
-    _stop_capture(entry)
-    return True
+    """Dedicate this dongle to the paging band (466.0 MHz — one 2.4 MHz
+    capture covers the local paging ecosystem, every channel decoded
+    in parallel) and back — see _set_dongle_role."""
+    return _set_dongle_role(did, 'pocsag', on)
 
 
 def set_dongle_aprs_iss(did, on):
