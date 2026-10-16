@@ -64,35 +64,27 @@ AIRBAND = (117_975_000, 136_975_000)
 #   'ppm': fallback for frequencies not listed (scaled); None = no fallback
 # Dongles not listed here fall back to the primary dongle's values.
 SDR_DONGLE_CORRECTIONS = {
-    # Old generic R820T (now the AIS dongle, USB device 1 / "usb:1"):
-    # never confirms PLL lock, but the crystal error is a
-    # smooth +72..82 ppm HIGH across all bands (LO tunes high -> correction
-    # negative). Measured 2026-10-06, four independent methods agree:
-    #   - rtl_test -p: cumulative PPM 82 / 72 (sample clock = PLL reference)
-    #   - 103.0 MHz: FM stereo pilot 18998.05 Hz with -8200 applied -> +8198 Hz
-    #   - 144.8 MHz: local carriers line up with the 144.6929/144.754/144.8761
-    #     survey (that survey reported true RF minus the LO error)
-    #   - 437.55 MHz: 15:08 ISS ridges -22.5..-28.7 kHz raw fit +34.8 kHz
-    #     with approach Doppler +6..+12 kHz
-    # The earlier +21.6 kHz VHF3 value came from an R820T spur at bin 302
-    # misread as the satellite: with +21600 applied, neither dongle showed
-    # any APT ridge anywhere in the +/-120 kHz window during the 18:00 and
-    # 19:38 NOAA 15 passes (58 deg max elevation).
-    "192.168.3.65:1235": {
-        "freqs": {
-            137912500: -10977,  # Meteor LRPT band (79.6 ppm x 137.91 MHz)
-            437550000: -34827,  # ISS (Zarya) (79.6 ppm x 437.55 MHz)
-        },
-        "fm_band": -8200,  # VHF2: tunes ~8 kHz HIGH (carriers 6-11 kHz below nominal, measured on 89.7/93.0/95.0/99.6/103.0/105.0)
-        # ppm fallback, correctly signed since 2026-10-11: the old +80
-        # entry contradicted this dongle's OWN measured values
-        # (-10977 Hz @ 137.9 MHz / -34827 Hz @ 437.55 MHz, both
-        # -79.6 ppm) and mistuned the 162 MHz AIS band by +26 kHz.
-        # -80 ppm follows the measurements' trend (-12960 Hz at the
-        # AIS band); a direct measurement on prawntenna2 would still
-        # be better than the fallback.
-        "ppm": -80,
-    },
+    # DISABLED 2026-10-17 by operator: every value below was measured on
+    # the old Raspberry Pi, whose USB ports had issues — the scaled ppm
+    # fallback put -87.2 kHz on the 1090 MHz ADS-B tune and the dongle
+    # decoded nothing. Disabled until the dongle is re-measured on the
+    # notebook (rtl_test -p / waterfall carrier fit); restore this block
+    # — or replace with fresh values — when the operator says so.
+    #   "192.168.3.65:1235": {
+    #       "freqs": {
+    #           137912500: -10977,  # Meteor LRPT band (79.6 ppm x 137.91 MHz)
+    #           437550000: -34827,  # ISS (Zarya) (79.6 ppm x 437.55 MHz)
+    #       },
+    #       "fm_band": -8200,  # VHF2: tunes ~8 kHz HIGH (carriers 6-11 kHz below nominal, measured on 89.7/93.0/95.0/99.6/103.0/105.0)
+    #       # ppm fallback, correctly signed since 2026-10-11: the old +80
+    #       # entry contradicted this dongle's OWN measured values
+    #       # (-10977 Hz @ 137.9 MHz / -34827 Hz @ 437.55 MHz, both
+    #       # -79.6 ppm) and mistuned the 162 MHz AIS band by +26 kHz.
+    #       # -80 ppm follows the measurements' trend (-12960 Hz at the
+    #       # AIS band); a direct measurement on prawntenna2 would still
+    #       # be better than the fallback.
+    #       "ppm": -80,
+    #   },
     # NESDR SMArt v5 (R820T2 + 0.5 ppm TCXO), measured 2026-10-10 during
     # high-rate mode (960 kHz capture, 1875 Hz FFT bins):
     #   - NOAA 19 DSB pass 19:09-19:11: the waterfall carrier (post-offset
