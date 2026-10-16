@@ -26,13 +26,28 @@ function fmtDateTime(ts) {
 function cell(v, cls, dash) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + (v === null || v === undefined ? '<span class="na">' + (dash || '—') + '</span>' : v) + '</td>'; }
 
 // ---------- persistent aircraft registry (every aircraft ever received) ----------
+// One row per plane with everything merged (latest callsign, altitude,
+// speed, track, vertical rate and position of that aircraft) plus the
+// message history — the track-mode checkbox column draws the last 24 h
+// path on the map above, like the AIS page's 'Show path on map'.
 const regOpen = new Set();       // ICAOs whose message history is expanded
+let trackMode = false;           // 'show path on map' multi-select active
+const selectedAircraft = new Set(); // ICAOs whose path is drawn
+const trackLayers = {};          // ICAO -> Leaflet polyline
+const TRACK_COLORS = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff', '#c77dff',
+                      '#ff9770', '#70d6ff', '#b5e48c', '#f7a072', '#9bd1e5'];
+const REG_HEAD_PLAIN = '<th>callsign</th><th>ICAO</th><th>alt</th>'
+    + '<th>speed</th><th>track</th><th>v/s</th><th>position</th>'
+    + '<th>first seen</th><th>last seen</th><th>total msgs</th>'
+    + '<th>message history</th>';
+const REG_HEAD_TRACK = '<th>path</th>' + REG_HEAD_PLAIN;
 
 function applyRegistry(aircraft) {
     document.getElementById('regcount').textContent = aircraft.length;
     const rows = document.getElementById('regrows');
     if (!aircraft.length) {
-        rows.innerHTML = '<tr><td colspan="6" class="muted">No aircraft in the registry yet — it fills as aircraft come into range.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="' + (trackMode ? 12 : 11)
+            + '" class="muted">No aircraft in the registry yet — it fills as aircraft come into range.</td></tr>';
         return;
     }
     let html = '';
@@ -45,20 +60,41 @@ function applyRegistry(aircraft) {
                 ? e.lat.toFixed(4) + ', ' + e.lon.toFixed(4) : '—';
             msgs += '<tr><td class="t">' + esc(t) + '</td>'
                 + '<td class="df">' + esc(e.df) + '</td>'
+                + '<td class="type">' + esc(TC_NAMES[e.tc] || (e.tc ? 'tc ' + e.tc : '')) + '</td>'
                 + '<td class="cs">' + esc(e.callsign || '') + '</td>'
                 + '<td>' + esc(pos) + '</td>'
                 + '<td class="hex">' + esc(e.hex || '') + '</td></tr>';
         }
+        const pos = (a.lat !== null && a.lat !== undefined)
+            ? '<a href="https://www.google.com/maps?q=' + a.lat + ',' + a.lon
+              + '" target="_blank" rel="noopener">' + a.lat.toFixed(4) + ', ' + a.lon.toFixed(4) + '</a>'
+            : null;
+        const alt = a.alt_ft !== null && a.alt_ft !== undefined ? a.alt_ft + ' ft' : null;
+        const spd = a.speed_kt !== null && a.speed_kt !== undefined ? a.speed_kt + ' kt' : null;
+        const trk = a.track_deg !== null && a.track_deg !== undefined ? a.track_deg + '\u00b0' : null;
+        const vs = a.vs_fpm !== null && a.vs_fpm !== undefined ? a.vs_fpm + ' fpm' : null;
         html += '<tr>'
+            + (trackMode
+                ? '<td><input type="checkbox"'
+                    + (selectedAircraft.has(a.icao) ? ' checked' : '')
+                    + ' onchange="trackToggle(\'' + esc(a.icao) + '\', this.checked)"></td>'
+                : '')
             + '<td class="cs">' + esc(a.callsign || '') + '</td>'
             + '<td class="icao">' + esc(a.icao) + '</td>'
+            + cell(alt)
+            + cell(spd)
+            + cell(trk)
+            + cell(vs)
+            + cell(pos, 'pos')
             + '<td class="t">' + (a.first_seen ? fmtDateTime(a.first_seen) : '—') + '</td>'
             + '<td class="t">' + (a.last_seen ? fmtDateTime(a.last_seen) : '—') + '</td>'
             + '<td>' + (a.msgs || 0) + '</td>'
             + '<td><details' + (regOpen.has(a.icao) ? ' open' : '')
             + ' ontoggle="regToggle(\'' + esc(a.icao) + '\', this.open)">'
             + '<summary>' + recent.length + ' messages (last 10)</summary>'
-            + '<table class="regmsgs"><tbody>' + msgs + '</tbody></table>'
+            + '<table class="regmsgs"><thead><tr><th>time</th><th>DF</th>'
+            + '<th>type</th><th>callsign</th><th>position</th><th>raw frame</th>'
+            + '</tr></thead><tbody>' + msgs + '</tbody></table>'
             + '</details></td></tr>';
     }
     rows.innerHTML = html;
@@ -74,8 +110,73 @@ async function loadRegistry() {
 
 function regToggle(icao, open) { if (open) regOpen.add(icao); else regOpen.delete(icao); }
 
+// ---------- path history on the map (like the AIS ship tracks) ----------
+function toggleTrackMode() {
+    trackMode = !trackMode;
+    if (!trackMode) {
+        for (const m of Array.from(selectedAircraft)) removeTrack(m);
+        selectedAircraft.clear();
+    }
+    document.getElementById('trackmode-btn').innerHTML =
+        trackMode ? '&#10060; Exit path mode' : '&#128506; Show path on map';
+    document.getElementById('reghead').innerHTML =
+        trackMode ? REG_HEAD_TRACK : REG_HEAD_PLAIN;
+    updateTrackHint();
+    loadRegistry();
+}
+
+function updateTrackHint() {
+    const el = document.getElementById('trackmode-hint');
+    if (!trackMode) { el.textContent = ''; return; }
+    el.textContent = selectedAircraft.size
+        ? selectedAircraft.size + ' path(s) drawn (last 24 h) — uncheck to remove'
+        : 'select aircraft below to draw their last 24 h path';
+}
+
+async function trackToggle(icao, on) {
+    if (on) {
+        selectedAircraft.add(icao);
+        await drawTrack(icao);
+    } else {
+        selectedAircraft.delete(icao);
+        removeTrack(icao);
+    }
+    updateTrackHint();
+}
+
+function removeTrack(icao) {
+    if (trackLayers[icao] && map) map.removeLayer(trackLayers[icao]);
+    delete trackLayers[icao];
+}
+
+async function drawTrack(icao) {
+    if (!map) { alert('The map library is unavailable — paths cannot be drawn.'); return; }
+    try {
+        const res = await fetch('/adsb_tracks.json?icao='
+                                + encodeURIComponent(icao) + '&hours=24');
+        const tracks = await res.json();
+        const pts = tracks[icao] || [];
+        removeTrack(icao);
+        if (!pts.length) return;   // no positions in the window: nothing to draw
+        const color = TRACK_COLORS[selectedAircraft.size % TRACK_COLORS.length];
+        const line = L.polyline(pts.map(p => [p.lat, p.lon]),
+                                { color: color, weight: 3, opacity: 0.85 }).addTo(map);
+        const t0 = new Date(pts[0].ts * 1000).toLocaleTimeString([], { hour12: false });
+        const t1 = new Date(pts[pts.length - 1].ts * 1000).toLocaleTimeString([], { hour12: false });
+        const alt0 = pts[0].alt_ft, alt1 = pts[pts.length - 1].alt_ft;
+        line.bindPopup('<b>' + esc(icao) + '</b><br>'
+            + pts.length + ' positions (24 h)<br>' + t0 + ' — ' + t1
+            + (alt1 ? '<br>' + (alt0 || '—') + ' → ' + alt1 + ' ft' : ''));
+        trackLayers[icao] = line;
+        map.fitBounds(line.getBounds().pad(0.2));
+    } catch (err) {
+        console.error('Track load failed for ' + icao, err);
+    }
+}
+
 setInterval(() => { if (!adsbWsLive()) loadRegistry(); }, 30000);
 loadRegistry();
+document.getElementById('trackmode-btn').addEventListener('click', toggleTrackMode);
 
 // ---------- live aircraft map (Leaflet + OpenStreetMap tiles) ----------
 // Aircraft are placed by their latest position and rotated by their
@@ -161,7 +262,7 @@ function updateMap(aircraft) {
     }
     if (onMap && !fitted) fitted = true, fitAircraft();
     document.getElementById('mapstats').textContent =
-        onMap + ' aircraft' + (onMap === 1 ? '' : ' (plural)') + ' with position on the map'
+        onMap + ' aircraft with position on the map'
         + (staleCount ? ' · ' + staleCount + ' faded (not heard for 10+ min)' : '')
         + (noPos ? ' · ' + noPos + ' without position yet' : '');
 }

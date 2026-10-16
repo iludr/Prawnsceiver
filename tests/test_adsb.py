@@ -182,4 +182,61 @@ assert ac["alt_ft"] == 38000 and abs(ac["lat"] - 52.257202) < 1e-5 \
 assert len(state.adsb_aircrafts_all["40621D"]["recent"]) == 2
 print("11. aircraft table: pair decoded to position", (ac["lat"], ac["lon"]))
 
+# --- 12. first-fix seeding from the RECEIVER reference ---
+# The book's example aircraft (52.257N 3.919E) sits ~680 km away, past
+# the local-decode validity window: a single squitter can only seed a
+# zone phantom INSIDE the 180 NM window (a single message cannot do
+# better), and the opposite-parity squitter must then correct it via
+# the pair (which always wins over a seeded position — the corrected
+# position may then be arbitrarily far away).
+from noaa_receiver.config import LAT as REFLAT, LON as REFLON
+state.adsb_aircrafts.clear()
+state.adsb_aircrafts_all.clear()
+d = parse_frame(hex_to_bits(ODD))
+d["hex"] = ODD
+adsb.handle_message(d, None)
+ac = state.adsb_aircrafts["40621D"]
+assert ac.get("lat") is not None, "the seed must land inside the window"
+assert adsb._dist_km(ac["lat"], ac["lon"], REFLAT, REFLON) <= 333.0, ac
+d = parse_frame(hex_to_bits(EVEN))
+d["hex"] = EVEN
+adsb.handle_message(d, None)
+assert abs(ac["lat"] - 52.257202) < 1e-5 and abs(ac["lon"] - 3.919373) < 1e-5, ac
+
+# A synthetic aircraft right over Bavaria (48.50N 11.50E, ~78 km): its
+# FIRST position squitter must seed the correct fix directly
+def encode_cpr(lat, lon, odd):
+    """lat/lon -> (latcpr, loncpr) airborne CPR (test encoder, the
+    inverse of decode_cpr_local's zone arithmetic)."""
+    dlat = 360.0 / (4 * 15 - (1 if odd else 0))
+    latcpr = int((lat / dlat - np.floor(lat / dlat)) * 131072)
+    nl = adsb._nl(lat)
+    dlon = 360.0 / max(nl - (1 if odd else 0), 1)
+    loncpr = int((lon / dlon - np.floor(lon / dlon)) * 131072)
+    return latcpr, loncpr
+
+TEST_ICAO = "0A0001"
+latcpr, loncpr = encode_cpr(48.50, 11.50, False)
+state.adsb_aircrafts.clear()
+state.adsb_aircrafts_all.clear()
+adsb.handle_message({"icao": TEST_ICAO, "df": 17, "tc": 11, "alt_ft": 12500,
+                     "cpr": (latcpr, loncpr, False, False)}, None)
+ac = state.adsb_aircrafts[TEST_ICAO]
+assert ac.get("lat") is not None, "receiver-reference decode must fire"
+assert abs(ac["lat"] - 48.50) < 0.01 and abs(ac["lon"] - 11.50) < 0.01, ac
+print("12. receiver-reference first fix (48.50, 11.50) + pair-corrected"
+      " far seed: ok")
+
+# --- 13. path history from the persistent log (/adsb_tracks.json) ---
+tracks = adsb.aircraft_tracks([TEST_ICAO, "40621D"], 24)
+assert len(tracks[TEST_ICAO]) == 1, tracks
+assert abs(tracks[TEST_ICAO][0]["lat"] - 48.50) < 0.01
+assert tracks[TEST_ICAO][0]["alt_ft"] == 12500
+assert len(tracks["40621D"]) >= 2   # seeded phantom + pair-corrected fix
+                                     # (section 11 logged the same aircraft)
+assert abs(tracks["40621D"][-1]["lat"] - 52.257202) < 1e-5, tracks
+assert adsb.aircraft_tracks([], 24) == {}
+print("13. path history from the message log:", len(tracks[TEST_ICAO]),
+      "point for", TEST_ICAO)
+
 print("\nAll ADS-B tests passed.")

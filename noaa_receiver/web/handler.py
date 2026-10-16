@@ -644,6 +644,19 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             tracks = ais.ship_tracks(mmsis, hours)
             self._send_json(tracks, code=200)
 
+        elif self.path.split('?')[0] == '/adsb_tracks.json':
+            # 24 h position tracks for the ADS-B page's 'path on map'
+            # multi-select: ?icao=4CA251,3C6DD0&hours=24
+            query = self._query()
+            icaos = [i.strip() for i in (query.get('icao') or [''])[0].split(',')
+                      if i.strip()][:50]
+            try:
+                hours = float((query.get('hours') or ['24'])[0])
+            except ValueError:
+                hours = 24.0
+            tracks = adsb.aircraft_tracks(icaos, hours)
+            self._send_json(tracks, code=200)
+
         elif self.path.startswith('/aislog.json'):
             # Tail of the persistent AIS message log (?count=N, max 2000)
             query = self._query()

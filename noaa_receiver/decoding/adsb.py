@@ -342,6 +342,15 @@ def decode_cpr_local(latcpr, loncpr, odd, lat_ref, lon_ref, surface=False):
 
 # ---------- aircraft table ----------
 
+def _dist_km(lat1, lon1, lat2, lon2):
+    """Equirectangular distance in km (zone-error checks; at the
+    latitudes the station decodes the approximation error is small)."""
+    mx = np.radians((lat1 + lat2) / 2.0)
+    dx = np.radians(lon2 - lon1) * np.cos(mx)
+    dy = np.radians(lat2 - lat1)
+    return float(np.hypot(dx, dy) * 6371.0)
+
+
 def handle_message(d, demod_st=None):
     """Merge one decoded frame into the live aircraft table, the
     persistent every-aircraft registry and the message log.
@@ -372,25 +381,42 @@ def handle_message(d, demod_st=None):
             latcpr /= 131072.0
             loncpr /= 131072.0
             cpr = ac.setdefault("cpr", {})
-            # local decode from the aircraft's previous fix first (the
-            # freshest reference, and it works from a single message);
-            # else global decode against the stored opposite parity
-            if ac.get("lat") is not None \
+            # Position sources, in order of trust:
+            # 1) global decode of an odd+even pair within
+            #    CPR_MAX_PAIR_SECS — globally unambiguous, and it
+            #    overrides any seeded position below (the pair wins
+            #    over everything: a seed can be a zone phantom)
+            # 2) local decode from the aircraft's previous fix (the
+            #    freshest reference, works from a single message)
+            # 3) local decode from the RECEIVER position: the seed for
+            #    a first fix. The zone arithmetic is only guaranteed
+            #    within 180 NM (45 NM surface) of the reference, so
+            #    results farther out are discarded; phantoms inside
+            #    that window are unavoidable single-message risks —
+            #    the next pair corrects them (measured: the book's
+            #    680 km example seeded a phantom, the pair fixed it)
+            other = cpr.get(1 - odd)
+            if other is not None \
+                    and now - other[2] <= CPR_MAX_PAIR_SECS \
+                    and other[3] == surface:
+                olat, olon = other[0] / 131072.0, other[1] / 131072.0
+                pos = decode_cpr_global(
+                    olat, olon, latcpr, loncpr, True, surface,
+                    LAT, LON) if odd else decode_cpr_global(
+                    latcpr, loncpr, olat, olon, False, surface,
+                    LAT, LON)
+            if pos is None and ac.get("lat") is not None \
                     and now - ac.get("last_pos_seen", 0) \
                     <= ADSB_AIRCRAFT_TTL_SECS:
                 pos = decode_cpr_local(latcpr, loncpr, odd, ac["lat"],
                                        ac["lon"], surface)
             if pos is None:
-                other = cpr.get(1 - odd)
-                if other is not None \
-                        and now - other[2] <= CPR_MAX_PAIR_SECS \
-                        and other[3] == surface:
-                    olat, olon = other[0] / 131072.0, other[1] / 131072.0
-                    pos = decode_cpr_global(
-                        olat, olon, latcpr, loncpr, True, surface,
-                        LAT, LON) if odd else decode_cpr_global(
-                        latcpr, loncpr, olat, olon, False, surface,
-                        LAT, LON)
+                pos = decode_cpr_local(latcpr, loncpr, odd,
+                                       LAT, LON, surface)
+                if pos is not None and _dist_km(pos[0], pos[1],
+                                                LAT, LON) \
+                        > (80.0 if surface else 333.0):
+                    pos = None   # outside the local-decode validity window
             cpr[odd] = (d["cpr"][0], d["cpr"][1], now, surface)
         for k, v in d.items():
             if k in ("cpr", "df", "tc", "hex", "allcall", "known_only"):
@@ -430,6 +456,7 @@ def _log_entry(d, pos, hexstr, now=None):
         "ts": round(now if now is not None else time.time(), 2),
         "time": datetime.now().strftime("%H:%M:%S"),
         "df": d.get("df"),
+        "tc": d.get("tc"),
         "icao": d["icao"],
         "callsign": d.get("callsign"),
         "lat": lat,
@@ -486,6 +513,35 @@ def adsb_log(count=200):
         except ValueError:
             continue
     return out
+
+
+def aircraft_tracks(icaos, hours=24):
+    """Position track (oldest first) per ICAO, from the persistent
+    message log — the rolling frame history is the station's position
+    archive, like the AIS ship tracks. Only frames that actually
+    decoded a position become track points (with the altitude at that
+    moment); ICAOs without any are returned as empty lists."""
+    wanted = {str(m).strip().upper() for m in icaos if str(m).strip()}
+    if not wanted:
+        return {}
+    try:
+        hours = max(1, min(float(hours), 48))
+    except (TypeError, ValueError):
+        hours = 24.0
+    cutoff = time.time() - hours * 3600
+    tracks = {m: [] for m in wanted}
+    for r in db.query("SELECT entry FROM adsb_messages WHERE ts >= ?"
+                      " ORDER BY id", (cutoff,)):
+        try:
+            e = json.loads(r["entry"])
+        except ValueError:
+            continue
+        m = e.get("icao")
+        if m in tracks and e.get("lat") is not None and e.get("lon") \
+                is not None:
+            tracks[m].append({"ts": e.get("ts", 0), "lat": e["lat"],
+                              "lon": e["lon"], "alt_ft": e.get("alt_ft")})
+    return tracks
 
 
 # ---------- persistent aircraft registry (every aircraft ever seen) ------
