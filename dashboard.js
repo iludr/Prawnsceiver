@@ -1308,27 +1308,36 @@
             if (d.orbcomm) return 'orbcomm';
             if (d.aprs) return 'aprs';
             if (d.pocsag) return 'pocsag';
+            if (d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined) return 'manual';
             return 'sat';
         }
         function applyDongleRole(c, d) {
             const role = dongleRole(d);
-            const sat = role === 'sat' ? '' : 'none';
-            c.tuneRow.style.display = sat;
-            c.nudgeRow.style.display = sat;
-            c.bwRow.style.display = sat;
-            c.scanRow.style.display = sat;
-            c.scanRow2.style.display = sat;
-            c.secTune.style.display = sat;
-            c.modeRow.style.display = sat;
-            c.secBw.style.display = sat;
-            c.secScan.style.display = sat;
-            c.recBtn.style.display = sat;
-            c.listenBtn.style.display = (role === 'sat' || role === 'aprs') ? '' : 'none';
+            // Manual controls (tuning, bandwidth, scan, demod) live in
+            // Manual mode only — the dedicated roles park the dongle on
+            // their band and auto tracking needs no manual input
+            const free = role === 'manual' ? '' : 'none';
+            c.tuneRow.style.display = free;
+            c.nudgeRow.style.display = free;
+            c.bwRow.style.display = free;
+            c.scanRow.style.display = free;
+            c.scanRow2.style.display = free;
+            c.secTune.style.display = free;
+            c.modeRow.style.display = free;
+            c.secMode.style.display = free;
+            c.secBw.style.display = free;
+            c.secScan.style.display = free;
+            // Record (manual raw IQ) and Listen stay available while the
+            // dongle is on satellites or in Manual — pass capture and
+            // live audio are the point there; the decode roles hide both
+            // (APRS keeps its listenable FM audio)
+            c.recBtn.style.display = (role === 'sat' || role === 'manual') ? '' : 'none';
+            c.listenBtn.style.display = (role === 'sat' || role === 'manual' || role === 'aprs') ? '' : 'none';
             // the ISS digipeater checkbox only exists in APRS mode
             c.aprsIssRow.style.display = role === 'aprs' ? 'flex' : 'none';
             if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
             c.roleLast = role;
-            if (role !== 'sat' && role !== 'aprs' && liveAudioOn === d.id) toggleLiveAudio(d.id);
+            if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag') && liveAudioOn === d.id) toggleLiveAudio(d.id);
         }
 
         function ensureDongleCard(d) {
@@ -1694,6 +1703,7 @@
             roleSel.title = 'What this dongle listens for';
             const ROLE_OPTS = [
                 ['sat',     '🛰 Satellites — auto tracking'],
+                ['manual',  '📻 Manual — free tuning'],
                 ['ais',     '🚢 AIS — ship traffic'],
                 ['orbcomm', '🛰 Orbcomm — satellite IoT'],
                 ['aprs',    '📡 APRS — packet radio'],
@@ -1709,6 +1719,7 @@
                 aprs: 'aprs_dongle', pocsag: 'pocsag_dongle',
             };
             const ROLE_TOAST = {
+                manual: '📻 Manual mode — tune this dongle freely (frequency + bandwidth)',
                 ais: '🚢 Switching this dongle to AIS — ship traffic on 161.975/162.025 MHz',
                 orbcomm: '🛰 Switching this dongle to Orbcomm — satellite IoT downlink on 137.0-138.0 MHz',
                 aprs: '📡 Switching this dongle to APRS — ham packet radio on 144.800 MHz',
@@ -1716,22 +1727,39 @@
             };
             roleSel.addEventListener('change', () => {
                 const want = roleSel.value;
-                const cur = (c.lastD && dongleRole(c.lastD)) || 'sat';
+                const ld = c.lastD || {};
+                const cur = dongleRole(ld);
                 if (want === cur) return;
-                const url = want === 'sat'
-                    ? '/' + ROLE_ENDPOINT[cur] + '?d=' + encodeURIComponent(d.id) + '&on=0'
-                    : '/' + ROLE_ENDPOINT[want] + '?d=' + encodeURIComponent(d.id) + '&on=1';
-                fetch(url)
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data.success) {
-                            toast(want === 'sat' ? '🛰 Dongle back to satellite tracking' : ROLE_TOAST[want]);
-                        } else {
-                            toast('Role switch failed: ' + (data.error || 'unknown error'), true);
-                            roleSel.value = cur;
-                        }
-                    })
-                    .catch(() => { toast('Role switch failed: receiver unreachable', true); roleSel.value = cur; });
+                const id = encodeURIComponent(d.id);
+                const DED = ['ais', 'orbcomm', 'aprs', 'pocsag'];
+                // The requests, in order: leaving a dedicated role turns
+                // it off; "Manual" parks the dongle at its current
+                // frequency (detaching it from the scheduler);
+                // "Satellites" also clears a parked manual frequency so
+                // the dongle really rejoins auto tracking
+                const urls = [];
+                if (DED.indexOf(cur) >= 0) urls.push('/' + ROLE_ENDPOINT[cur] + '?d=' + id + '&on=0');
+                if (want === 'manual') {
+                    const f = curDongleMHz(d.id);
+                    if (f === null) { toast('Role switch failed: no frequency to park on', true); roleSel.value = cur; return; }
+                    urls.push('/tune_dongle?d=' + id + '&f=' + f.toFixed(4));
+                } else if (want === 'sat'
+                        && ld.manual_frequency_mhz !== null && ld.manual_frequency_mhz !== undefined) {
+                    urls.push('/tune_dongle?d=' + id + '&f=auto');
+                }
+                if (DED.indexOf(want) >= 0) urls.push('/' + ROLE_ENDPOINT[want] + '?d=' + id + '&on=1');
+                const fail = (msg) => { toast('Role switch failed: ' + msg, true); roleSel.value = cur; };
+                const run = (i) => {
+                    if (i >= urls.length) {
+                        toast(want === 'sat' ? '🛰 Dongle rejoined satellite tracking' : ROLE_TOAST[want]);
+                        return;
+                    }
+                    fetch(urls[i])
+                        .then(r => r.json())
+                        .then(data => { data.success ? run(i + 1) : fail(data.error || 'unknown error'); })
+                        .catch(() => fail('receiver unreachable'));
+                };
+                run(0);
             });
             // ISS digipeater checkbox (APRS mode only, shown by
             // applyDongleRole): retunes the APRS channel from the
@@ -1790,7 +1818,7 @@
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
                 hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, aprsIssRow, aprsIssBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
-                idLed, freqLine, secTune, secBw, secScan, modeRow, modeSel, modeHint,
+                idLed, freqLine, secTune, secMode, secBw, secScan, modeRow, modeSel, modeHint,
             };
             applyDongleRole(c, d);
             return c;
