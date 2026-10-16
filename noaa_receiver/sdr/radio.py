@@ -1030,7 +1030,8 @@ def sdr_capture_thread(did):
             close_wav()
             finalize_manual_rec()
             return
-        if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or entry.get('pocsag'):
+        if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or \
+                entry.get('pocsag') or entry.get('adsb'):
             # AIS, Orbcomm or POCSAG was switched on from the dashboard after this
             # thread started: hand the dongle over to the supervisor's
             # dedicated capture thread for the new role
@@ -1099,7 +1100,8 @@ def sdr_capture_thread(did):
                 # in its reconnect backoff (the socket close missed it)
                 # — without this check the thread would reconnect as
                 # a ghost and hold the dongle forever
-                if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or entry.get('pocsag'):
+                if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or \
+                entry.get('pocsag') or entry.get('adsb'):
                     break
                 raw = reader.read_batch(CAPTURE_BATCH)
                 if raw is None:
@@ -1356,7 +1358,7 @@ def sdr_capture_thread(did):
         except Exception as e:
             if not entry.get('closed') and not entry.get('ais') \
                     and not entry.get('orbcomm') and not entry.get('paused') \
-                    and not entry.get('pocsag'):   # a removed/role-switched/paused dongle's socket is
+                    and not entry.get('pocsag') and not entry.get('adsb'):   # a removed/role-switched/paused dongle's socket is
                 state.log_console(f"SDR thread error (dongle {did}): {e}", "error")  # closed under the thread — not an error
         entry['connected'] = False
         entry['sock'] = None
@@ -1366,7 +1368,9 @@ def sdr_capture_thread(did):
         _kill_rtl_sdr(entry.pop('proc', None))
         close_wav()
         finalize_manual_rec()
-        if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or entry.get('paused'):
+        if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') \
+                or entry.get('aprs') or entry.get('pocsag') or entry.get('adsb') \
+                or entry.get('paused'):
             # a removed/role-switched/paused dongle never reconnects;
             # a dongle removed mid-backoff also needs its WAV closed here
             close_wav()
