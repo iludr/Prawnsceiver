@@ -208,4 +208,4 @@ Station parameters live in `noaa_receiver/config.py`: coordinates
 
 ## Why "Prawnsceiver"?
 
-Because it's a prawn-ceiver — a transceiver with claws. Built with OpenClaw. 🦐
+Because it's a prawn-ceiver — a transceiver with claws. 🦐
