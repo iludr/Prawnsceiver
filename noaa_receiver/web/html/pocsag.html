@@ -6,10 +6,8 @@
 <title>NOAAh's CrabArk — POCSAG Paging</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 12px 15px; }
-h1 { font-size: 1.2em; color: #f39c12; margin-bottom: 4px; }
-.sub { font-size: 1em; color: #888; margin-bottom: 12px; }
-.sub a { color: #f39c12; }
+body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 0 15px 12px; }
+#header { margin: 0 -15px 12px; }
 #stats { color: #4da6ff; font-size: 0.9em; margin-bottom: 10px; }
 table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-bottom: 20px; }
 th { text-align: left; color: #888; border-bottom: 1px solid #0f3460; padding: 4px 6px; position: sticky; top: 0; background: #1a1a2e; }
@@ -28,8 +26,16 @@ tr:hover td { background: #16213e; }
 </style>
 </head>
 <body>
-<h1>📟 POCSAG — Paging Channels</h1>
-<div class="sub"><a href="/">&#8592; dashboard</a> &nbsp;|&nbsp; <a href="/pocsag.json">live status (JSON)</a> &nbsp;|&nbsp; <a href="/pocsaglog.json">page log (JSON)</a> &nbsp;|&nbsp; 466.0 MHz ± 1200 kHz · every channel decoded in parallel · 1200 baud 2-FSK</div>
+<div id="header">
+    <div class="head-left">
+        <img class="logo" src="/prawnceiver.jpg" alt="Prawnsceiver">
+        <div>
+            <h1>📟 POCSAG — Paging Channels</h1>
+            <div class="info">466.0 MHz ± 1200 kHz · every channel decoded in parallel · 1200 baud 2-FSK</div>
+        </div>
+    </div>
+    <div class="head-right"><a href="/pocsag.json">live status (JSON)</a> &nbsp;·&nbsp; <a href="/pocsaglog.json">page log (JSON)</a></div>
+</div>
 <div id="stats">Loading...</div>
 <div id="chwrap">
     <h2>📡 Tracked channels — <span class="cnt" id="chcount">&hellip;</span></h2>

@@ -7,10 +7,8 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 12px 15px; }
-h1 { font-size: 1.2em; color: #53d769; margin-bottom: 4px; }
-.sub { font-size: 1em; color: #888; margin-bottom: 12px; }
-.sub a { color: #53d769; }
+body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 0 15px 12px; }
+#header { margin: 0 -15px 12px; }
 #toolbar { display: flex; gap: 15px; font-size: 0.85em; color: #888; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
 #toolbar label { cursor: pointer; }
 #toolbar select { background: #0f3460; color: #e0e0e0; border: 1px solid #53d769; border-radius: 3px; font-family: monospace; padding: 1px 4px; }
@@ -57,8 +55,16 @@ tr.cls-BASE td:first-child, tr.cls-ATON td:first-child, tr.cls-SAR td:first-chil
 </style>
 </head>
 <body>
-<h1>🚢 AIS Tracking Log — Danube Ship Traffic</h1>
-<div class="sub"><a href="/">&#8592; dashboard</a> &nbsp;|&nbsp; <a href="/ais.json">live ship table (JSON)</a> &nbsp;|&nbsp; 161.975 / 162.025 MHz</div>
+<div id="header">
+    <div class="head-left">
+        <img class="logo" src="/prawnceiver.jpg" alt="Prawnsceiver">
+        <div>
+            <h1>🚢 AIS Tracking Log — Danube Ship Traffic</h1>
+            <div class="info">161.975 / 162.025 MHz</div>
+        </div>
+    </div>
+    <div class="head-right"><a href="/ais.json">live ship table (JSON)</a></div>
+</div>
 <div id="toolbar">
     <label><input type="checkbox" id="autorefresh" checked> auto-refresh (10 s)</label>
     <span>show last</span>

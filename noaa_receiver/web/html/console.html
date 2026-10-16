@@ -6,14 +6,13 @@
 <title>NOAAh's CrabArk — Debug Console</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: monospace; background: #12121e; color: #e0e0e0; padding: 12px 15px; }
-h1 { font-size: 1.1em; color: #53d769; margin-bottom: 4px; }
-.sub { font-size: 0.75em; color: #888; margin-bottom: 10px; }
-.sub a { color: #53d769; }
+body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 0 15px 12px; height: 100vh; display: flex; flex-direction: column; }
+#header { margin: 0 -15px 12px; flex-shrink: 0; }
 #toolbar { display: flex; gap: 15px; font-size: 0.75em; color: #888; margin-bottom: 8px; align-items: center; }
 #toolbar label { cursor: pointer; }
 #count { color: #f39c12; }
-#console { background: #000; border: 1px solid #0f3460; border-radius: 4px; padding: 8px; height: calc(100vh - 110px); overflow-y: auto; font-size: 0.8em; line-height: 1.5; }
+#toolbar { flex-shrink: 0; }
+#console { background: #000; border: 1px solid #0f3460; border-radius: 4px; padding: 8px; flex: 1; min-height: 0; overflow-y: auto; font-size: 0.8em; line-height: 1.5; }
 .line { white-space: pre-wrap; word-break: break-all; }
 .line .t { color: #666; margin-right: 5px; }
 .line.error { color: #e74c3c; }
@@ -22,8 +21,16 @@ h1 { font-size: 1.1em; color: #53d769; margin-bottom: 4px; }
 </style>
 </head>
 <body>
-<h1>🛰️ NOAAh's CrabArk — Debug Console</h1>
-<div class="sub">Last 100 server messages — <a href="/console.json">raw JSON</a> — <a href="/">dashboard</a></div>
+<div id="header">
+    <div class="head-left">
+        <img class="logo" src="/prawnceiver.jpg" alt="Prawnsceiver">
+        <div>
+            <h1>🛠️ NOAAh's CrabArk — Debug Console</h1>
+            <div class="info">Last 100 server messages</div>
+        </div>
+    </div>
+    <div class="head-right"><a href="/console.json">raw JSON</a></div>
+</div>
 <div id="toolbar">
     <label><input type="checkbox" id="autoscroll" checked> auto-scroll</label>
     <span id="count"></span>

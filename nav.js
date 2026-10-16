@@ -1,11 +1,13 @@
-/* Burger menu (top left) — injected into every page: dashboard and all
- * log/history sub-pages. One shared file so the menu never goes stale:
- * each HTML page only carries <script src="/nav.js"></script>.
+/* Site chrome (burger menu + shared header), injected into every page:
+ * dashboard and all log/history sub-pages. One shared file so the look
+ * never diverges: each HTML page only carries <script src="/nav.js">.
  *
- * The prefix derivation below keeps it working behind the notebook's
- * prefix-proxy (/prawnceiver/): nginx rewrites the src attribute in the
- * HTML, so the script tag knows the app root even when the JS body
- * itself is not rewritten (sub_filter defaults to text/html). */
+ * The pages provide the same header markup (<div id="header"> with
+ * .head-left / .head-right); the styles for it live here. The prefix
+ * derivation below keeps everything working behind the notebook's
+ * prefix-proxy (/prawnceiver/): nginx rewrites the src attribute in
+ * the HTML, so the script tag knows the app root even when the JS
+ * body itself is not rewritten (sub_filter defaults to text/html). */
 (function () {
     var PAGES = [
         ['/',        '🦀',  'Dashboard'],
@@ -29,6 +31,23 @@
 
     var style = document.createElement('style');
     style.textContent =
+        /* --- shared header band: same chrome on dashboard and sub-pages --- */
+        '#header { background: #16213e; border-bottom: 2px solid #0f3460;' +
+        ' padding: 12px 20px; display: flex; justify-content: space-between;' +
+        ' align-items: center; gap: 14px; flex-wrap: wrap; }' +
+        '#header .head-left { display: flex; align-items: center; gap: 12px;' +
+        ' min-width: 0; }' +
+        '#header .head-left img.logo { height: 48px; width: auto;' +
+        ' border-radius: 6px; border: 1px solid #0f3460; flex-shrink: 0; }' +
+        '#header h1 { font-size: 1.25em; color: #53d769; font-weight: bold; }' +
+        '#header .info { font-size: 0.85em; color: #888; margin-top: 3px; }' +
+        '#header .head-right { font-size: 0.85em; color: #888;' +
+        ' text-align: right; margin-left: auto; }' +
+        '#header .info a, #header .head-right a { color: #53d769;' +
+        ' text-decoration: none; }' +
+        '#header .info a:hover, #header .head-right a:hover {' +
+        ' text-decoration: underline; }' +
+        /* --- burger menu --- */
         '#nav-burger { position: fixed; top: 10px; left: 10px; width: 38px;' +
         ' height: 34px; background: #16213e; border: 1px solid #0f3460;' +
         ' border-radius: 4px; cursor: pointer; z-index: 9999;' +
@@ -42,8 +61,7 @@
         '#nav-burger.open span:nth-child(1) { transform: translateY(6px) rotate(45deg); }' +
         '#nav-burger.open span:nth-child(2) { opacity: 0; }' +
         '#nav-burger.open span:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }' +
-        '#nav-burger.in-header { position: static; flex-shrink: 0;' +
-        ' margin-right: 12px; }' +
+        '#nav-burger.in-header { position: static; flex-shrink: 0; }' +
         '#nav-panel { display: none; position: fixed; z-index: 9998;' +
         ' min-width: 235px; background: #16213e; border: 1px solid #0f3460;' +
         ' border-left: 3px solid #53d769; border-radius: 4px; padding: 6px 0;' +
@@ -100,13 +118,14 @@
     });
 
     var header = document.getElementById('header');
-    if (header) {
-        // Dashboard: slot the burger into the header bar, left of the logo.
+    var mount = (header && header.querySelector('.head-left')) || header;
+    if (mount) {
+        // Burger lives in the header band, left of the logo.
         btn.classList.add('in-header');
-        header.insertBefore(btn, header.firstChild);
+        mount.insertBefore(btn, mount.firstChild);
     } else {
-        // Sub-pages: fixed in the top-left corner; shift content right so
-        // the h1 clears the button.
+        // Page without a header band: fixed in the top-left corner,
+        // content shifted right so it clears the button.
         document.body.style.paddingLeft = '50px';
         document.body.appendChild(btn);
     }

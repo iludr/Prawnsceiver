@@ -6,11 +6,8 @@
 <title>NOAAh's CrabArk — Pass History & Recordings</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: monospace; font-size: 17px; background: #1a1a2e; color: #e0e0e0; padding: 12px 15px; }
-h1 { font-size: 1.2em; color: #53d769; margin-bottom: 4px; }
-.sub { font-size: 1em; color: #888; margin-bottom: 12px; }
-.sub a { color: #53d769; }
-.sub #crab-count { color: #f39c12; font-weight: bold; }
+body { font-family: monospace; font-size: 17px; background: #1a1a2e; color: #e0e0e0; padding: 0 15px 12px; }
+#header { margin: 0 -15px 12px; }
 .section-title { color: #53d769; font-size: 1em; margin: 14px 0 8px 0; }
 .pass-card { background: #16213e; border: 1px solid #0f3460; border-left: 3px solid #53d769; margin-bottom: 10px; padding: 10px; border-radius: 4px; }
 .pass-card.medium { border-left-color: #f39c12; }
@@ -30,8 +27,16 @@ audio { width: 100%; margin-top: 6px; height: 30px; }
 </style>
 </head>
 <body>
-<h1>📚 Pass History &amp; Recordings</h1>
-<div class="sub"><a href="/">&#8592; dashboard</a> &nbsp;|&nbsp; 🦀 Crabs caught: <span id="crab-count">0</span></div>
+<div id="header">
+    <div class="head-left">
+        <img class="logo" src="/prawnceiver.jpg" alt="Prawnsceiver">
+        <div>
+            <h1>📚 Pass History &amp; Recordings</h1>
+            <div class="info">🦀 Crabs caught: <span id="crab-count" style="color:#f39c12;font-weight:bold;">0</span></div>
+        </div>
+    </div>
+    <div class="head-right"></div>
+</div>
 <div class="section-title">Recorded Passes</div>
 <div id="history-list" class="muted">Loading pass history...</div>
 <div class="section-title" id="unmatched-title" style="display:none;">Unmatched Recordings</div>
