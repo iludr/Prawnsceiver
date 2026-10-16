@@ -17,6 +17,7 @@ def _load_page(name):
 
 CONSOLE_HTML = _load_page('console.html')
 HISTORY_HTML = _load_page('history.html')
+ADSB_HTML = _load_page('adsb.html')
 AIS_HTML = _load_page('ais.html')
 ORBCOMM_HTML = _load_page('orbcomm.html')
 APRS_HTML = _load_page('aprs.html')

@@ -12,19 +12,20 @@ from .. import state
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    RECORD_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
 
-from ..decoding import ais, aprs, orbcomm, pocsag
+from ..decoding import adsb, ais, aprs, orbcomm, pocsag
 from ..sdr import scan
 from ..decoding.decode import decode_recording, forget_decode_marker
 from .history import _load_history, get_recordings, quality_map, set_recording_quality
-from .pages import (AIS_HTML, APRS_HTML, CONSOLE_HTML, HISTORY_HTML,
-                    ORBCOMM_HTML, POCSAG_HTML)
+from .pages import (ADSB_HTML, AIS_HTML, APRS_HTML, CONSOLE_HTML,
+                    HISTORY_HTML, ORBCOMM_HTML, POCSAG_HTML)
 from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
-from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_ais,
-                        set_dongle_aprs, set_dongle_aprs_iss,
-                        set_dongle_orbcomm, set_dongle_pocsag,
-                        set_dongle_paused, usb_dongles)
+from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_adsb,
+                        set_dongle_ais, set_dongle_aprs,
+                        set_dongle_aprs_iss, set_dongle_orbcomm,
+                        set_dongle_pocsag, set_dongle_paused,
+                        usb_dongles)
 
 def _dongle_list():
     """Dongle descriptors for status/dongles.json: primary first, then stable
@@ -51,6 +52,7 @@ def _dongle_list():
                 "aprs": bool(e.get("aprs")),
                 "aprs_iss": bool(e.get("aprs_iss")),
                 "pocsag": bool(e.get("pocsag")),
+                "adsb": bool(e.get("adsb")),
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
                 "connected": bool(e.get("connected")),
@@ -247,6 +249,9 @@ _WS_TOPICS = {
     'aprsmsgs':     (10.0, lambda p: aprs.messages_view(_aislog_count(p))),
     'pocsag':       (5.0,  lambda p: pocsag.pocsag_status()),
     'pocsaglog':    (10.0, lambda p: pocsag.pocsag_log(_aislog_count(p))),
+    'adsb':         (5.0,  lambda p: adsb.adsb_status()),
+    'adsblog':      (10.0, lambda p: adsb.adsb_log(_aislog_count(p))),
+    'adsb_aircrafts': (30.0, lambda p: adsb.aircrafts_registry()),
     'pass_history': (8.0,  lambda p: _load_history()),
 }
 
@@ -537,6 +542,12 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/pocsag.json':
             # POCSAG: tracked paging channels + recent pages
             self._send_json(pocsag.pocsag_status(), code=200)
+        elif self.path == '/adsb.json':
+            # ADS-B: live aircraft table + receiver stats + raw frames
+            self._send_json(adsb.adsb_status(), code=200)
+        elif self.path == '/adsb_aircrafts.json':
+            # ADS-B: every aircraft ever received (persistent registry)
+            self._send_json(adsb.aircrafts_registry(), code=200)
         elif self.path.startswith('/aprslog.json'):
             # Tail of the persistent decoded-frame log (?count=N, max 2000)
             query = self._query()
@@ -553,6 +564,14 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 count = 200
             self._send_json(pocsag.pocsag_log(count), code=200)
+        elif self.path.startswith('/adsblog.json'):
+            # Newest-first tail of the persistent decoded-frame log
+            query = self._query()
+            try:
+                count = int((query.get('count') or ['200'])[0])
+            except ValueError:
+                count = 200
+            self._send_json(adsb.adsb_log(count), code=200)
         elif self.path.startswith('/aprsmsgs.json'):
             # Person-to-person APRS text messages (':ADDRESSEE:text'
             # frames from the persistent log, telemetry definitions
@@ -606,6 +625,12 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(POCSAG_HTML.encode())
+        elif self.path == '/adsb' or self.path == '/adsb.html':
+            # ADS-B page: live aircraft map + aircraft table + frame log
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(ADSB_HTML.encode())
         elif self.path.split('?')[0] == '/ship_tracks.json':
             # 24 h position tracks for the AIS page's 'path on map'
             # multi-select: ?mmsi=123,456&hours=24
@@ -948,7 +973,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 if not f:
                     self._send_json({"success": True, "mode": "bw", "bandwidth_khz": bw_hz / 1000 if bw_hz else None}, code=200)
                     return
-            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') \
+                    or entry.get('pocsag') or entry.get('adsb'):
                 # A dongle dedicated to AIS or Orbcomm reception is parked
                 # on its mode's band - retuning it would stop reception
                 self._send_json({'success': False, 'error': 'Dongle is dedicated to AIS'}, code=400)
@@ -983,7 +1009,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             if entry is None:
                 self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
-            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') \
+                    or entry.get('pocsag') or entry.get('adsb'):
                 # A dongle dedicated to AIS or Orbcomm reception is parked
                 # on its mode's band - scanning it would stop reception
                 self._send_json({'success': False, 'error': 'Dongle is dedicated to AIS'}, code=400)
@@ -1046,9 +1073,9 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
             if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') \
-                    or entry.get('pocsag'):
-                # A dedicated capture thread (AIS/Orbcomm/APRS/POCSAG)
-                # does not record raw IQ
+                    or entry.get('pocsag') or entry.get('adsb'):
+                # A dedicated capture thread (AIS/Orbcomm/APRS/POCSAG/
+                # ADS-B) does not record raw IQ
                 self._send_json({'success': False, 'error': 'Dongle is in a dedicated role (AIS/Orbcomm/APRS/POCSAG)'}, code=400)
                 return
             stop = (query.get('stop') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
@@ -1062,6 +1089,16 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 state.log_console(f"⏺ Manual recording requested (dongle {dev}) — records the current tune until stopped")
             self._send_json({'success': True, 'manual_recording': not stop}, code=200)
+        elif self.path.split('?')[0] == '/adsb_dongle':
+            # Switch one dongle between satellite tracking and the
+            # ADS-B role: /adsb_dongle?d=<id>&on=1 parks it on
+            # 1090 MHz and decodes Mode S extended squitters;
+            # on=0 returns to satellites.
+            query = self._query()
+            dev = (query.get('d') or [''])[0]
+            on = (query.get('on') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
+            ok = set_dongle_adsb(dev, on)
+            self._send_json({'success': ok}, code=200 if ok else 404)
         elif self.path.split('?')[0] == '/pocsag_dongle':
             # Switch one dongle between satellite tracking and the
             # POCSAG paging role: /pocsag_dongle?d=<id>&on=1 parks it
@@ -1082,7 +1119,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             if entry is None:
                 self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
-            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs'):
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') \
+                    or entry.get('pocsag') or entry.get('adsb'):
                 self._send_json({'success': False, 'error': 'Dongle is dedicated to AIS/Orbcomm'}, code=400)
                 return
             result = scan.fit_bandwidth(dev)

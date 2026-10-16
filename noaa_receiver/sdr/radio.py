@@ -379,7 +379,8 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         'id': did, 'host': host, 'port': int(port),
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
         'ais': did == AIS_DONGLE, 'orbcomm': False, 'aprs': False,
-        'aprs_iss': False, 'usb_idx': usb_idx, 'proc': None,
+        'aprs_iss': False, 'pocsag': False, 'adsb': False,
+        'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
         # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
         # bin, appended with the display row; wf_db_seq counts them
@@ -569,6 +570,13 @@ def set_dongle_pocsag(did, on):
     return _set_dongle_role(did, 'pocsag', on)
 
 
+def set_dongle_adsb(did, on):
+    """Dedicate this dongle to the ADS-B downlink (1090 MHz — Mode S
+    extended squitters: aircraft identification, position and
+    velocity) and back — see _set_dongle_role."""
+    return _set_dongle_role(did, 'adsb', on)
+
+
 def set_dongle_aprs_iss(did, on):
     """Flip one dongle's APRS channel between the European simplex
     channel (144.800 MHz) and the ISS (Zarya) digipeater (145.825 MHz)
@@ -601,15 +609,16 @@ def load_dongles():
     it has rows, else calibration.DEFAULT_DONGLES (persisted right away,
     so later dashboard additions update the database)."""
     entries = [(r['host'], r['port'], bool(r['ais']), bool(r['orbcomm']),
-                bool(r['aprs']), bool(r['aprs_iss']), bool(r['pocsag']))
+                bool(r['aprs']), bool(r['aprs_iss']), bool(r['pocsag']),
+                bool(r['adsb']))
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
-                                 " aprs_iss, pocsag FROM dongles"
+                                 " aprs_iss, pocsag, adsb FROM dongles"
                                  " ORDER BY port, host")]
     if not entries:
-        entries = [(h, p, False, False, False, False, False)
+        entries = [(h, p, False, False, False, False, False, False)
                    for h, p in DEFAULT_DONGLES]
-    for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_pocsag \
-            in entries:
+    for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_pocsag, \
+            was_adsb in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -712,6 +721,10 @@ def sdr_thread():
                     from ..decoding.pocsag import pocsag_capture_thread
                     t = threading.Thread(target=pocsag_capture_thread, args=(did,),
                                          daemon=True, name=f'pocsag-{did}')
+                elif entry.get('adsb'):
+                    from ..decoding.adsb import adsb_capture_thread
+                    t = threading.Thread(target=adsb_capture_thread, args=(did,),
+                                         daemon=True, name=f'adsb-{did}')
                 else:
                     t = threading.Thread(target=sdr_capture_thread, args=(did,),
                                          daemon=True, name=f'sdr-{did}')

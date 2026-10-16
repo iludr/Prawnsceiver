@@ -166,3 +166,21 @@ ORBCOMM_SYMRATE = 4800
 ORBCOMM_CHANNEL_TIMEOUT_SECS = 10
 # Rolling decoded-packet log (orbcomm_messages table), trimmed by ts
 ORBCOMM_LOG_KEEP_HOURS = 24
+
+# ADS-B (aircraft squitters; see noaa_receiver/decoding/adsb.py): a
+# dongle in the ADS-B role tunes to 1090 MHz and decodes Mode S
+# extended squitters — identification, airborne/surface position
+# (compact position reporting) and velocity. One dongle role like
+# AIS/POCSAG, switched from the dashboard.
+ADSB_CENTER_HZ = 1_090_000_000
+# Rolling decoded-message log (adsb_messages table), trimmed by ts
+ADSB_LOG_KEEP_HOURS = 24
+# Persistent registry of every aircraft ever received (adsb_aircrafts
+# table, like the AIS ships registry), each with its latest data plus
+# the last ADSB_RECENT_MSGS decoded frames. Rewritten at most every
+# ADSB_AIRCRAFTS_SAVE_SECS.
+ADSB_RECENT_MSGS = 10
+ADSB_AIRCRAFTS_SAVE_SECS = 60
+# Aircraft stay on the live table this long after their last squitter
+# (planes move fast; 10 min covers a whole overhead pass)
+ADSB_AIRCRAFT_TTL_SECS = 600

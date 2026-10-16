@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOAAh's CrabArk — ADS-B Aircraft Tracking</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 0 15px 12px; }
+#header { margin: 0 -15px 12px; }
+#toolbar { display: flex; gap: 15px; font-size: 0.85em; color: #888; margin-bottom: 8px; align-items: center; flex-wrap: wrap; }
+#toolbar label { cursor: pointer; }
+#toolbar select { background: #0f3460; color: #e0e0e0; border: 1px solid #53d769; border-radius: 3px; font-family: monospace; padding: 1px 4px; }
+#stats { color: #4da6ff; font-size: 0.9em; margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+th { text-align: left; color: #888; border-bottom: 1px solid #0f3460; padding: 4px 6px; position: sticky; top: 0; background: #1a1a2e; }
+td { padding: 3px 6px; border-bottom: 1px solid #16213e; white-space: nowrap; }
+tr:hover td { background: #16213e; }
+.t { color: #666; }
+.df { color: #4da6ff; }
+.type { color: #888; }
+.icao { color: #e0e0e0; }
+.cs { color: #53d769; font-weight: bold; }
+.pos a { color: #4da6ff; text-decoration: none; }
+.pos a:hover { text-decoration: underline; }
+.na { color: #555; }
+.hex { color: #555; font-size: 0.75em; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.muted { color: #666; padding: 10px; }
+#mapwrap { margin-bottom: 14px; }
+#mapinfo { font-size: 0.85em; color: #888; margin: 4px 0 6px; display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
+#fitbtn { background: #0f3460; color: #4da6ff; border: 1px solid #4da6ff; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
+#fitbtn:hover { background: #16294e; }
+#map { height: 460px; border: 1px solid #0f3460; border-radius: 4px; background: #000; }
+.leaflet-tile { filter: brightness(0.9) saturate(0.85); }
+.leaflet-container { background: #000; font-family: monospace; }
+.planeIcon { position: relative; width: 28px; height: 28px; }
+.planeIcon .rot { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.planeIcon svg { filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9)); }
+.planeIcon .lbl { position: absolute; top: 26px; left: 50%; transform: translateX(-50%); white-space: nowrap; font: 10px monospace; color: #e0e0e0; text-shadow: 0 1px 2px #000, 0 0 2px #000; pointer-events: none; }
+.planeIcon.stale, .planeIcon.stale .lbl { opacity: 0.55; }
+.planeIcon.stale .lbl { font-style: italic; }
+#regwrap { margin: 16px 0 14px; }
+#regwrap h2 { font-size: 1.05em; color: #53d769; margin-bottom: 6px; font-weight: normal; }
+#regwrap h2 .cnt { color: #4da6ff; }
+#regwrap details { color: #4da6ff; }
+#regwrap summary { cursor: pointer; color: #4da6ff; }
+#regwrap summary:hover { text-decoration: underline; }
+#regwrap .regmsgs { margin: 4px 0 2px 12px; width: auto; }
+#regwrap .regmsgs td { font-size: 0.8em; }
+</style>
+</head>
+<body>
+<div id="header">
+    <div class="head-left">
+        <img class="logo" src="/prawnceiver.jpg" alt="Prawnsceiver">
+        <div>
+            <h1>✈️ ADS-B Aircraft Tracking — 1090 MHz Mode S</h1>
+            <div class="info">1090 MHz</div>
+        </div>
+    </div>
+    <div class="head-right"><a href="/adsb.json">live aircraft table (JSON)</a></div>
+</div>
+<div id="toolbar">
+    <label><input type="checkbox" id="autorefresh" checked> auto-refresh (10 s)</label>
+    <span>show last</span>
+    <select id="count">
+        <option value="100">100</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+        <option value="2000">2000</option>
+    </select>
+    <span>frames</span>
+    <span id="loadinfo"></span>
+</div>
+<div id="stats">Loading...</div>
+<div id="mapwrap">
+    <div id="mapinfo">
+        <span id="mapstats">map: waiting for aircraft positions…</span>
+        <button id="fitbtn" title="Zoom/pan the map to all aircraft">&#8690; fit aircraft</button>
+    </div>
+    <div id="map"></div>
+</div>
+<div id="regwrap">
+    <h2>📚 Aircraft registry — <span class="cnt" id="regcount">…</span> aircraft ever received, with their last 10 messages</h2>
+    <table>
+    <thead><tr>
+        <th>callsign</th><th>ICAO</th><th>first seen</th>
+        <th>last seen</th><th>total msgs</th><th>message history</th>
+    </tr></thead>
+    <tbody id="regrows"><tr><td colspan="6" class="muted">Loading aircraft registry…</td></tr></tbody>
+    </table>
+</div>
+<table><thead><tr>
+    <th>time</th><th>DF</th><th>type</th><th>ICAO</th><th>callsign</th>
+    <th>position</th><th>alt</th><th>speed</th><th>track</th><th>vs</th><th>raw frame</th>
+</tr></thead><tbody id="rows"><tr><td colspan="11" class="muted">Loading ADS-B log...</td></tr></tbody></table>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/adsb.js"></script>
+<script src="/nav.js"></script>
+</body>
+</html>

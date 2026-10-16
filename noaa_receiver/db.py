@@ -106,6 +106,16 @@ CREATE INDEX IF NOT EXISTS aprs_messages_ts ON aprs_messages(ts);
 -- the full station dict is kept as JSON so the page shape is stable
 CREATE TABLE IF NOT EXISTS aprs_stations (
     call TEXT PRIMARY KEY, data TEXT, updated_ts REAL);
+
+-- Rolling decoded ADS-B frame log; trimmed by ts
+CREATE TABLE IF NOT EXISTS adsb_messages (
+    id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
+CREATE INDEX IF NOT EXISTS adsb_messages_ts ON adsb_messages(ts);
+
+-- Every ADS-B aircraft ever received (like the AIS ships table);
+-- the full aircraft dict is kept as JSON so the page shape is stable
+CREATE TABLE IF NOT EXISTS adsb_aircrafts (
+    icao TEXT PRIMARY KEY, data TEXT, updated_ts REAL);
 """
 
 
@@ -145,6 +155,11 @@ def connect():
                 # POCSAG dongle role (see decoding/pocsag.py)
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN pocsag INTEGER DEFAULT 0")
+                _conn.commit()
+            if "adsb" not in cols:
+                # ADS-B dongle role (see decoding/adsb.py)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN adsb INTEGER DEFAULT 0")
                 _conn.commit()
             # One-time repair: the pre-explicit-column positional
             # INSERTs wrote the orbcomm flag into added_ts and the

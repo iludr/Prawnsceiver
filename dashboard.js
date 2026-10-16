@@ -1241,8 +1241,8 @@
                     // 137.0-138.0 MHz downlink band), the APRS dongle on
                     // 144.8 MHz (145.825 with the ISS checkbox set) —
                     // none follow the shared satellite tune
-                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_iss ? 145.825 : 144.8) : (d.pocsag ? 466.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
-                        ? d.manual_frequency_mhz : lastSharedMHz))));
+                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_iss ? 145.825 : 144.8) : (d.pocsag ? 466.0 : (d.adsb ? 1090.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
+                        ? d.manual_frequency_mhz : lastSharedMHz)))));
                     updateDongleCard(d);
                 }
                 // the overlay follows per-dongle geometry (recorded
@@ -1308,6 +1308,7 @@
             if (d.orbcomm) return 'orbcomm';
             if (d.aprs) return 'aprs';
             if (d.pocsag) return 'pocsag';
+            if (d.adsb) return 'adsb';
             if (d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined) return 'manual';
             return 'sat';
         }
@@ -1337,7 +1338,7 @@
             c.aprsIssRow.style.display = role === 'aprs' ? 'flex' : 'none';
             if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
             c.roleLast = role;
-            if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag') && liveAudioOn === d.id) toggleLiveAudio(d.id);
+            if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag' || role === 'adsb') && liveAudioOn === d.id) toggleLiveAudio(d.id);
         }
 
         function ensureDongleCard(d) {
@@ -1708,6 +1709,7 @@
                 ['orbcomm', '🛰 Orbcomm — satellite IoT'],
                 ['aprs',    '📡 APRS — packet radio'],
                 ['pocsag',  '📟 POCSAG — paging'],
+                ['adsb',    '✈️ ADS-B — aircraft'],
             ];
             for (const [rv, rt] of ROLE_OPTS) {
                 const o = document.createElement('option');
@@ -1717,6 +1719,7 @@
             const ROLE_ENDPOINT = {
                 ais: 'ais_dongle', orbcomm: 'orbcomm_dongle',
                 aprs: 'aprs_dongle', pocsag: 'pocsag_dongle',
+                adsb: 'adsb_dongle',
             };
             const ROLE_TOAST = {
                 manual: '📻 Manual mode — tune this dongle freely (frequency + bandwidth)',
@@ -1724,6 +1727,7 @@
                 orbcomm: '🛰 Switching this dongle to Orbcomm — satellite IoT downlink on 137.0-138.0 MHz',
                 aprs: '📡 Switching this dongle to APRS — ham packet radio on 144.800 MHz',
                 pocsag: '📟 Switching this dongle to POCSAG — paging channels decoded live',
+                adsb: '✈️ Switching this dongle to ADS-B — aircraft on 1090 MHz decoded live',
             };
             roleSel.addEventListener('change', () => {
                 const want = roleSel.value;
@@ -1731,7 +1735,7 @@
                 const cur = dongleRole(ld);
                 if (want === cur) return;
                 const id = encodeURIComponent(d.id);
-                const DED = ['ais', 'orbcomm', 'aprs', 'pocsag'];
+                const DED = ['ais', 'orbcomm', 'aprs', 'pocsag', 'adsb'];
                 // The requests, in order: leaving a dedicated role turns
                 // it off; "Manual" parks the dongle at its current
                 // frequency (detaching it from the scheduler);
@@ -1942,6 +1946,7 @@
             else if (d.orbcomm) { fTxt = '🛰 Orbcomm 137.0-138.0 MHz (center 137.5)'; fCol = '#b39ddb'; }
             else if (d.aprs) { fTxt = '📡 APRS ' + (d.aprs_iss ? '145.825 MHz (ISS)' : '144.800 MHz'); fCol = '#53d769'; }
             else if (d.pocsag) { fTxt = '📟 POCSAG 466.0 MHz (±1.2 MHz)'; fCol = '#f39c12'; }
+            else if (d.adsb) { fTxt = '✈️ ADS-B 1090.0 MHz'; fCol = '#4da6ff'; }
             else if (eff !== null) {
                 fTxt = eff.toFixed(4) + ' MHz' + (d.manual_frequency_mhz ? ' (manual)' : '');
                 fCol = d.manual_frequency_mhz ? '#f39c12' : '#53d769';

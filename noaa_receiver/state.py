@@ -173,3 +173,17 @@ pocsag_enabled = False
 pocsag_dongle = None
 pocsag_channels = {}
 pocsag_pages = deque(maxlen=100)
+
+# ADS-B aircraft traffic (see noaa_receiver/decoding/adsb.py): a dongle
+# in the ADS-B role tunes to 1090 MHz and decodes Mode S extended
+# squitters. adsb_aircrafts maps ICAO hex -> aircraft dict (callsign,
+# position, altitude, speed, ...); adsb_aircrafts_all is the persistent
+# every-aircraft-ever registry (adsb_aircrafts table); adsb_raw keeps
+# the most recent frame hex strings for the raw feed.
+adsb_lock = threading.Lock()
+adsb_enabled = False
+adsb_dongle = None
+adsb_aircrafts = {}
+adsb_aircrafts_all = {}
+adsb_raw = deque(maxlen=60)
+adsb_stats = {}       # frames / bad / floor of the running demodulator
