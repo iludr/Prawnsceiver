@@ -53,7 +53,7 @@ import numpy as np
 
 from .. import db
 from .. import state
-from ..sdr.dsp import frequency_shift
+from ..sdr.dsp import frequency_shift, sinc_taps
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
 from ..config import (APRS_FREQ_HZ, APRS_LOG_KEEP_HOURS, APRS_RECENT_MSGS,
                       APRS_STATIONS_SAVE_SECS, ISS_APRS_FREQ_HZ,
@@ -321,17 +321,11 @@ def parse_mice(dst, info):
 
 # ---------- AFSK demodulation ----------
 
-def _sinc_taps(cutoff_hz, numtaps, fs=SDR_RATE):
-    m = np.arange(numtaps) - (numtaps - 1) / 2.0
-    h = np.sinc(2 * cutoff_hz / fs * m) * np.hamming(numtaps)
-    return (h / h.sum()).astype(np.float64)
-
-
 # 610 taps at 2.4 MHz: -3 dB ~12 kHz, stopband by ~20 kHz. Bell 202 on
 # FM occupies 2*(deviation + tone) ~ 2*(3 + 2.2) = 10.4 kHz (Carson),
 # so 12 kHz keeps the whole signal while staying inside the 25 kHz
 # channel raster; the offset DC spike (60 kHz) is far outside.
-_APRS_TAPS = _sinc_taps(12000, 610)
+_APRS_TAPS = sinc_taps(12000, 610)
 _APRS_TAPS_C = _APRS_TAPS.astype(np.complex64)   # polyphase matmul form
 
 def new_channel_state(did):

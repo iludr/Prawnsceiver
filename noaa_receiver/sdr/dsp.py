@@ -111,6 +111,16 @@ def _windowed_sinc(cutoff_hz, numtaps, fs=SDR_RATE):
     return (h / h.sum()).astype(np.float32)
 
 
+def sinc_taps(cutoff_hz, numtaps, fs=SDR_RATE):
+    """Windowed-sinc low-pass FIR taps in float64 — the shared channel
+    filter builder of the decode roles (AIS/APRS/Orbcomm; each calls it
+    once at import with its own cutoff and tap count). Same kernel as
+    _windowed_sinc, which keeps its float32 for the audio path."""
+    m = np.arange(numtaps) - (numtaps - 1) / 2.0
+    h = np.sinc(2 * cutoff_hz / fs * m) * np.hamming(numtaps)
+    return (h / h.sum()).astype(np.float64)
+
+
 def get_lowpass_taps(cutoff_hz=22000.0):
     """Windowed-sinc low-pass FIR taps (complex64, for the IQ path), cached
     per cutoff. 250 taps at 2.4 MHz: -3 dB at ~18 kHz for the 22 kHz

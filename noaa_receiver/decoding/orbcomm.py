@@ -51,7 +51,7 @@ import numpy as np
 
 from .. import db
 from .. import state
-from ..sdr.dsp import frequency_shift
+from ..sdr.dsp import frequency_shift, sinc_taps
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
 from ..config import (ORBCOMM_BAND_HZ, ORBCOMM_CENTER_HZ,
                       ORBCOMM_CHANNEL_TIMEOUT_SECS, ORBCOMM_LOG_KEEP_HOURS,
@@ -247,16 +247,11 @@ def _find_anchor(bits, from_ix=0):
 
 # ---------- per-channel demod state ----------
 
-def _sinc_taps(cutoff_hz, numtaps, fs=SDR_RATE):
-    m = np.arange(numtaps) - (numtaps - 1) / 2.0
-    h = np.sinc(2 * cutoff_hz / fs * m) * np.hamming(numtaps)
-    return (h / h.sum()).astype(np.float64)
-
 # 610 taps at 2.4 MHz: -3 dB ~6 kHz, stopband by ~14 kHz. SDPSK at
 # 4800 baud occupies +/-4 kHz (Carson); the neighboring Orbcomm
 # channel (>=25 kHz away) and the offset-tuned DC spike (60 kHz)
 # stay outside.
-_ORB_TAPS = _sinc_taps(8000, 610)
+_ORB_TAPS = sinc_taps(8000, 610)
 # polyphase form used by _demod_channel_batch (see there): complex64 so
 # the window dot product stays in the input's dtype
 _ORB_TAPS_C = _ORB_TAPS.astype(np.complex64)

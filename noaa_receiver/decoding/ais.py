@@ -48,6 +48,7 @@ import numpy as np
 from .. import db
 from .. import state
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
+from ..sdr.dsp import sinc_taps
 from ..config import (AIS_CENTER_HZ, AIS_CHANNEL_HZ, 
                      AIS_LOG_KEEP_HOURS, AIS_RECENT_MSGS, 
                      AIS_SHIPS_SAVE_SECS, AIS_SHIP_TTL_SECS,
@@ -387,11 +388,6 @@ def decode_burst(freq48):
 
 # ---------- per-block channel DSP (block-continuous) ----------
 
-def _sinc_taps(cutoff_hz, numtaps, fs=SDR_RATE):
-    m = np.arange(numtaps) - (numtaps - 1) / 2.0
-    h = np.sinc(2 * cutoff_hz / fs * m) * np.hamming(numtaps)
-    return (h / h.sum()).astype(np.float64)
-
 # 610 taps at 2.4 MHz: -3 dB ~11 kHz, stopband by ~25 kHz — the same
 # absolute selectivity 61 taps gave at 240 kHz; taps must scale with
 # SDR_RATE or the wider transition band floods the demod with adjacent
@@ -400,7 +396,7 @@ def _sinc_taps(cutoff_hz, numtaps, fs=SDR_RATE):
 # dongle's DC spike (60 kHz, offset-tuned) are far outside;
 # adjacent-channel 25 kHz marine voice would leak only at its edges.
 # 14 kHz design cutoff keeps the whole GMSK spectrum.
-_AIS_TAPS = _sinc_taps(14000, 610)
+_AIS_TAPS = sinc_taps(14000, 610)
 
 def new_channel_state():
     """Fresh per-channel DSP state (one per AIS channel, per dongle)."""
