@@ -353,14 +353,15 @@ def _persist_dongles():
                 else:
                     host, port = e['host'], int(e['port'])
                 cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
-                            " aprs, aprs_iss, pocsag, added_ts)"
-                            " VALUES (?,?,?,?,?,?,?,?)",
+                            " aprs, aprs_iss, pocsag, adsb, added_ts)"
+                            " VALUES (?,?,?,?,?,?,?,?,?)",
                             (host, port,
                              1 if e.get('ais') else 0,
                              1 if e.get('orbcomm') else 0,
                              1 if e.get('aprs') else 0,
                              1 if e.get('aprs_iss') else 0,
-                             1 if e.get('pocsag') else 0, time.time()))
+                             1 if e.get('pocsag') else 0,
+                             1 if e.get('adsb') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -489,7 +490,7 @@ def remove_dongle(did):
     _persist_dongles()
     return True
 
-# The four dedicated decode roles a dongle can take (dashboard role
+# The dedicated decode roles a dongle can take (dashboard role
 # dropdown): flag name -> console prefix + band description. One dongle,
 # one role — switching one on ends every other role session on it.
 _ROLE_DEFS = {
@@ -497,6 +498,7 @@ _ROLE_DEFS = {
     'orbcomm': ('🛰', 'Orbcomm (137.0-138.0 MHz)'),
     'aprs': ('📡', 'APRS ({})'),
     'pocsag': ('📟', 'POCSAG paging (466.0 MHz)'),
+    'adsb': ('✈️', 'ADS-B (1090 MHz)'),
 }
 
 
@@ -652,6 +654,13 @@ def load_dongles():
             with state.status_lock:
                 state.sdrs[did]['pocsag'] = True
             state.log_console(f"Dongle {did} restored to POCSAG (paging)"
+                              + " - persisted role")
+        elif was_adsb:
+            # and the ADS-B role: the receiver resumes on 1090 MHz,
+            # decoding aircraft squitters (see decoding/adsb.py)
+            with state.status_lock:
+                state.sdrs[did]['adsb'] = True
+            state.log_console(f"Dongle {did} restored to ADS-B (aircraft)"
                               + " - persisted role")
     _persist_dongles()
 
