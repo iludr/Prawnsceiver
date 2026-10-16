@@ -175,4 +175,26 @@
     }
     document.body.appendChild(panel);
     document.body.appendChild(lightbox);
+
+    // Header picture on sub-pages, mirroring the dashboard logo: the
+    // header logo becomes the current page's thumbnail, and clicking it
+    // opens the full-size original in the lightbox. The dashboard keeps
+    // its own logo + lightbox (dashboard.js), so it is skipped here.
+    var current = null;
+    for (var j = 0; j < PAGES.length; j++) if (PAGES[j][0] === here) current = PAGES[j];
+    if (current && current[0] !== '/' && current[3]) {
+        var headImg = mount && mount.querySelector('img.logo');
+        if (headImg) {
+            headImg.src = prefix + current[3];
+            headImg.alt = current[2] + ' picture (click to view full size)';
+            headImg.title = 'View the full-size picture';
+            headImg.style.cursor = 'zoom-in';
+            headImg.addEventListener('click', function (e) {
+                e.preventDefault();
+                lbImg.src = prefix + current[4];
+                lbImg.alt = current[2] + ' (full size)';
+                lightbox.style.display = 'flex';
+            });
+        }
+    }
 })();
