@@ -1295,43 +1295,24 @@
             return lastSharedMHz;
         }
 
-        // AIS mode re-shapes a dongle card at runtime (the mode is
-        // toggled from the card's own button, so both shapes must be
-        // reachable after the card was built): the satellite-only
-        // controls (tuning, bandwidth, scan, record, live audio — the
-        // AIS capture thread feeds none of them) hide, the mode button
-        // flips its label, and a live-audio stream of this dongle is
-        // dropped (the AIS thread never feeds the audio ring).
-        function applyDongleAisMode(c, ais) {
-            // role-aware: while the OTHER dedicated role is on, the
-            // satellite controls stay hidden (the roles are mutually
-            // exclusive server-side, but both arrive via dongles.json)
-            const sat = (ais || (c.lastD && c.lastD.orbcomm)) ? 'none' : '';
-            c.tuneRow.style.display = sat;
-            c.nudgeRow.style.display = sat;
-            c.bwRow.style.display = sat;
-            c.scanRow.style.display = sat;
-            c.scanRow2.style.display = sat;
-            c.secTune.style.display = sat;
-            c.modeRow.style.display = sat;
-            c.secBw.style.display = sat;
-            c.secScan.style.display = sat;
-            c.recBtn.style.display = sat;
-            c.listenBtn.style.display = sat;
-            const txt = ais ? '🛰 Back to satellites' : '🚢 Listen for AIS ships';
-            if (c.aisBtn._last !== txt) { c.aisBtn._last = txt; c.aisBtn.textContent = txt; }
-            c.aisBtn.style.background = ais ? '#1a3a2e' : '#0f3460';
-            c.aisBtn.style.color = ais ? '#53d769' : '#4da6ff';
-            c.aisBtn.style.borderColor = ais ? '#53d769' : '#4da6ff';
-            c.aisLast = ais;
-            if (ais && liveAudioOn === c.lastD.id) toggleLiveAudio(c.lastD.id);
+        // A dedicated role (AIS / Orbcomm / APRS / POCSAG) re-shapes a
+        // dongle card at runtime (the role is picked from the card's
+        // dropdown, so both shapes must be reachable after the card was
+        // built): the satellite-only controls (tuning, bandwidth, scan,
+        // record, demod — the dedicated capture threads feed none of
+        // them) hide, the dropdown follows the role, and a live-audio
+        // stream is dropped for the roles without audio (APRS stays
+        // listenable FM).
+        function dongleRole(d) {
+            if (d.ais) return 'ais';
+            if (d.orbcomm) return 'orbcomm';
+            if (d.aprs) return 'aprs';
+            if (d.pocsag) return 'pocsag';
+            return 'sat';
         }
-
-        // Orbcomm mode reshapes the card the same way as AIS (dedicated
-        // role: the capture thread feeds the waterfall but no audio or
-        // satellite tuning) — purple button variant, 137.5 MHz band tune
-        function applyDongleOrbcommMode(c, orbcomm) {
-            const sat = (orbcomm || (c.lastD && c.lastD.ais)) ? 'none' : '';
+        function applyDongleRole(c, d) {
+            const role = dongleRole(d);
+            const sat = role === 'sat' ? '' : 'none';
             c.tuneRow.style.display = sat;
             c.nudgeRow.style.display = sat;
             c.bwRow.style.display = sat;
@@ -1342,39 +1323,12 @@
             c.secBw.style.display = sat;
             c.secScan.style.display = sat;
             c.recBtn.style.display = sat;
-            c.listenBtn.style.display = sat;
-            const txt = orbcomm ? '🛰 Back to satellites' : '🛰 Listen for Orbcomm satellites';
-            if (c.orbBtn._last !== txt) { c.orbBtn._last = txt; c.orbBtn.textContent = txt; }
-            c.orbBtn.style.background = orbcomm ? '#1a2a3e' : '#0f3460';
-            c.orbBtn.style.color = orbcomm ? '#b39ddb' : '#4da6ff';
-            c.orbBtn.style.borderColor = orbcomm ? '#b39ddb' : '#4da6ff';
-            c.orbcommLast = orbcomm;
-            if (orbcomm && liveAudioOn === c.lastD.id) toggleLiveAudio(c.lastD.id);
-        }
-
-        // APRS mode reshapes the card the same way (dedicated role:
-        // waterfall but no satellite tuning; audio stays on - APRS is
-        // listenable FM) — green button variant, 144.800 MHz tune
-        function applyDongleAprsMode(c, aprs) {
-            const sat = (aprs || (c.lastD && (c.lastD.ais || c.lastD.orbcomm))) ? 'none' : '';
-            c.tuneRow.style.display = sat;
-            c.nudgeRow.style.display = sat;
-            c.bwRow.style.display = sat;
-            c.scanRow.style.display = sat;
-            c.scanRow2.style.display = sat;
-            c.secTune.style.display = sat;
-            c.modeRow.style.display = sat;
-            c.secBw.style.display = sat;
-            c.secScan.style.display = sat;
-            c.recBtn.style.display = sat;
-            const txt = aprs ? '📡 Back to satellites' : '📡 Listen for APRS (144.800 MHz)';
-            if (c.aprsBtn._last !== txt) { c.aprsBtn._last = txt; c.aprsBtn.textContent = txt; }
-            c.aprsBtn.style.background = aprs ? '#1a2a3e' : '#0f3460';
-            c.aprsBtn.style.color = aprs ? '#53d769' : '#4da6ff';
-            c.aprsBtn.style.borderColor = aprs ? '#53d769' : '#4da6ff';
+            c.listenBtn.style.display = (role === 'sat' || role === 'aprs') ? '' : 'none';
             // the ISS digipeater checkbox only exists in APRS mode
-            c.aprsIssRow.style.display = aprs ? 'flex' : 'none';
-            c.aprsLast = aprs;
+            c.aprsIssRow.style.display = role === 'aprs' ? 'flex' : 'none';
+            if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
+            c.roleLast = role;
+            if (role !== 'sat' && role !== 'aprs' && liveAudioOn === d.id) toggleLiveAudio(d.id);
         }
 
         function ensureDongleCard(d) {
@@ -1730,70 +1684,57 @@
             removeBtn.textContent = '\u2715 Remove dongle';
             removeBtn.title = 'Unregister this rtl_tcp dongle from the receiver';
             removeBtn.onclick = () => removeDongle(d.id);
-            // AIS toggle: dedicates this dongle to the marine AIS channels
-            // and back (the single-dongle way to listen for ships) — the
-            // capture thread restarts in the new role server-side
-            const aisBtn = document.createElement('button');
-            aisBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
-            aisBtn.title = 'Tune this dongle to the marine AIS channels (161.975/162.025 MHz) and decode Danube ship traffic — satellite reception on it pauses until you switch back';
-            aisBtn.onclick = () => {
-                const on = !(c.lastD && c.lastD.ais);
-                fetch('/ais_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+            // Role dropdown: what this dongle is dedicated to. The four
+            // dedicated roles park the dongle on their band and decode it
+            // (the capture thread restarts in the new role server-side);
+            // "Satellites" returns it to auto tracking. One select
+            // instead of four full-width buttons.
+            const roleSel = document.createElement('select');
+            roleSel.style.cssText = 'width:100%;margin-top:4px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;padding:3px 6px;font-family:monospace;font-size:0.85em;cursor:pointer;';
+            roleSel.title = 'What this dongle listens for';
+            const ROLE_OPTS = [
+                ['sat',     '🛰 Satellites — auto tracking'],
+                ['ais',     '🚢 AIS — ship traffic'],
+                ['orbcomm', '🛰 Orbcomm — satellite IoT'],
+                ['aprs',    '📡 APRS — packet radio'],
+                ['pocsag',  '📟 POCSAG — paging'],
+            ];
+            for (const [rv, rt] of ROLE_OPTS) {
+                const o = document.createElement('option');
+                o.value = rv; o.textContent = rt;
+                roleSel.appendChild(o);
+            }
+            const ROLE_ENDPOINT = {
+                ais: 'ais_dongle', orbcomm: 'orbcomm_dongle',
+                aprs: 'aprs_dongle', pocsag: 'pocsag_dongle',
+            };
+            const ROLE_TOAST = {
+                ais: '🚢 Switching this dongle to AIS — ship traffic on 161.975/162.025 MHz',
+                orbcomm: '🛰 Switching this dongle to Orbcomm — satellite IoT downlink on 137.0-138.0 MHz',
+                aprs: '📡 Switching this dongle to APRS — ham packet radio on 144.800 MHz',
+                pocsag: '📟 Switching this dongle to POCSAG — paging channels decoded live',
+            };
+            roleSel.addEventListener('change', () => {
+                const want = roleSel.value;
+                const cur = (c.lastD && dongleRole(c.lastD)) || 'sat';
+                if (want === cur) return;
+                const url = want === 'sat'
+                    ? '/' + ROLE_ENDPOINT[cur] + '?d=' + encodeURIComponent(d.id) + '&on=0'
+                    : '/' + ROLE_ENDPOINT[want] + '?d=' + encodeURIComponent(d.id) + '&on=1';
+                fetch(url)
                     .then(r => r.json())
                     .then(data => {
                         if (data.success) {
-                            toast(on ? '🚢 Switching this dongle to AIS — ship traffic on 161.975/162.025 MHz'
-                                     : '🛰 Dongle back to satellite tracking');
+                            toast(want === 'sat' ? '🛰 Dongle back to satellite tracking' : ROLE_TOAST[want]);
                         } else {
-                            toast('AIS switch failed: ' + (data.error || 'unknown error'), true);
+                            toast('Role switch failed: ' + (data.error || 'unknown error'), true);
+                            roleSel.value = cur;
                         }
                     })
-                    .catch(() => toast('AIS switch failed: receiver unreachable', true));
-            };
-            // Orbcomm toggle: dedicates this dongle to the satellite
-            // Orbcomm downlink band (137.0-138.0 MHz, one 2.4 MHz
-            // capture covers it) and decodes every carrier it finds —
-            // the capture thread restarts in the new role server-side
-            const orbBtn = document.createElement('button');
-            orbBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
-            orbBtn.title = 'Tune this dongle to the Orbcomm satellite downlink band (137.0-138.0 MHz) and decode the satellite IoT traffic it finds — satellite reception on it pauses until you switch back';
-            orbBtn.onclick = () => {
-                const on = !(c.lastD && c.lastD.orbcomm);
-                fetch('/orbcomm_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data.success) {
-                            toast(on ? '🛰 Switching this dongle to Orbcomm — satellite IoT downlink on 137.0-138.0 MHz'
-                                     : '🛰 Dongle back to satellite tracking');
-                        } else {
-                            toast('Orbcomm switch failed: ' + (data.error || 'unknown error'), true);
-                        }
-                    })
-                    .catch(() => toast('Orbcomm switch failed: receiver unreachable', true));
-            };
-            // APRS toggle: dedicates this dongle to the amateur packet
-            // radio channel (144.800 MHz, Bell 202 AFSK) and decodes
-            // AX.25 UI frames — the capture thread restarts in the
-            // new role server-side
-            const aprsBtn = document.createElement('button');
-            aprsBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
-            aprsBtn.title = 'Tune this dongle to the APRS channel (144.800 MHz) and decode ham packet radio — satellite reception on it pauses until you switch back';
-            aprsBtn.onclick = () => {
-                const on = !(c.lastD && c.lastD.aprs);
-                fetch('/aprs_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data.success) {
-                            toast(on ? '📡 Switching this dongle to APRS — ham packet radio on 144.800 MHz'
-                                     : '📡 Dongle back to satellite tracking');
-                        } else {
-                            toast('APRS switch failed: ' + (data.error || 'unknown error'), true);
-                        }
-                    })
-                    .catch(() => toast('APRS switch failed: receiver unreachable', true));
-            };
+                    .catch(() => { toast('Role switch failed: receiver unreachable', true); roleSel.value = cur; });
+            });
             // ISS digipeater checkbox (APRS mode only, shown by
-            // applyDongleAprsMode): retunes the APRS channel from the
+            // applyDongleRole): retunes the APRS channel from the
             // 144.800 MHz DL simplex channel to the ISS (Zarya)
             // digipeater on 145.825 MHz — server-side the capture
             // thread restarts with the new tune. The checkbox state
@@ -1806,25 +1747,6 @@
             aprsIssBox.style.cssText = 'accent-color:#53d769;margin-right:6px;';
             const aprsIssTxt = document.createElement('span');
             aprsIssTxt.textContent = '🛰 ISS digipeater (145.825 MHz)';
-            // POCSAG role button (like AIS/Orbcomm/APRS): parks the
-            // dongle on the paging band, decodes every channel
-            const pocsagBtn = document.createElement('button');
-            pocsagBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
-            pocsagBtn.title = 'Tune this dongle to the paging band (466.0 MHz) and decode every POCSAG channel found — satellite reception on it pauses until you switch back';
-            pocsagBtn.onclick = () => {
-                const on = !(c.lastD && c.lastD.pocsag);
-                fetch('/pocsag_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
-                    .then(r => r.json())
-                    .then(data => {
-                        if (data.success) {
-                            toast(on ? '📟 Switching this dongle to POCSAG — paging channels decoded live'
-                                     : '📟 Dongle back to satellite tracking');
-                        } else {
-                            toast('POCSAG switch failed', true);
-                        }
-                    })
-                    .catch(() => toast('POCSAG switch failed: receiver unreachable', true));
-            };
             aprsIssRow.appendChild(aprsIssBox); aprsIssRow.appendChild(aprsIssTxt);
             aprsIssBox.onchange = () => {
                 const on = aprsIssBox.checked;
@@ -1861,18 +1783,16 @@
                     })
                     .catch(() => toast('Pause failed: receiver unreachable', true));
             };
-            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(aisBtn); card.appendChild(orbBtn); card.appendChild(aprsBtn); card.appendChild(aprsIssRow); card.appendChild(pocsagBtn); card.appendChild(pauseBtn); card.appendChild(removeBtn);
+            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(roleSel); card.appendChild(aprsIssRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
             col.appendChild(card);
             c = dongleCards[d.id] = {
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
-                hist: [], recLed, recTxt, recBtn, info, listenBtn, aisBtn, orbBtn, aprsBtn, aprsIssRow, aprsIssBox, pocsagBtn, pauseBtn, dinput, lastD: d, lastHistTs: 0,
+                hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, aprsIssRow, aprsIssBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secBw, secScan, modeRow, modeSel, modeHint,
             };
-            applyDongleAisMode(c, !!d.ais);
-            applyDongleOrbcommMode(c, !!d.orbcomm);
-            applyDongleAprsMode(c, !!d.aprs);
+            applyDongleRole(c, d);
             return c;
         }
 
@@ -1904,21 +1824,13 @@
 
         function updateDongleCard(d) {
             const c = ensureDongleCard(d);
-            // mode flips arrive through dongles.json (ais/orbcomm flags)
-            if (c.aisLast !== !!d.ais) applyDongleAisMode(c, !!d.ais);
-            if (c.orbcommLast !== !!d.orbcomm) applyDongleOrbcommMode(c, !!d.orbcomm);
-            if (c.aprsLast !== !!d.aprs) applyDongleAprsMode(c, !!d.aprs);
+            // role flips arrive through dongles.json (ais/orbcomm/
+            // aprs/pocsag flags)
+            if (c.roleLast !== dongleRole(d)) applyDongleRole(c, d);
             // ISS digipeater checkbox mirrors the server flag (the click
             // already flipped it locally; this only follows external
             // changes, e.g. a second browser tab)
             if (c.issLast !== !!d.aprs_iss) { c.issLast = !!d.aprs_iss; c.aprsIssBox.checked = c.issLast; }
-            // POCSAG role button mirrors the dongle's pocsag flag
-            const poc = !!d.pocsag;
-            const pocTxt = poc ? '📟 Back to satellites' : '📟 Decode POCSAG paging';
-            if (c.pocsagBtn._last !== pocTxt) { c.pocsagBtn._last = pocTxt; c.pocsagBtn.textContent = pocTxt; }
-            c.pocsagBtn.style.background = poc ? '#1a2a3e' : '#0f3460';
-            c.pocsagBtn.style.color = poc ? '#f39c12' : '#4da6ff';
-            c.pocsagBtn.style.borderColor = poc ? '#f39c12' : '#4da6ff';
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
             // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise
