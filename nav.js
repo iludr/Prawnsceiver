@@ -9,14 +9,18 @@
  * the HTML, so the script tag knows the app root even when the JS
  * body itself is not rewritten (sub_filter defaults to text/html). */
 (function () {
+    /* Each entry: [path, emoji, label, thumbnail, full image] — the last
+       two are relative to the app root (prefix) and optional. The menu
+       shows the thumbnail; clicking it opens the full-size original in
+       a lightbox, clicking the label navigates as before. */
     var PAGES = [
-        ['/',        '🦀',  'Dashboard'],
-        ['/history', '📚',  'Pass History & Recordings'],
-        ['/ais',     '🚢',  'AIS Ship Traffic'],
-        ['/orbcomm', '🛰',  'Orbcomm Downlink'],
-        ['/aprs',    '📡',  'APRS Packet Log'],
-        ['/pocsag',  '📟',  'POCSAG Paging'],
-        ['/console', '🛠️', 'Debug Console']
+        ['/',        '🦀',  'Dashboard',                 'prawnceiver.jpg',         'prawnceiver_full.jpg'],
+        ['/history', '📚',  'Pass History & Recordings', 'img/thumbs/history.jpg', 'img/history.png'],
+        ['/ais',     '🚢',  'AIS Ship Traffic',          'img/thumbs/AIS.jpg',     'img/AIS.png'],
+        ['/orbcomm', '🛰',  'Orbcomm Downlink',          'img/thumbs/Orbcomm.jpg', 'img/Orbcomm.png'],
+        ['/aprs',    '📡',  'APRS Packet Log',           'img/thumbs/APRS.jpg',    'img/APRS.png'],
+        ['/pocsag',  '📟',  'POCSAG Paging',            'img/thumbs/POCSAG.jpg',  'img/POCSAG.png'],
+        ['/console', '🛠️', 'Debug Console',             'img/thumbs/debug.jpg',   'img/debug.png']
     ];
 
     var tag = document.querySelector('script[src*="nav.js"]');
@@ -67,11 +71,21 @@
         ' border-left: 3px solid #53d769; border-radius: 4px; padding: 6px 0;' +
         ' box-shadow: 0 6px 18px rgba(0,0,0,0.6); }' +
         '#nav-panel.open { display: block; }' +
-        '#nav-panel a { display: block; padding: 8px 14px; color: #a8b8d8;' +
-        ' text-decoration: none; font-size: 0.95em; white-space: nowrap; }' +
+        '#nav-panel a { display: flex; align-items: center; gap: 10px;' +
+        ' padding: 8px 14px; color: #a8b8d8; text-decoration: none;' +
+        ' font-size: 0.95em; white-space: nowrap; }' +
         '#nav-panel a:hover { background: #0f3460; color: #e0e0e0; }' +
         '#nav-panel a.current { color: #53d769; font-weight: bold; }' +
-        '#nav-panel a.current::after { content: " ◀"; font-size: 0.7em; }';
+        '#nav-panel a.current::after { content: " ◀"; font-size: 0.7em; }' +
+        '#nav-panel img.nav-thumb { width: 84px; height: 52px; object-fit:' +
+        ' cover; border: 1px solid #0f3460; border-radius: 3px;' +
+        ' flex-shrink: 0; cursor: zoom-in; }' +
+        /* --- lightbox: full-size picture opened from a menu thumbnail --- */
+        '#nav-lightbox { display: none; position: fixed; top: 0; left: 0;' +
+        ' right: 0; bottom: 0; background: rgba(0,0,0,0.85); z-index: 10000;' +
+        ' align-items: center; justify-content: center; cursor: zoom-out; }' +
+        '#nav-lightbox img { max-width: 92vw; max-height: 92vh;' +
+        ' border-radius: 8px; box-shadow: 0 0 40px rgba(0,0,0,0.8); }';
     document.head.appendChild(style);
 
     var btn = document.createElement('button');
@@ -84,11 +98,37 @@
 
     var panel = document.createElement('nav');
     panel.id = 'nav-panel';
+
+    var lightbox = document.createElement('div');
+    lightbox.id = 'nav-lightbox';
+    var lbImg = document.createElement('img');
+    lightbox.appendChild(lbImg);
+    lightbox.addEventListener('click', function () {
+        lightbox.style.display = 'none';
+        lbImg.removeAttribute('src');
+    });
+
     PAGES.forEach(function (p) {
         var a = document.createElement('a');
         a.href = (p[0] === '/') ? prefix : prefix + p[0].slice(1);
-        a.textContent = p[1] + ' ' + p[2];
         if (p[0] === here) a.className = 'current';
+        if (p[3]) {
+            var img = document.createElement('img');
+            img.className = 'nav-thumb';
+            img.src = prefix + p[3];
+            img.alt = p[2] + ' picture (click to view full size)';
+            img.addEventListener('click', function (e) {
+                // Click on the thumbnail: show the original picture,
+                // do NOT follow the menu link around it
+                e.preventDefault();
+                e.stopPropagation();
+                lbImg.src = prefix + p[4];
+                lbImg.alt = p[2] + ' (full size)';
+                lightbox.style.display = 'flex';
+            });
+            a.appendChild(img);
+        }
+        a.appendChild(document.createTextNode(p[1] + ' ' + p[2]));
         panel.appendChild(a);
     });
 
@@ -114,7 +154,11 @@
     panel.addEventListener('click', function (e) { e.stopPropagation(); });
     document.addEventListener('click', close);
     document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape') close();
+        if (e.key === 'Escape') {
+            lightbox.style.display = 'none';
+            lbImg.removeAttribute('src');
+            close();
+        }
     });
 
     var header = document.getElementById('header');
@@ -130,4 +174,5 @@
         document.body.appendChild(btn);
     }
     document.body.appendChild(panel);
+    document.body.appendChild(lightbox);
 })();
