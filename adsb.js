@@ -25,11 +25,13 @@ function fmtDateTime(ts) {
 
 function cell(v, cls, dash) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + (v === null || v === undefined ? '<span class="na">' + (dash || '—') + '</span>' : v) + '</td>'; }
 
-// ---------- persistent aircraft registry (every aircraft ever received) ----------
-// One row per plane with everything merged (latest callsign, altitude,
-// speed, track, vertical rate and position of that aircraft) plus the
-// message history — the track-mode checkbox column draws the last 24 h
-// path on the map above, like the AIS page's 'Show path on map'.
+// ---------- persistent aircraft registry (restored from the database) ------
+// One row per plane heard in the last 24 h (the station keeps every
+// aircraft ever in the adsb_aircrafts table) with everything merged
+// (latest callsign, altitude, speed, track, vertical rate and position
+// of that aircraft) plus the message history — the track-mode checkbox
+// column draws the last 24 h path on the map above, like the AIS page's
+// 'Show path on map'.
 const regOpen = new Set();       // ICAOs whose message history is expanded
 let trackMode = false;           // 'show path on map' multi-select active
 const selectedAircraft = new Set(); // ICAOs whose path is drawn
@@ -47,7 +49,7 @@ function applyRegistry(aircraft) {
     const rows = document.getElementById('regrows');
     if (!aircraft.length) {
         rows.innerHTML = '<tr><td colspan="' + (trackMode ? 12 : 11)
-            + '" class="muted">No aircraft in the registry yet — it fills as aircraft come into range.</td></tr>';
+            + '" class="muted">No aircraft heard in the last 24 h — the registry fills as aircraft come into range.</td></tr>';
         return;
     }
     let html = '';

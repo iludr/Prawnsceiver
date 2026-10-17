@@ -546,7 +546,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # ADS-B: live aircraft table + receiver stats + raw frames
             self._send_json(adsb.adsb_status(), code=200)
         elif self.path == '/adsb_aircrafts.json':
-            # ADS-B: every aircraft ever received (persistent registry)
+            # ADS-B: aircraft heard in the last 24 h (persistent
+            # registry restored from the adsb_aircrafts table)
             self._send_json(adsb.aircrafts_registry(), code=200)
         elif self.path.startswith('/aprslog.json'):
             # Tail of the persistent decoded-frame log (?count=N, max 2000)

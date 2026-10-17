@@ -60,7 +60,8 @@ from .. import db
 from .. import state
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
 from ..config import (ADSB_AIRCRAFTS_SAVE_SECS, ADSB_AIRCRAFT_TTL_SECS,
-                      ADSB_CENTER_HZ, ADSB_LOG_KEEP_HOURS, ADSB_RECENT_MSGS,
+                      ADSB_CENTER_HZ, ADSB_LOG_KEEP_HOURS,
+                      ADSB_REGISTRY_WINDOW_SECS, ADSB_RECENT_MSGS,
                       FFT_SIZE, IQ_BLOCK, LAT, LON, SDR_GAIN, SDR_OFFSET_HZ,
                       SDR_RATE)
 
@@ -606,10 +607,15 @@ def _maybe_save_aircrafts():
 
 
 def aircrafts_registry():
-    """Snapshot for /adsb_aircrafts.json: every aircraft ever received,
-    newest activity first."""
+    """Snapshot for /adsb_aircrafts.json: aircraft heard within
+    ADSB_REGISTRY_WINDOW_SECS, newest activity first. The registry in
+    memory (and the adsb_aircrafts table behind it) keeps every
+    aircraft ever received — older ones just drop off the page."""
+    now = time.time()
     with state.adsb_lock:
-        return sorted(state.adsb_aircrafts_all.values(),
+        return sorted((a for a in state.adsb_aircrafts_all.values()
+                        if now - a.get("last_seen", 0)
+                        <= ADSB_REGISTRY_WINDOW_SECS),
                       key=lambda a: -a.get("last_seen", 0))
 
 

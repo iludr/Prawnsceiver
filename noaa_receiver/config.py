@@ -184,3 +184,7 @@ ADSB_AIRCRAFTS_SAVE_SECS = 60
 # Aircraft stay on the live table this long after their last squitter
 # (planes move fast; 10 min covers a whole overhead pass)
 ADSB_AIRCRAFT_TTL_SECS = 600
+# The registry page lists aircraft heard within this window. The
+# adsb_aircrafts table (and the in-memory mirror restored from it at
+# startup) keeps every aircraft ever — older ones just leave the page.
+ADSB_REGISTRY_WINDOW_SECS = 24 * 3600
