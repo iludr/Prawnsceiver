@@ -1366,17 +1366,18 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path.startswith('/products/'):
             # Decode products live in subdirectories next to their
             # recording (e.g. <base>_lrpt/; NOAA-era decodes left _apt/_dsb
-            # directories, still served). Serve exactly one
-            # directory level, sanitized: the path must be
-            # /products/<dir>/<file> with no traversal.
+            # directories, still served). SatDump v1.2.0 nests instrument
+            # images one level deeper (<base>_lrpt/MSU-MR/*.png), so one
+            # or two file levels are served, sanitized: no empty segments,
+            # no traversal.
             from urllib.parse import unquote
             parts = unquote(self.path[10:]).split('?', 1)[0].split('/')
-            if len(parts) != 2 or not all(parts) or any('..' in p for p in parts):
+            if not 2 <= len(parts) <= 3 or not all(parts) or any('..' in p for p in parts):
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b'Invalid product path')
                 return
-            ppath = recording_path(parts[0], parts[1])
+            ppath = recording_path(*parts)
             if not os.path.isfile(ppath):
                 self.send_response(404)
                 self.end_headers()

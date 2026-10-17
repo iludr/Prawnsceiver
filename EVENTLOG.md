@@ -1776,3 +1776,31 @@ NOT the (previously unmeasured) dongle, which turns out to be
 within ~2 ppm. The per-slice-max centering fix is unaffected
 (it measures whatever offset there is), but the dongle is not the
 reason the fallback rotation was 17 kHz off.
+
+
+### 2026-10-17 ~17:20 CEST — 📚 History page image links + rate-aware decode (backlog re-decode prep)
+
+Two operator reports turned into fixes:
+
+1. PASS HISTORY SHOWED NO IMAGES. Two gaps: decoded recordings never
+   rendered their PNG on page load (the preview existed only right
+   after clicking Decode), and the Products list scanned only the top
+   level of the SatDump product directory — v1.2.0 nests the
+   instrument images in <base>_lrpt/MSU-MR/, so a full LRPT decode
+   listed four non-image files and nothing visual. history.py now
+   walks product dirs one level deep (nested names served by a
+   widened /products/ endpoint), history.js shows the decoded
+   thumbnail on every decoded card (click = full image) and the
+   product links carry their full relative path.
+2. THE DECODER WAS RATE-BLIND. The station ran 240 kHz / 960 kHz /
+   2.4 Msps capture eras, but measurement, centering rotation and
+   SatDump --samplerate all used today's SDR_RATE — 960 kHz-era
+   recordings (2026-10-11 and earlier) were undecodable by the
+   current code. decode.py now derives each recording's own rate
+   from its bytes (IQ bytes / 2 / WAV duration, snapped to the
+   historical ladder) and threads it through the whole chain.
+
+Backlog re-decode of the old Meteor recordings runs with the
+station's own measurement as the pre-filter (only recordings whose
+IQ holds a findable signal get a SatDump run; genuinely dark ones
+keep their markers).

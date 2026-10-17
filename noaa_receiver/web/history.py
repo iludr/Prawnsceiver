@@ -104,6 +104,29 @@ def recording_path(*parts):
     return os.path.join(RECORD_DIR, *parts)
 
 
+def _product_entries(pdir):
+    """Every product file of one SatDump product directory, one level
+    deep: SatDump v1.2.0 nests the instrument images in a subdirectory
+    (<out>/MSU-MR/*.png — full LRPT decodes leave NO image at the top
+    level), and the history page's Products list is the only link to
+    them. Returns (display name, absolute path) pairs, sorted."""
+    out = []
+    try:
+        names = sorted(os.listdir(pdir))
+    except OSError:
+        return out
+    for name in names:
+        p = os.path.join(pdir, name)
+        if os.path.isfile(p):
+            out.append((name, p))
+        elif os.path.isdir(p):
+            for sub in sorted(os.listdir(p)):
+                sp = os.path.join(p, sub)
+                if os.path.isfile(sp):
+                    out.append((name + '/' + sub, sp))
+    return out
+
+
 def _scan_recordings(root, qualities, active_wav):
     """The recordings in one directory, in the shape get_recordings()
     has always returned (see there). Split out so the local capture dir
@@ -137,16 +160,17 @@ def _scan_recordings(root, qualities, active_wav):
                                             / (1024*1024), 1)}
                           if os.path.exists(path.replace('.wav', '.iq.u8')) else None,
                     # Every generated decode product (SatDump product
-                    # directories next to the recording, e.g. <base>_lrpt/):
-                    # the history page links them all instead of one image
+                    # directories next to the recording, e.g. <base>_lrpt/,
+                    # including their image subdirectories - see
+                    # _product_entries): the history page links them all
+                    # instead of one image
                     "products": [
-                        {"name": pname,
-                         "size_kb": round(os.path.getsize(os.path.join(pdir, pname)) / 1024.0, 1),
-                         "path": os.path.basename(pdir) + '/' + pname}
+                        {"name": name,
+                         "size_kb": round(os.path.getsize(p) / 1024.0, 1),
+                         "path": os.path.basename(pdir) + '/' + name}
                         for pdir in sorted(glob.glob(os.path.join(root, f[:-4] + '_*')))
                         if os.path.isdir(pdir)
-                        for pname in sorted(os.listdir(pdir))
-                        if os.path.isfile(os.path.join(pdir, pname))],
+                        for name, p in _product_entries(pdir)],
                 })
     return recordings
 

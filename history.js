@@ -6,8 +6,18 @@ let histPage = 0;              // page 0 = the 25 most recent passes
 function productsHtml(rec) {
     return '<div class="filename" style="margin-top:6px;">' + '📂 Products (' + rec.products.length + '):'
         + rec.products.map(p => '<div style="padding:1px 0 1px 14px;"><a href="/products/' + encodeURIComponent(p.path) + '" target="_blank">'
-            + esc(p.name) + '</a> <span style="color:#888;">(' + p.size_kb + ' kB)</span></div>').join('')
+            + esc(p.path) + '</a> <span style="color:#888;">(' + p.size_kb + ' kB)</span></div>').join('')
         + '</div>';
+}
+
+// Decoded image preview for already-decoded recordings (the flat PNG the
+// decode pipeline copies next to the WAV). Shown on page load, clickable
+// to the full-size image - without this, a decoded pass shows nothing
+// visual at all until someone clicks Decode again.
+function decodedImgHtml(rec) {
+    if (!rec.decoded || !rec.png) return '';
+    return '<img class="decoded-img" src="/thumbs/' + esc(rec.png) + '" loading="lazy" alt="Decoded image"'
+        + ' title="Click to open the full-size image" onclick="window.open(\'/images/' + esc(rec.png) + '\')" style="cursor:pointer;">';
 }
 
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -90,6 +100,7 @@ function render() {
                         + '<button class="danger" onclick="deleteRecording(\'' + esc(rec.filename) + '\')">🗑 Delete</button>'
                         + '<audio controls preload="none"><source src="/audio/' + esc(rec.filename) + '" type="audio/wav"></audio>'
                         + '<div class="result" id="' + rid + '"></div>'
+                        + decodedImgHtml(rec)
                         + (rec.products && rec.products.length ? productsHtml(rec) : '');
                 }
             } else {
@@ -115,6 +126,7 @@ function render() {
                     + '<button class="danger" onclick="deleteRecording(\'' + esc(r.filename) + '\')">🗑 Delete</button>'
                     + '<audio controls preload="none"><source src="/audio/' + esc(r.filename) + '" type="audio/wav"></audio>'
                     + '<div class="result" id="' + rid + '"></div>')
+            + decodedImgHtml(r)
             + (r.products && r.products.length ? productsHtml(r) : '')
             + '</div>';
     }

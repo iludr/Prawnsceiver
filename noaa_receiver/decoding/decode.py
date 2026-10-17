@@ -139,7 +139,7 @@ def _centered_tmp_path(iq_path):
     return os.path.join(RECORD_LOCAL_DIR, '.' + base + '.centered.c32')
 
 
-def _centered_cf32(iq_path, shift_hz):
+def _centered_cf32(iq_path, shift_hz, rate=SDR_RATE):
     """Rewrite the raw u8 IQ as cf32 with the satellite rotated to 0 Hz.
 
     The .iq.u8 files hold the RAW rtl_tcp stream: the dongle is tuned
@@ -152,7 +152,8 @@ def _centered_cf32(iq_path, shift_hz):
     DSP state) so memory stays bounded; residual Doppler (a few kHz,
     slowly varying) is left to the demod's frequency tracking.
 
-    Returns the temp path (see _centered_tmp_path); the caller removes it."""
+    Returns the temp path (see _centered_tmp_path); the caller removes it.
+    rate is the RECORDING's capture rate (see _iq_rate), not today's."""
     import numpy as np
     tmp = _centered_tmp_path(iq_path)
     try:
@@ -164,19 +165,50 @@ def _centered_cf32(iq_path, shift_hz):
     # size correct, and this keeps every per-chunk array small. The old
     # 10 s chunk at 2.4 Msps built a 7.7 GB rolled phasor LUT inside
     # frequency_shift and OOM-killed the 7.2 GB notebook twice
-    chunk = SDR_RATE // 10
+    chunk = rate // 10
     with open(iq_path, 'rb') as fin, open(tmp, 'wb') as fout:
         while True:
             raw = fin.read(chunk * 2)
             if not raw or len(raw) < 4096:
                 break
             c = iq_to_complex(raw)
-            c = frequency_shift(c, shift_hz, SDR_RATE, st)
+            c = frequency_shift(c, shift_hz, rate, st)
             fout.write(c.astype(np.complex64).view(np.float32).tobytes())
     return tmp
 
 
-def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
+# Historical capture rates the station has run (240 kHz -> 960 kHz ->
+# 2.4 Msps). A recording's own rate is derived from its bytes: the WAV
+# duration is authoritative and IQ bytes / 2 / duration is the rate
+# (u8 IQ = 2 bytes per sample).
+_HISTORICAL_RATES = (2_400_000, 960_000, 240_000)
+
+
+def _iq_rate(wav_path, iq_path):
+    """The capture rate of one raw IQ recording (Hz), or SDR_RATE when it
+    cannot be derived.
+
+    The decode chain must follow the rate the RECORDING was captured at,
+    not today's: the measurement's FFT bin scaling, the centering
+    rotation and SatDump's --samplerate all depend on it. The station
+    ran 240 kHz / 960 kHz / 2.4 Msps eras, and decoding an old recording
+    with the current rate squashes the spectrum by the rate ratio and
+    demodulates garbage (the 2026-10-17 backlog re-decode: 960 kHz-era
+    IQs are undecodable without this)."""
+    try:
+        import wave
+        with wave.open(wav_path, 'rb') as w:
+            dur = w.getnframes() / float(w.getframerate())
+        rate = os.path.getsize(iq_path) / 2.0 / dur
+        for r in _HISTORICAL_RATES:
+            if abs(rate - r) <= 0.02 * r:
+                return r
+    except Exception:
+        pass
+    return SDR_RATE
+
+
+def _measure_signal_offset(iq_path, signal_bw_hz=120_000, rate=SDR_RATE):
     """Where the satellite actually sits in a raw IQ capture (Hz from
     baseband center), measured from the recording itself.
 
@@ -232,8 +264,8 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
     # width gate below compares a bin-quantized width against absolute Hz,
     # so coarse bins would pass a narrow stationary carrier as "wide" (its
     # five-bin core measures 2.9 kHz at 2.4 MHz - over the 2.7 kHz DSB gate)
-    n_fft = 4096 * SDR_RATE // 960000
-    bin_hz = SDR_RATE / n_fft
+    n_fft = 4096 * rate // 960000
+    bin_hz = rate / n_fft
     # Hann-window the segments: a strong carrier under a boxcar FFT
     # splatters a sinc skirt above the noise test across tens of kHz,
     # which pins the centroid/drift tests onto a stationary spike
@@ -250,11 +282,11 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
         # span by mixing sample and byte units - its slices covered
         # only the first quarter of the recording, so the drift test
         # saw almost no Doppler at all.
-        span = max(0, size - SDR_RATE * 8 * 2)
+        span = max(0, size - rate * 8 * 2)
         for t in range(6):
             f.seek(int(span * t / 5) if span else 0)
-            raw = f.read(SDR_RATE * 4 * 2)
-            if len(raw) < SDR_RATE * 2 * 2:
+            raw = f.read(rate * 4 * 2)
+            if len(raw) < rate * 2 * 2:
                 break
             c = iq_to_complex(raw)
             segs = c[:len(c) // n_fft * n_fft].reshape(-1, n_fft)
@@ -265,7 +297,7 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
             slices.append(np.convolve(psd, np.ones(5) / 5, 'same'))
     if not slices:
         return None
-    freqs = np.fft.fftshift(np.fft.fftfreq(n_fft, 1.0 / SDR_RATE))
+    freqs = np.fft.fftshift(np.fft.fftfreq(n_fft, 1.0 / rate))
     # Per-slice floor normalization: the tuner's AGC pumps the noise
     # floor between slices (+/-30% measured on a satellite-less
     # recording), and that wander otherwise fakes signal strength.
@@ -426,7 +458,8 @@ def _unshare_ok():
     return _UNSHARE_OK
 
 
-def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None):
+def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None,
+                     rate=SDR_RATE):
     """Decode a raw IQ recording with SatDump (runs minutes on the Pi — the
     caller spawns this detached so the scheduler never blocks on it). The
     out_dir doubles as the run marker: existing = already decoded/decoding.
@@ -447,7 +480,7 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None):
     try:
         if shift_hz:
             state.log_console(f"Centering baseband for {label}: rotating {shift_hz} Hz")
-            tmp = _centered_cf32(iq_path, shift_hz)
+            tmp = _centered_cf32(iq_path, shift_hz, rate)
             baseband, fmt = tmp, 'cf32'
         # Run in an isolated network namespace when available: SatDump
         # retries its Celestrak TLE fetch, and while that host is
@@ -455,7 +488,7 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None):
         # before the demodulation even starts (observed live). The TLEs
         # come from _seed_satdump_tles instead.
         argv = [exe, pipeline, 'baseband', baseband, out_dir,
-                '--samplerate', str(SDR_RATE), '--baseband_format', fmt]
+                '--samplerate', str(rate), '--baseband_format', fmt]
         if _unshare_ok():
             argv = ['unshare', '-rn'] + argv
         cmd = argv
@@ -534,7 +567,11 @@ def _decode_iq(wav_path, pipeline, suffix, force=False):
     # LRPT (Meteor M2-X: 80 kbaud OQPSK) fills roughly +/-60 kHz - the
     # window width rejects narrowband spurs, and the measurement's
     # drift/width gates reject local carriers (see _measure_signal_offset)
-    measured = _measure_signal_offset(iq_path, 120_000)
+    # The whole chain runs at the RECORDING's own capture rate: the
+    # station ran 240 kHz / 960 kHz / 2.4 Msps eras, and the bin scaling,
+    # rotation and SatDump samplerate are all rate-dependent (see _iq_rate).
+    rate = _iq_rate(wav_path, iq_path)
+    measured = _measure_signal_offset(iq_path, 120_000, rate)
     # _measure_signal_offset returns the signal's POSITION in the baseband
     # (negative Hz, e.g. -71425 for a satellite 71.4 kHz below center);
     # frequency_shift rotates BY its argument (signal at f -> f + shift),
@@ -545,12 +582,13 @@ def _decode_iq(wav_path, pipeline, suffix, force=False):
     # (i.e. every strong pass) demodulated empty spectrum: the whole
     # 0-byte-CADU LRPT streak and the empty DSB products.
     shift_hz = -measured if measured is not None else SDR_OFFSET_HZ
+    rate_note = "" if rate == SDR_RATE else f" @ {rate // 1000} kHz capture rate"
     state.log_console(f"Baseband centering for {os.path.basename(wav_path)}: "
                       f"signal {'measured at' if measured is not None else 'NOT FOUND, assuming'} "
                       f"{(measured if measured is not None else -SDR_OFFSET_HZ) / 1000:.1f} kHz, "
-                      f"rotating {shift_hz / 1000:.1f} kHz")
+                      f"rotating {shift_hz / 1000:.1f} kHz{rate_note}")
     def _run_satdump(pipeline=pipeline, iq_path=iq_path, out_dir=out_dir,
-                     label=label, shift_hz=shift_hz):
+                     label=label, shift_hz=shift_hz, rate=rate):
         # Registered for the archiver for the whole background run: the
         # decode marker written at spawn time already says 'success', so
         # the family must stay on the local disk until the products are
@@ -558,7 +596,7 @@ def _decode_iq(wav_path, pipeline, suffix, force=False):
         base = os.path.splitext(os.path.basename(iq_path))[0]
         state.decodes_active.add(base)
         try:
-            _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz)
+            _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz, rate)
         finally:
             state.decodes_active.discard(base)
     threading.Thread(target=_run_satdump,
