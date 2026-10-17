@@ -1041,6 +1041,20 @@ def aprs_capture_thread(did):
             except Exception:
                 pass
         _kill_rtl_sdr(entry.pop("proc", None))
+        # A channel-preset flip (aprs_lasar / aprs_iss, radio.set_dongle_*)
+        # closes the stream under this thread to force a retune - but the
+        # thread's own reconnect loop would come back on the OLD channel
+        # (freq_hz and the demod choice are bound at thread start). Exit
+        # instead: the supervisor (sdr_thread) starts a fresh thread within
+        # ~2 s that reads the new flags and tunes the new channel with the
+        # right demodulator. Without this the flip logged "retuning" while
+        # the dongle silently stayed put (observed live 2026-10-17).
+        want_lasar = bool(entry.get("aprs_lasar"))
+        want_freq = (LASAR_FREQ_HZ if want_lasar
+                     else ISS_APRS_FREQ_HZ if entry.get("aprs_iss")
+                     else APRS_FREQ_HZ)
+        if want_freq != freq_hz or want_lasar != lasar:
+            return
         if entry.get("closed") or not entry.get("aprs") or entry.get("paused"):
             aprs_reception_off()
             return
