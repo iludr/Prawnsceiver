@@ -147,6 +147,19 @@ for name, size in [("meteor.cadu", 50), ("dataset.json", 300),
 pick = _pick_product_png(d)
 check("map overlay preferred over the bigger non-map composite",
       pick is not None and pick.endswith("msu_mr_rgb_composite_map.png"), str(pick))
+# SatDump v1.2.0 nests instrument images one level deep (<out>/MSU-MR/)
+nested = tempfile.mkdtemp()
+sub = os.path.join(nested, "MSU-MR")
+os.makedirs(sub)
+for name, size in (("meteor_m2-x_lrpt.cadu", 50), ("dataset.json", 300),
+                   ("MSU-MR/msu_mr_Channel_1.png", 400),
+                   ("MSU-MR/msu_mr_rgb_composite.png", 90_000),
+                   ("MSU-MR/msu_mr_rgb_composite_map.png", 50_000)):
+    with open(os.path.join(nested, name), 'wb') as f:
+        f.write(b"\0" * size)
+pick = _pick_product_png(nested)
+check("nested MSU-MR images found, map overlay wins",
+      pick is not None and pick.endswith("msu_mr_rgb_composite_map.png"), str(pick))
 empty = tempfile.mkdtemp()
 with open(os.path.join(empty, "meteor.cadu"), 'wb') as f:
     f.write(b"\0")

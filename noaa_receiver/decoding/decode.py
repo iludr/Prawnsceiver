@@ -350,22 +350,35 @@ def _pick_product_png(out_dir):
     The dashboard and history serve decoded recordings as ONE flat PNG
     next to the WAV and never list product subdirectories, so a finished
     decode reduces to its largest PNG: the full composite (RGB/IR)
-    outputs are the biggest files, single channels and metadata lose."""
+    outputs are the biggest files, single channels and metadata lose.
+
+    SatDump v1.2.0 nests the instrument images one level deep
+    (<out>/MSU-MR/*.png — verified live 2026-10-17: a full LRPT decode
+    with 1800 lines/channel left NO png at the top level), so the
+    search covers the top level and immediate subdirectories."""
     if not os.path.isdir(out_dir):
         return None   # decoder died before creating any product
     # The map-overlay composites (SatDump's *_map.png products) are the most
     # useful single image for the dashboard; without any, the largest PNG
     # (the full composite) wins over channels and metadata.
-    pngs = [name for name in os.listdir(out_dir)
-            if name.lower().endswith('.png') and os.path.isfile(os.path.join(out_dir, name))]
+    pngs = []
+    for name in sorted(os.listdir(out_dir)):
+        p = os.path.join(out_dir, name)
+        if os.path.isfile(p):
+            if name.lower().endswith('.png'):
+                pngs.append(name)
+        elif os.path.isdir(p):
+            for sub in sorted(os.listdir(p)):
+                sp = os.path.join(p, sub)
+                if os.path.isfile(sp) and sub.lower().endswith('.png'):
+                    pngs.append(os.path.join(name, sub))
     overlay = [n for n in pngs if n.lower().endswith('_map.png')]
     best, best_size = None, 0
     for name in (overlay or pngs):
         p = os.path.join(out_dir, name)
-        if name.lower().endswith('.png') and os.path.isfile(p):
-            size = os.path.getsize(p)
-            if size > best_size:
-                best, best_size = p, size
+        size = os.path.getsize(p)
+        if size > best_size:
+            best, best_size = p, size
     return best
 
 
