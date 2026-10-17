@@ -1742,17 +1742,24 @@
                 // frequency (detaching it from the scheduler);
                 // "Satellites" also clears a parked manual frequency so
                 // the dongle really rejoins auto tracking
-                const urls = [];
-                if (DED.indexOf(cur) >= 0) urls.push('/' + ROLE_ENDPOINT[cur] + '?d=' + id + '&on=0');
+                // Page-RELATIVE urls (no leading slash): through the nginx
+            // prefix proxy (prawntenna2.derusi.de/prawnceiver/) the
+            // browser resolves them against /prawnceiver/, and the
+            // sub_filter only rewrites literal fetch('/ strings - these
+            // are built into a variable, so the leading slash would send
+            // them to the bare root and 404 (observed 2026-10-17: the
+            // role dropdown was dead through the proxy)
+            const urls = [];
+                if (DED.indexOf(cur) >= 0) urls.push(ROLE_ENDPOINT[cur] + '?d=' + id + '&on=0');
                 if (want === 'manual') {
                     const f = curDongleMHz(d.id);
                     if (f === null) { toast('Role switch failed: no frequency to park on', true); roleSel.value = cur; return; }
-                    urls.push('/tune_dongle?d=' + id + '&f=' + f.toFixed(4));
+                    urls.push('tune_dongle?d=' + id + '&f=' + f.toFixed(4));
                 } else if (want === 'sat'
                         && ld.manual_frequency_mhz !== null && ld.manual_frequency_mhz !== undefined) {
-                    urls.push('/tune_dongle?d=' + id + '&f=auto');
+                    urls.push('tune_dongle?d=' + id + '&f=auto');
                 }
-                if (DED.indexOf(want) >= 0) urls.push('/' + ROLE_ENDPOINT[want] + '?d=' + id + '&on=1');
+                if (DED.indexOf(want) >= 0) urls.push(ROLE_ENDPOINT[want] + '?d=' + id + '&on=1');
                 const fail = (msg) => { toast('Role switch failed: ' + msg, true); roleSel.value = cur; };
                 const run = (i) => {
                     if (i >= urls.length) {
