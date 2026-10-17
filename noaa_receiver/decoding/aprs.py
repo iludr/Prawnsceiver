@@ -950,7 +950,7 @@ def aprs_capture_thread(did):
         state.aprs_freq_hz = freq_hz
     state.log_console(f"📡 APRS receiver on dongle {did}: "
                       f"{freq_hz / 1e6:.3f} MHz "
-                      f"({'LASARsat digipeater, GFSK 9600 (G3RUH)' if lasar
+                      f"({'LASARsat digipeater, AX.25 G3RUH' if lasar
                          else 'ISS digipeater' if entry.get('aprs_iss')
                          else 'DL simplex channel'}, "
                       f"{'GFSK' if lasar else 'Bell 202 AFSK'} "
