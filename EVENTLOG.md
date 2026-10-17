@@ -1804,3 +1804,39 @@ Backlog re-decode of the old Meteor recordings runs with the
 station's own measurement as the pre-filter (only recordings whose
 IQ holds a findable signal get a SatDump run; genuinely dark ones
 keep their markers).
+
+
+### 2026-10-17 ~19:35 CEST — 🔌 v5 dropout on the dongle host: RTL2832 wedged, cleared by replug
+
+The satellite dongle (Nooelec NESDR SMArt v5, serial 48263793,
+rtl_tcp :1234) died at ~19:03 CEST: the station saw "bad rtl_tcp
+handshake" forever, while the port still answered. Diagnosis over
+ssh (eugene@192.168.3.245 — the dongle host Krabstral is a Raspberry
+Pi serving the manager on 192.168.3.244, ssh on .245):
+
+- The manager (prawntenna/server.py) had killed the v5's rtl_tcp
+  with its stall watchdog ("client connected, no IQ relayed for
+  10 s") - the rtl_tcp process was streaming to the manager proxy
+  and then simply stopped delivering.
+- Direct rtl_sdr on the Pi (bypassing rtl_tcp, the manager and the
+  VM): the v5 opened, printed "[R82XX] PLL not locked!" and
+  delivered ZERO BYTES in 120 s - the RTL2832 was wedged at the
+  device level. Process-level restarts (every republish) never
+  cleared it; no USB disconnect in dmesg, the device kept
+  enumerating.
+- The two other dongles on the same hub (generic R820T, Dexatek
+  FC0012) streamed fine throughout - hub/host were healthy.
+
+Fix: physical replug of the v5 (operator). After re-enumeration a
+direct 30 s test streamed the full 2.4 Msps; republished on :1234
+via the manager; the station reconnected and has streamed cleanly
+since, well past the old ~30 s stall point. Recovery procedure for
+next time: re-publish at
+http://192.168.3.244:8080/publish?d=48263793&port=1234 (publishing
+does not auto-resume after the manager kills a daemon); if a
+direct rtl_sdr test on the Pi stalls, it is the dongle - replug.
+
+Also verified end-to-end on this occasion: the new raw-IQ
+auto-delete fired on both re-decoded passes (023340: 3.65 GB,
+140000: 3.30 GB removed right after the success marker, images
+and products kept).
