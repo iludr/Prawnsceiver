@@ -1331,18 +1331,24 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # Small JPEG preview of a decoded image, generated on first
             # request and cached next to the PNG (see thumbs.py). The pass
             # history page loads these instead of the ~10 MB originals.
-            filename = self.path[8:]
-            if '..' in filename or '/' in filename:
+            # One flat segment serves the composite PNG next to a WAV;
+            # 2-3 segments serve decode products nested in their SatDump
+            # directory (<base>_lrpt/MSU-MR/*.png - the history page's
+            # slideshow previews).
+            from urllib.parse import unquote
+            parts = unquote(self.path[8:]).split('?', 1)[0].split('/')
+            if not 1 <= len(parts) <= 3 or not all(parts) \
+                    or any('..' in p for p in parts):
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b'Invalid filename')
                 return
-            if not filename.lower().endswith('.png'):
+            if not parts[-1].lower().endswith('.png'):
                 self.send_response(404)
                 self.end_headers()
                 self.wfile.write(b'Image not found')
                 return
-            img_path = recording_path(filename)
+            img_path = recording_path(*parts)
             if not os.path.exists(img_path):
                 self.send_response(404)
                 self.end_headers()
@@ -1352,9 +1358,11 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             if tpath is None:
                 # Pillow missing or PNG unreadable — keep the page working
                 # by falling back to the full image
-                state.log_console(f"Thumbnail fallback for {filename}: {err}", "warn")
+                state.log_console(f"Thumbnail fallback for {parts[-1]}: {err}", "warn")
                 self.send_response(302)
-                self.send_header('Location', '/images/' + filename)
+                fallback = ('/products/' + '/'.join(parts)) if len(parts) > 1 \
+                    else ('/images/' + parts[0])
+                self.send_header('Location', fallback)
                 self.end_headers()
                 return
             self.send_response(200)

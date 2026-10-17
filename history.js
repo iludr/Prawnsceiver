@@ -4,21 +4,114 @@ let recordingsData = [];
 const HIST_PAGE_SIZE = 25;     // pass list: 25 cards per page
 let histPage = 0;              // page 0 = the 25 most recent passes
 function productsHtml(rec) {
-    return '<div class="filename" style="margin-top:6px;">' + '📂 Products (' + rec.products.length + '):'
-        + rec.products.map(p => '<div style="padding:1px 0 1px 14px;"><a href="/products/' + encodeURIComponent(p.path) + '" target="_blank">'
+    // Non-image products only (dataset/cadu/log): every PNG sits in the
+    // slideshow above - listing both would duplicate the same files
+    const files = (rec.products || []).filter(p => !p.path.toLowerCase().endsWith('.png'));
+    if (!files.length) return '';
+    return '<div class="filename" style="margin-top:6px;">' + '📂 Products (' + files.length + '):'
+        + files.map(p => '<div style="padding:1px 0 1px 14px;"><a href="/products/' + encPath(p.path) + '" target="_blank">'
             + esc(p.path) + '</a> <span style="color:#888;">(' + p.size_kb + ' kB)</span></div>').join('')
         + '</div>';
 }
 
-// Decoded image preview for already-decoded recordings (the flat PNG the
-// decode pipeline copies next to the WAV). Shown on page load, clickable
-// to the full-size image - without this, a decoded pass shows nothing
-// visual at all until someone clicks Decode again.
-function decodedImgHtml(rec) {
-    if (!rec.decoded || !rec.png) return '';
-    return '<img class="decoded-img" src="/thumbs/' + esc(rec.png) + '" loading="lazy" alt="Decoded image"'
-        + ' title="Click to open the full-size image" onclick="window.open(\'/images/' + esc(rec.png) + '\')" style="cursor:pointer;">';
+// Path with each segment encoded separately (no %2F: the slashes stay
+// real so nginx and the endpoints see a normal multi-segment path)
+function encPath(p) { return p.split('/').map(encodeURIComponent).join('/'); }
+
+// ---------- decoded-image slideshow + full-size lightbox ----------
+// Every decoded image of one recording - the flat composite first, then
+// all SatDump product images - as a click-through slideshow. Clicking the
+// shown image opens the ORIGINAL in the in-page lightbox (displayed, not
+// downloaded); arrows/left-right work while the lightbox is open.
+const slideshowPos = {};   // recording id -> current index, survives refreshes
+let slideshowData = {};     // recording id -> [{thumb, full, label}] of the last render
+
+function decodedImages(rec) {
+    const imgs = [];
+    if (rec.decoded && rec.png)
+        imgs.push({ thumb: '/thumbs/' + encPath(rec.png), full: '/images/' + encPath(rec.png), label: rec.png });
+    (rec.products || []).forEach(p => {
+        if (p.path.toLowerCase().endsWith('.png'))
+            imgs.push({ thumb: '/thumbs/' + encPath(p.path), full: '/products/' + encPath(p.path), label: p.path });
+    });
+    return imgs;
 }
+
+function slideshowHtml(rec) {
+    const imgs = decodedImages(rec);
+    if (!imgs.length) return '';
+    const id = safeId(rec.filename);
+    slideshowData[id] = imgs;
+    let i = slideshowPos[id] || 0;
+    if (i >= imgs.length) i = 0;
+    slideshowPos[id] = i;
+    return '<div class="slideshow" data-id="' + id + '">'
+        + '<div class="slideshow-img" onclick="openLightbox(\'' + id + '\')" title="Click to view the original image">'
+        + '<img id="slideimg-' + id + '" src="' + imgs[i].thumb + '" alt="Decoded image" loading="lazy"></div>'
+        + '<div class="slideshow-bar">'
+        + '<button onclick="slideStep(\'' + id + '\',-1)" title="Previous image">&#9664;</button>'
+        + '<span class="count" id="slidecount-' + id + '">' + (i + 1) + ' / ' + imgs.length + '</span>'
+        + '<button onclick="slideStep(\'' + id + '\',1)" title="Next image">&#9654;</button>'
+        + '<span class="lbl" id="slidelbl-' + id + '">' + esc(imgs[i].label) + '</span>'
+        + '</div></div>';
+}
+
+function slideStep(id, d) {
+    const imgs = slideshowData[id];
+    if (!imgs || !imgs.length) return;
+    const i = ((slideshowPos[id] || 0) + d + imgs.length) % imgs.length;
+    slideshowPos[id] = i;
+    document.getElementById('slideimg-' + id).src = imgs[i].thumb;
+    document.getElementById('slidecount-' + id).textContent = (i + 1) + ' / ' + imgs.length;
+    document.getElementById('slidelbl-' + id).textContent = imgs[i].label;
+}
+
+let lightboxImgs = null, lightboxPos = 0;
+
+function updateLightbox() {
+    const img = lightboxImgs[lightboxPos];
+    document.getElementById('lb-img').src = img.full;
+    document.getElementById('lb-caption').textContent =
+        img.label + '  (' + (lightboxPos + 1) + ' / ' + lightboxImgs.length + ')';
+}
+
+function openLightbox(id) {
+    const imgs = slideshowData[id];
+    if (!imgs || !imgs.length) return;
+    lightboxImgs = imgs;
+    lightboxPos = slideshowPos[id] || 0;
+    updateLightbox();
+    document.getElementById('img-lightbox').classList.add('show');
+}
+
+function closeLightbox(ev) {
+    if (ev && ev.target && ev.target.id !== 'img-lightbox') return;  // only the backdrop closes it
+    document.getElementById('img-lightbox').classList.remove('show');
+    lightboxImgs = null;
+}
+
+function lightboxStep(d) {
+    if (!lightboxImgs) return;
+    lightboxPos = (lightboxPos + d + lightboxImgs.length) % lightboxImgs.length;
+    updateLightbox();
+}
+
+// One-off lightbox for an image outside a slideshow (the image that a
+// Decode button just produced)
+function openSingleLightbox(png) {
+    lightboxImgs = [{ full: '/images/' + encPath(png), label: png }];
+    lightboxPos = 0;
+    updateLightbox();
+    document.getElementById('img-lightbox').classList.add('show');
+}
+
+// Arrow keys click through the lightbox, Esc closes it
+document.addEventListener('keydown', e => {
+    if (!lightboxImgs) return;
+    if (e.key === 'ArrowLeft') lightboxStep(-1);
+    else if (e.key === 'ArrowRight') lightboxStep(1);
+    else if (e.key === 'Escape') closeLightbox();
+});
 
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function safeId(f) { return f.replace(/[^a-zA-Z0-9]/g, ''); }
@@ -100,7 +193,7 @@ function render() {
                         + '<button class="danger" onclick="deleteRecording(\'' + esc(rec.filename) + '\')">🗑 Delete</button>'
                         + '<audio controls preload="none"><source src="/audio/' + esc(rec.filename) + '" type="audio/wav"></audio>'
                         + '<div class="result" id="' + rid + '"></div>'
-                        + decodedImgHtml(rec)
+                        + slideshowHtml(rec)
                         + (rec.products && rec.products.length ? productsHtml(rec) : '');
                 }
             } else {
@@ -126,7 +219,7 @@ function render() {
                     + '<button class="danger" onclick="deleteRecording(\'' + esc(r.filename) + '\')">🗑 Delete</button>'
                     + '<audio controls preload="none"><source src="/audio/' + esc(r.filename) + '" type="audio/wav"></audio>'
                     + '<div class="result" id="' + rid + '"></div>')
-            + decodedImgHtml(r)
+            + slideshowHtml(r)
             + (r.products && r.products.length ? productsHtml(r) : '')
             + '</div>';
     }
@@ -148,7 +241,7 @@ async function decodeRecording(filename, force) {
         const res = await fetch('/decode/' + filename + (force ? '?force=1' : ''));
         const data = await res.json();
         if (data.success && resultDiv) {
-            resultDiv.innerHTML = '<span style="color:#53d769;">✅ Decoded!</span>' + qualityBadge(data.quality) + '<img class="decoded-img" src="/thumbs/' + esc(data.png) + '?t=' + Date.now() + '" alt="Decoded APT image" loading="lazy" title="Click to open the full-size image" onclick="window.open(\'/images/' + esc(data.png) + '\')" style="cursor:pointer;">';
+            resultDiv.innerHTML = '<span style="color:#53d769;">✅ Decoded!</span>' + qualityBadge(data.quality) + '<img class="decoded-img" src="/thumbs/' + esc(data.png) + '?t=' + Date.now() + '" alt="Decoded image" loading="lazy" title="Click to view the original image" onclick="openSingleLightbox(\'' + esc(data.png) + '\')" style="cursor:zoom-in;">';
         } else if (resultDiv) {
             resultDiv.innerHTML = '<span style="color:#e74c3c;">❌ ' + esc(data.error || 'Decode failed') + '</span>';
         }
