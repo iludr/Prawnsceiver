@@ -2088,7 +2088,9 @@
                 // transmitter list in a short scrollable area
                 let html = '<div class="sat-card">';
                 html += '<div class="sat-card-head">';
-                if (s.image) html += '<img src="' + escHtml(s.image) + '" alt="satellite" onerror="this.remove()">';
+                if (s.image) html += '<img src="' + escHtml(s.image)
+                    + '" alt="satellite" title="View the full-size picture"'
+                    + ' style="cursor:zoom-in" onerror="this.remove()">';
                 html += '<div><div class="sat-name">' + escHtml(satName) + '</div>';
                 if (s.names) html += '<div class="sat-sub">' + escHtml(s.names) + '</div>';
                 const subs = [];
@@ -2110,6 +2112,10 @@
                 }
                 html += '</div>';
                 el.innerHTML = html;
+                // Satellite photo: click to view it full size
+                const simg = el.querySelector('.sat-card-head img');
+                if (simg) simg.addEventListener('click',
+                    () => openLogoLightbox(s.image));
             } catch (e) {
                 el.innerHTML = '';
             }
@@ -2450,6 +2456,13 @@
         function toggleLogoLightbox() {
             logoLightboxOn = !logoLightboxOn;
             document.getElementById('logo-lightbox').style.display = logoLightboxOn ? 'flex' : 'none';
+        }
+        // Shared full-size viewer: any site picture (header logo, the
+        // SatNOGS satellite photo, ...) zooms into the logo lightbox
+        function openLogoLightbox(src) {
+            const img = document.querySelector('#logo-lightbox img');
+            if (src && img) img.src = src;
+            if (!logoLightboxOn) toggleLogoLightbox();
         }
         document.addEventListener('keydown', e => { if (e.key === 'Escape' && logoLightboxOn) toggleLogoLightbox(); });
 
@@ -3122,6 +3135,10 @@
             document.getElementById('rec-pause-btn').addEventListener('click', toggleRecordPause);
             document.getElementById('restore-file').addEventListener('change', function () { restoreBackup(this); });
             document.getElementById('logo-lightbox').addEventListener('click', toggleLogoLightbox);
+            // Header logo: click opens the full-size original
+            // (the img already carries cursor:zoom-in)
+            document.querySelector('#header img.logo').addEventListener('click',
+                () => openLogoLightbox('/prawnceiver_full.jpg'));
             var lbImg = document.querySelector('#logo-lightbox img');
             if (lbImg) lbImg.addEventListener('error', function () {
                 if (lbImg.dataset.fallback) return;
