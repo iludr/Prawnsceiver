@@ -658,6 +658,16 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             tracks = adsb.aircraft_tracks(icaos, hours)
             self._send_json(tracks, code=200)
 
+        elif self.path.split('?')[0] == '/adsb_coverage.json':
+            # Convex hull of every position heard in the last N hours
+            # (?hours=24) — the ADS-B map's coverage shape
+            query = self._query()
+            try:
+                hours = float((query.get('hours') or ['24'])[0])
+            except ValueError:
+                hours = 24.0
+            self._send_json(adsb.coverage_hull(hours), code=200)
+
         elif self.path.startswith('/aislog.json'):
             # Tail of the persistent AIS message log (?count=N, max 2000)
             query = self._query()

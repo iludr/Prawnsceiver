@@ -19,6 +19,13 @@ def main():
 
     os.makedirs(LOGDIR, exist_ok=True)
     os.makedirs(RECORD_DIR, exist_ok=True)
+    # If recordings were moved to a network share (PRAWN_RECORD_DIR), a
+    # missing mount silently degrades to the local disk — the exact
+    # way the VM root disk once filled overnight. Warn loudly instead.
+    if os.environ.get("PRAWN_RECORD_DIR") and not os.path.ismount(RECORD_DIR):
+        state.log_console("⚠️ RECORD_DIR is set via PRAWN_RECORD_DIR but "
+                          "not a mounted share — recordings will land on "
+                          "the LOCAL disk and may fill it!", "warn")
     # One-time import of the legacy JSON stores into station.db,
     # then load the AIS ship registry from it. ORDER MATTERS: the
     # registry lives in memory and save_ships() mirrors memory back

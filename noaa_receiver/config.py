@@ -12,7 +12,11 @@ PORT = 8085
 # imported into the database once at startup and then retired to
 # <name>.migrated
 LOGDIR = "/var/log/noaa"
-RECORD_DIR = "/var/log/noaa/recordings"
+# Raw recordings (WAV + IQ) go to RECORD_DIR. It defaults to the local
+# disk but can be pointed at a network share (recommended: NFS, see
+# AGENTS.md deployment notes) via PRAWN_RECORD_DIR, e.g. a systemd
+# unit 'Environment=PRAWN_RECORD_DIR=/mnt/nas/prawnceiver-recordings'.
+RECORD_DIR = os.environ.get("PRAWN_RECORD_DIR") or "/var/log/noaa/recordings"
 PASS_HISTORY_FILE = os.path.join(LOGDIR, "pass_history.json")
 # Dongles added at runtime (dashboard "Add dongle") persist across restarts
 # as a JSON list of {"host": ..., "port": ...} entries

@@ -545,6 +545,51 @@ def aircraft_tracks(icaos, hours=24):
     return tracks
 
 
+def coverage_hull(hours=24):
+    """Convex hull (lat/lon ring) of every position decoded in the
+    last `hours`, from the persistent message log — the 'area where
+    planes were heard' the ADS-B map draws as its coverage shape
+    (instead of one gray ghost marker per gone-quiet plane). Only
+    frames that actually decoded a position count; the hull is
+    computed in plain lat/lon space (Andrew's monotone chain), which
+    is plenty accurate at the few-hundred-km scale of our sky.
+    """
+    try:
+        hours = max(1, min(float(hours), 48))
+    except (TypeError, ValueError):
+        hours = 24.0
+    cutoff = time.time() - hours * 3600
+    pts = []
+    for r in db.query("SELECT entry FROM adsb_messages WHERE ts >= ?",
+                      (cutoff,)):
+        try:
+            e = json.loads(r["entry"])
+        except ValueError:
+            continue
+        if e.get("lat") is not None and e.get("lon") is not None:
+            pts.append((e["lat"], e["lon"]))
+    if len(pts) < 3:
+        return {"hull": [], "points": len(pts), "hours": hours}
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    pts.sort()
+    lower = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    upper = []
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    ring = lower[:-1] + upper[:-1]
+    return {"hull": [[la, lo] for la, lo in ring],
+            "points": len(pts), "hours": hours}
+
+
 # ---------- persistent aircraft registry (every aircraft ever seen) ------
 
 _aircrafts_file_lock = threading.Lock()
