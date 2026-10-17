@@ -540,6 +540,19 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None,
         shutil.copyfile(image, iq_path[:-len('.iq.u8')] + '.png')
         state.log_console(f"🛰 SatDump decode done ({label}): {len(products)} product file(s), composite {os.path.basename(image)}")
         _write_decode_marker(wav_path, True, f"SatDump: {len(products)} products, composite {os.path.basename(image)}")
+        # The raw IQ did its job: the decode succeeded, and the u8 baseband
+        # is 4x the WAV (a full 2.4 Msps pass is ~3.5 GB) with no further
+        # use — the composite, the product images and the WAV carry the
+        # outcome (operator request 2026-10-17). Deleted on SUCCESS only:
+        # a recording whose transmitter stayed dark keeps its IQ so the
+        # decode can be retried by hand.
+        try:
+            iq_mb = os.path.getsize(iq_path) / (1024 * 1024)
+            os.remove(iq_path)
+            state.log_console(f"🧹 Raw IQ deleted after successful decode: "
+                              f"{os.path.basename(iq_path)} ({iq_mb:.0f} MB) — images kept")
+        except OSError:
+            pass
     elif products:
         state.log_console(f"🛰 SatDump decode done ({label}): {len(products)} product file(s) in {os.path.basename(out_dir)}/ (no image)")
         _write_decode_marker(wav_path, True, f"SatDump: {len(products)} product file(s) (no image)")
