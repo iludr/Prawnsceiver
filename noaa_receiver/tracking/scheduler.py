@@ -97,6 +97,7 @@ def scheduler_thread():
             
             # Predict passes
             passes = predict_passes(sats, PASS_PREDICT_HOURS)
+            predicted_at = time.time()
             with state.status_lock:
                 state.upcoming_passes = passes
             
@@ -283,8 +284,13 @@ def scheduler_thread():
                 # refetches and re-predicts
                 if state.tle_sync_requested:
                     break
-                # Refresh passes list every 30 min
-                if datetime.utcnow().minute % 30 == 0 and datetime.utcnow().second < 10:
+                # Re-predict every ~30 min — but at most ONCE: the old
+                # wall-clock test (minute % 30 == 0, second < 10) matched on
+                # every 10-s tick inside that window, so the outer loop
+                # re-predicted in a tight spin and flooded the console
+                # buffer (100 lines of "Predicted N passes" per half hour,
+                # hiding every decode diagnostic — observed 2026-10-17).
+                if time.time() - predicted_at >= 29 * 60:
                     break
                 
                 time.sleep(10)

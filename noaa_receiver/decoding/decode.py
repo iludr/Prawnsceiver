@@ -9,7 +9,7 @@ import time
 from .. import db
 from .. import state
 
-from ..config import SDR_OFFSET_HZ, SDR_RATE, TRACKED_SATS
+from ..config import RECORD_LOCAL_DIR, SDR_OFFSET_HZ, SDR_RATE, TRACKED_SATS
 from ..sdr.dsp import frequency_shift, iq_to_complex, new_state
 
 # Recording names are '<sat>_<YYYYMMDD>_<HHMMSS>[-<n>][_<serial>].wav', written by
@@ -90,10 +90,53 @@ def forget_decode_marker(wav_path):
     except Exception:
         pass
 
+
+def drop_stale_spawn_markers():
+    """At startup: delete decode markers of background decodes that were
+    spawned but never finished.
+
+    _decode_iq writes a 'success' marker when it SPAWNS the detached
+    SatDump run; only the run itself rewrites the marker with the real
+    outcome. A station restart mid-decode kills the daemon thread
+    before that rewrite, leaving the recording marked 'success' with no
+    products - and the marker short-circuits every later auto-decode,
+    so the pass is never retried (observed live 2026-10-17: four whole
+    LRPT passes, strong signals included, sat undecodable this way).
+    Deleting those rows lets the normal decode sweeps pick the
+    recordings up again."""
+    try:
+        with db.write() as cur:
+            cur.execute("DELETE FROM decodes WHERE message LIKE ?",
+                        ('%decode started in the background%',))
+            dropped = cur.rowcount if cur.rowcount > 0 else 0
+    except Exception as e:
+        state.log_console(f"Stale spawn-marker cleanup failed: {e}", "warn")
+        return
+    if dropped:
+        state.log_console(f"🧹 Dropped {dropped} unfinished background-decode "
+                          f"marker(s) - those recordings will be re-decoded")
+
 def _serial_from_filename(wav_path):
     """The dongle serial suffix of a recording name, or None (primary)."""
     m = _RECORDING_RE.match(os.path.basename(wav_path))
     return m.group('serial') if m else None
+
+
+def _centered_tmp_path(iq_path):
+    """Local path for the centered-baseband temp of a raw IQ file.
+
+    ALWAYS on the LOCAL capture disk — never next to the IQ, which can
+    sit on the archive share: the cf32 temp is 4x the IQ size (a full
+    Meteor pass writes ~29 GB), and writing that over NFSv3 killed
+    every big decode with ENOSPC while the share was tight, leaving
+    orphaned temps the archiver's leftover sweep then shipped to the
+    share (71 files, one 10.5 GB, measured 2026-10-17). The dot prefix
+    keeps the archiver from ever claiming it (it skips dotfiles), and
+    the deterministic name lets a new attempt remove a stale leftover
+    of a killed run first.
+    """
+    base, _ = os.path.splitext(os.path.basename(iq_path))
+    return os.path.join(RECORD_LOCAL_DIR, '.' + base + '.centered.c32')
 
 
 def _centered_cf32(iq_path, shift_hz):
@@ -109,9 +152,13 @@ def _centered_cf32(iq_path, shift_hz):
     DSP state) so memory stays bounded; residual Doppler (a few kHz,
     slowly varying) is left to the demod's frequency tracking.
 
-    Returns the temp path; the caller removes it."""
+    Returns the temp path (see _centered_tmp_path); the caller removes it."""
     import numpy as np
-    tmp = iq_path + '.centered.c32'
+    tmp = _centered_tmp_path(iq_path)
+    try:
+        os.remove(tmp)     # leftover of a killed earlier run, if any
+    except OSError:
+        pass
     st = new_state()
     # 100 ms of IQ per chunk: the phase-continuity state makes any chunk
     # size correct, and this keeps every per-chunk array small. The old
@@ -142,6 +189,21 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
     The search is a signal-width-matched sliding window (mean power per
     window, satellite side of the tuner only, so the +SDR_OFFSET_HZ DC
     spike and the R820T spurs cannot win a naive peak search).
+
+    The slices are combined per-slice-floor-normalized and with a MAX,
+    not an average. A LEO downlink is only above the noise for the part
+    of the recording near culmination: the rise/set slices are near
+    horizon and carry nothing, and an average drags the mid-pass plateau
+    down to noise (measured live 2026-10-17 on the 87.9-degree Meteor
+    M2-4 pass: the best slice held the LRPT plateau at 8.7x its own
+    floor while the 6-slice average showed 2.8x — under the 4x
+    confidence gate, so EVERY real pass measured None and the decode
+    fell back to the nominal tuner offset, 17 kHz off for the then
+    uncalibrated dongle). Normalizing first also removes the tuner
+    AGC's +/-30% floor wander between slices; taking the max per bin
+    keeps the strongest view of the sky. A stationary interferer is
+    present in ALL slices, so it survives the max unchanged and stays
+    subject to the drift gate below.
 
     But a plain window search is fooled by LOCAL transmitters: this
     site has a persistent ~11 kHz carrier around 137.905 MHz (Region-1
@@ -204,7 +266,14 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
     if not slices:
         return None
     freqs = np.fft.fftshift(np.fft.fftfreq(n_fft, 1.0 / SDR_RATE))
-    avg = np.mean(slices, axis=0)
+    # Per-slice floor normalization: the tuner's AGC pumps the noise
+    # floor between slices (+/-30% measured on a satellite-less
+    # recording), and that wander otherwise fakes signal strength.
+    # The normalized slices also feed the drift test below.
+    norm = [s_ / (float(np.median(s_[n_fft // 2:])) or 1.0) for s_ in slices]
+    # MAX over the normalized slices, not the mean: only the slices
+    # near culmination carry the downlink (see docstring).
+    avg = np.max(norm, axis=0)
     # Noise reference: the POSITIVE-frequency half. The satellite is
     # always on the negative side (offset tuning), so the positive half
     # is receiver noise (the +SDR_OFFSET_HZ DC spike is a few bins and
@@ -261,11 +330,10 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000):
     drift_hz = 0.0
     third = max(1, len(slices) // 3)
     if len(slices) >= 2 * third:
-        # Normalize each slice to the global floor first: the tuner's
-        # AGC pumps the noise floor between slices (+/-30% measured on
-        # a satellite-less recording), and that wander otherwise fakes
-        # a Doppler drift on low-SNR humps
-        norm = [s_ / (float(np.median(s_[n_fft // 2:])) or 1.0) for s_ in slices]
+        # The normalized slices (norm, see above) remove the AGC floor
+        # wander that would otherwise fake a Doppler drift on low-SNR
+        # humps; the first and last thirds are averaged back to the
+        # combined floor scale for the region/centroid weighting.
         c_first = _centroid(np.mean(norm[:third], axis=0) * med)
         c_last = _centroid(np.mean(norm[-third:], axis=0) * med)
         if c_first is not None and c_last is not None:

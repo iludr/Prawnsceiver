@@ -1682,3 +1682,58 @@ Decoder saved as noaa_receiver/analysis/dmr.py (CLI: python -m
 noaa_receiver.analysis.dmr <recording.wav> [--json]), codec roundtrips
 and a synthetic end-to-end decode covered by tests/test_dmr.py — the
 encoder reproduces the on-air Aloha packet byte for byte.
+
+
+### 2026-10-17 ~16:30 CEST — 🛰 LRPT decode chain: why every pass demodulated empty spectrum
+
+Operator report: AIS/ADS-B/etc work, LRPT still broken. Diagnosis on
+the live VM station with the day's own recordings (4 Meteor passes,
+one 87.9°, all 0-byte CADU):
+
+1. CAPTURE IS FINE. HTTP-Range slices of the raw IQs (the /audio/
+   endpoint serves the .iq.u8 with Range support) show a clean
+   +11 dB / 120 kHz LRPT plateau at ~-77 kHz in the strong passes
+   — the "transmitters are dark" theory from 2026-10-10 is dead for
+   M2-4 (the dongle host moved to 192.168.3.244, an UNMEASURED
+   dongle with corrections disabled (operator, 76b6863), so the
+   satellite sits ~17 kHz below the nominal -60 kHz tuner offset).
+2. PIPELINE IS FINE. Mid-pass excerpts of the 87.9° pass, centered
+   with the station's own measurement + rotation, decode with
+   meteor_m2-x_lrpt (72k — confirmed better than _80k on this
+   signal: 138 KB CADU + full MSU-MR composites vs nothing).
+   Re-rotating the same excerpt by the FALLBACK +60 kHz (signal
+   left at -17 kHz) reproduces the exact live symptom: SNR 4-5 dB,
+   Viterbi NOSYNC BER 0.40, 0-byte CADU. SatDump's LRPT demod does
+   NOT acquire a signal that far off center.
+3. ROOT CAUSE: _measure_signal_offset averaged its 6 spectrum
+   slices spread across the whole pass — rise/set slices hold
+   nothing, and the mid-pass plateau (8.7-10.3x its own floor in
+   the best slice) diluted to 2.8x in the average, under the 4x
+   confidence gate. Every real pass measured None -> fallback
+   rotation -> demod empty spectrum -> "4 products (no image)".
+   FIX: per-slice floor normalization + MAX over slices (the
+   strongest view of the sky; stationary interferers survive the
+   max unchanged and stay rejected by the drift gate). Live
+   numbers after: 87.9° pass -78.5 kHz, 39.8° pass -75.3 kHz
+   (both decodable), dark fragments correctly None. Regression
+   scenario 7 in test_lrpt.py (fails on the old code, passes on
+   the new).
+4. SECOND BUG — the cf32 centering temp (4x the IQ, ~29 GB for a
+   full pass) was written next to the IQ, i.e. ONTO THE ARCHIVE
+   SHARE for families already archived: ENOSPC killed every big
+   background decode mid-centering (marker stuck at the spawn-time
+   "success", 71 orphaned .centered.c32 temps, one 10.5 GB). FIX:
+   temps always on the LOCAL capture disk, dot-prefixed so the
+   archiver's leftover sweep ignores them, stale leftovers removed
+   at decode start; startup now drops spawn-time markers of
+   background decodes a restart killed (decode.py
+   drop_stale_spawn_markers, app.py) so those recordings are
+   retried instead of being blocked forever.
+5. ALSO: the scheduler's 30-min re-predict window busy-looped
+   (tight break/re-predict spin for 10 s twice an hour, flooding
+   the 100-line console that had hidden every decode diagnostic) —
+   replaced with a monotonic 29-min guard.
+
+Verified end-to-end on the VM after deploy: forced re-decode of the
+87.9° and 39.8° passes produced the station's first real LRPT
+images (MSU-MR composites + map overlays).

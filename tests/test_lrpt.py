@@ -114,7 +114,29 @@ print("6. pure noise -> rejected")
 m = measure(floor(7), 120_000)
 check("rejected (None)", m is None, f"got {m}")
 
-print("7. _pick_product_png: largest PNG wins, non-images ignored")
+print("7. pass-like envelope: plateau strong only near culmination")
+# The live failure of 2026-10-17: rise/set slices hold nothing but
+# floor and only the mid-pass slices carry the downlink (best slice
+# 8.7x its own floor, 6-slice average 2.8x — under the confidence
+# gate). A detection that averages the slices misses every real pass.
+n = int(DUR * FS)
+rng = np.random.default_rng(205)
+x = (rng.standard_normal(n) + 1j * rng.standard_normal(n)) * 30.0
+X = np.fft.fft(x)
+f = np.fft.fftfreq(n, 1.0 / FS)
+X[np.abs(f) > 60_000] = 0
+x = np.fft.ifft(X)
+t = np.arange(n) / n
+env = np.clip(1.0 - 4.0 * np.abs(t - 0.5), 0.0, 1.0)   # zero at rise/set
+ts = np.arange(n) / FS
+sweep = -63_000 + 6_000 * (ts / ts[-1])
+m = measure(floor(6) + x * env * np.exp(2j * np.pi * np.cumsum(sweep) / FS),
+            120_000)
+check("found", m is not None, f"got {m}")
+check("centered on the plateau", m is not None and abs(m - (-60_000)) < 5000,
+      f"measured {m if m is None else f'{m:.0f}'} Hz")
+
+print("8. _pick_product_png: largest PNG wins, non-images ignored")
 d = tempfile.mkdtemp()
 for name, size in [("meteor.cadu", 50), ("dataset.json", 300),
                    ("msu_mr_ch1.png", 400), ("msu_mr_rgb_composite.png", 90_000),

@@ -45,6 +45,11 @@ def main():
     # an EMPTY table over the just-imported ships and delete them
     # (observed live 2026-10-10: 9 imported ships reduced to 1).
     db.import_legacy(None)
+    # Decode markers that only say "decode started in the background"
+    # belong to SatDump runs a restart killed mid-flight - drop them so
+    # the auto-decode sweeps retry those recordings (see decode.py).
+    from ..decoding.decode import drop_stale_spawn_markers
+    drop_stale_spawn_markers()
     from ..decoding import ais as _ais
     _ais.load_ships()
     # Every ADS-B aircraft ever received, restored from the
