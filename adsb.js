@@ -45,6 +45,8 @@ const REG_HEAD_PLAIN = '<th>callsign</th><th>ICAO</th><th>alt</th>'
 const REG_HEAD_TRACK = '<th>path</th>' + REG_HEAD_PLAIN;
 
 function applyRegistry(aircraft) {
+    regAircraft = aircraft;
+    drawRegistryMarkers();
     document.getElementById('regcount').textContent = aircraft.length;
     const rows = document.getElementById('regrows');
     if (!aircraft.length) {
@@ -182,9 +184,13 @@ document.getElementById('trackmode-btn').addEventListener('click', toggleTrackMo
 
 // ---------- live aircraft map (Leaflet + OpenStreetMap tiles) ----------
 // Aircraft are placed by their latest position and rotated by their
-// track; markers fade when silent for 10+ minutes.
+// track; markers fade when silent for 10+ minutes. Planes that left
+// the live table keep a gray ghost marker at their last known
+// position (24 h registry) until they drop out of the window.
 
 let map = null, markers = {}, fitted = false;
+let regAircraft = [], regMarkers = {}, liveIcaos = new Set();
+let mapStats = { onMap: 0, stale: 0, noPos: 0 };
 
 function initMap() {
     if (typeof L === 'undefined') {
@@ -231,9 +237,85 @@ function planeIcon(a) {
     });
 }
 
+// Ghost marker helpers: a registry plane that went quiet is drawn
+// muted gray at its last known position (no fade — the gray already
+// separates it from the live blue/orange planes), popup shows when
+// it was last heard.
+function ghostIcon(a) {
+    const rot = (a.track_deg !== undefined && a.track_deg !== null) ? a.track_deg : 0;
+    const shape = '<svg width="22" height="22" viewBox="0 0 24 24">'
+        + '<path d="M12 1 L14 9 L21 12 L14 14.5 L14 19 L12 23 L10 19 L10 14.5 L3 12 L10 9 Z"'
+        + ' fill="#5a6478" stroke="#10131f" stroke-width="0.8"/></svg>';
+    return L.divIcon({
+        className: '',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14],
+        popupAnchor: [0, -12],
+        html: '<div class="planeIcon">'
+            + '<div class="rot" style="transform: rotate(' + rot + 'deg)">' + shape + '</div>'
+            + (a.callsign ? '<div class="lbl">' + esc(a.callsign) + '</div>' : '')
+            + '</div>'
+    });
+}
+
+function fmtAgeH(sec) {
+    if (sec < 90) return Math.round(sec) + ' s';
+    if (sec < 5400) return Math.round(sec / 60) + ' min';
+    return (sec / 3600).toFixed(1) + ' h';
+}
+
+function ghostPopup(a) {
+    const pos = (a.lat !== undefined && a.lat !== null)
+        ? a.lat.toFixed(4) + ', ' + a.lon.toFixed(4) : '—';
+    return '<b>' + esc(a.callsign || a.icao) + '</b> · ' + esc(a.icao) + '<br>'
+        + 'last known position (24 h registry)<br>'
+        + (a.alt_ft !== undefined && a.alt_ft !== null ? a.alt_ft + ' ft · ' : '')
+        + pos + ' · last seen '
+        + fmtAgeH(Math.max(0, Date.now() / 1000 - (a.last_seen || 0))) + ' ago';
+}
+
+// One ghost per registry plane with a position that is NOT on the
+// live table; the live marker always wins, so the moment a plane
+// squitters again its ghost is removed (and it regains one when it
+// goes quiet). Called from updateMap (live updates) and
+// applyRegistry (registry updates).
+function drawRegistryMarkers() {
+    if (!map) return;
+    const seen = new Set();
+    for (const a of regAircraft) {
+        if (a.lat === undefined || a.lat === null || a.lon === undefined || a.lon === null) continue;
+        if (liveIcaos.has(a.icao)) continue;
+        seen.add(a.icao);
+        let m = regMarkers[a.icao];
+        if (!m) {
+            m = regMarkers[a.icao] = L.marker([a.lat, a.lon],
+                { title: a.callsign || a.icao }).addTo(map);
+            m.bindPopup(ghostPopup(a));
+        } else {
+            m.setLatLng([a.lat, a.lon]);
+        }
+        m.setIcon(ghostIcon(a));
+        m.setPopupContent(ghostPopup(a));
+    }
+    for (const k of Object.keys(regMarkers)) {
+        if (!seen.has(k)) { map.removeLayer(regMarkers[k]); delete regMarkers[k]; }
+    }
+    if (seen.size && !fitted) fitted = true, fitAircraft();
+    updateMapStats();
+}
+
+function updateMapStats() {
+    const ghosts = Object.keys(regMarkers).length;
+    document.getElementById('mapstats').textContent =
+        mapStats.onMap + ' aircraft with position on the map'
+        + (mapStats.stale ? ' · ' + mapStats.stale + ' faded (not heard for 10+ min)' : '')
+        + (mapStats.noPos ? ' · ' + mapStats.noPos + ' without position yet' : '')
+        + (ghosts ? ' · ' + ghosts + ' last known from the 24 h registry' : '');
+}
+
 function fitAircraft() {
     if (!map || !fitted) return;
-    const ms = Object.values(markers);
+    const ms = Object.values(markers).concat(Object.values(regMarkers));
     if (!ms.length) return;
     map.fitBounds(L.latLngBounds(ms.map(m => m.getLatLng())).pad(0.25));
 }
@@ -242,8 +324,10 @@ function updateMap(aircraft) {
     if (!map) return;
     const now = Date.now() / 1000;
     const seen = new Set();
+    liveIcaos.clear();
     let onMap = 0, noPos = 0, staleCount = 0;
     for (const a of aircraft) {
+        liveIcaos.add(String(a.icao));
         if (a.lat === undefined || a.lat === null || a.lon === undefined || a.lon === null) { noPos++; continue; }
         seen.add(String(a.icao));
         onMap++;
@@ -263,10 +347,8 @@ function updateMap(aircraft) {
         if (!seen.has(k)) { map.removeLayer(markers[k]); delete markers[k]; }
     }
     if (onMap && !fitted) fitted = true, fitAircraft();
-    document.getElementById('mapstats').textContent =
-        onMap + ' aircraft with position on the map'
-        + (staleCount ? ' · ' + staleCount + ' faded (not heard for 10+ min)' : '')
-        + (noPos ? ' · ' + noPos + ' without position yet' : '');
+    mapStats = { onMap: onMap, stale: staleCount, noPos: noPos };
+    drawRegistryMarkers();
 }
 
 initMap();
