@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .. import state
-from ..config import LAT, LON, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_ISS, RECORD_LOCAL_DIR, TLE_REFRESH_HOURS, UTC_OFFSET
+from ..config import LAT, LON, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_ISS, RECORD_LOCAL_DIR, TLE_REFRESH_HOURS, TRACKED_SATS, UTC_OFFSET
 
 from ..decoding.decode import decode_recording, read_decode_marker, sat_short_name
 from ..web.history import log_pass
@@ -61,6 +61,11 @@ def _same_pass(p, q):
 
 def scheduler_thread():
     """Background thread: refresh TLEs, predict passes, trigger frequency switches."""
+    # Warm the home-grown transmitter ledger at boot: the pass rows
+    # (tx_home dark-streak chips) read a non-rebuilding cache that the
+    # first finished pass would otherwise only fill hours later
+    for _name, _freq in TRACKED_SATS.values():
+        txstatus.ledger(_name)
     sats = {}
     while True:
         try:
