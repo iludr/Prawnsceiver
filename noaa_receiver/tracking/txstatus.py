@@ -56,9 +56,13 @@ _alert_state = {}
 def _build_ledger():
     """Roll the pass history into per-satellite activity stats.
 
-    A pass is DARK when it recorded but produced no image (png is NULL)
-    — the station's own measurement, current to the last pass. LIT means
-    a decoded image exists for it."""
+    A pass is LIT when it produced an image, DARK when it did not —
+    the station's own measurement, current to the last pass. The verdict
+    comes from the passes table joined with the decodes markers: the
+    passes.png column is not populated by the current log path, so the
+    truth is the decode marker's message (a composite .png product vs.
+    "no image" — a dark pass can still decode "successfully" with
+    product files and no image, measured live 2026-10-17)."""
     global _ledger_built_at
     now = time.time()
     with _ledger_lock:
@@ -67,15 +71,19 @@ def _build_ledger():
         stats = {}
         try:
             rows = db.query(
-                "SELECT sat_name, rise_ts, png FROM passes"
-                " ORDER BY sat_name, rise_ts")
+                "SELECT p.sat_name AS sat_name, p.rise_ts AS rise_ts,"
+                " p.png AS png, d.message AS dmsg"
+                " FROM passes p LEFT JOIN decodes d"
+                " ON d.base = rtrim(p.wav, '.wav')"
+                " ORDER BY p.sat_name, p.rise_ts")
             for r in rows:
                 name = r["sat_name"]
                 s = stats.setdefault(name, {"dark_streak": 0,
                                             "passes": 0,
                                             "last_heard_ts": None})
                 s["passes"] += 1
-                if r["png"]:
+                lit = bool(r["png"]) or ".png" in (r["dmsg"] or "")
+                if lit:
                     s["dark_streak"] = 0
                     s["last_heard_ts"] = r["rise_ts"]
                 else:

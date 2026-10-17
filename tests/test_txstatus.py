@@ -59,6 +59,32 @@ assert txstatus.cached_ledger("Meteor-M 2-3")["dark_streak"] == 3
 txstatus.ledger("Meteor-M 2-3")
 print("1. ledger (dark streak, last heard, cached hot path): ok")
 
+# --- 1b. lit verdict from the decodes marker (passes.png stays NULL
+#      in the current log path): a "composite .png" message is LIT,
+#      a "(no image)" marker is DARK ---
+_log_pass("Meteor-M 2-4", t0 + 9000, None)       # png NULL...
+with db.write() as cur:                          # ...but decoded with image
+    cur.execute("INSERT INTO decodes (base, success, message, ts)"
+                " VALUES (?,?,?,?)",
+                ("x", 1, "SatDump: 4 products, composite msu_mr_rgb.png",
+                 t0 + 9000))
+# fix the wav so the join finds the marker (log_pass stored "x.wav")
+with db.write() as cur:
+    cur.execute("UPDATE passes SET wav = 'x.wav' WHERE rise_ts = ?",
+                (t0 + 9000,))
+txstatus.invalidate()
+assert txstatus.ledger("Meteor-M 2-4")["dark_streak"] == 0, "marker with .png must count as lit"
+_log_pass("Meteor-M 2-9", t0 + 9500, None)
+with db.write() as cur:
+    cur.execute("UPDATE passes SET wav = 'y.wav' WHERE rise_ts = ?",
+                (t0 + 9500,))
+    cur.execute("INSERT INTO decodes (base, success, message, ts)"
+                " VALUES (?,?,?,?)",
+                ("y", 1, "SatDump: 4 product file(s) (no image)", t0 + 9500))
+txstatus.invalidate()
+assert txstatus.ledger("Meteor-M 2-9")["dark_streak"] == 1, "no-image marker must count as dark"
+print("1b. lit/dark verdict from decode markers (png join): ok")
+
 # --- 2. note_pass_result: dark warning raised ONCE at the threshold ---
 txstatus.invalidate()
 before = len(_console_texts())
