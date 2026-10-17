@@ -1241,7 +1241,7 @@
                     // 137.0-138.0 MHz downlink band), the APRS dongle on
                     // 144.8 MHz (145.825 with the ISS checkbox set) —
                     // none follow the shared satellite tune
-                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_iss ? 145.825 : 144.8) : (d.pocsag ? 466.0 : (d.adsb ? 1090.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
+                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_lasar ? 436.925 : (d.aprs_iss ? 145.825 : 144.8)) : (d.pocsag ? 466.0 : (d.adsb ? 1090.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
                         ? d.manual_frequency_mhz : lastSharedMHz)))));
                     updateDongleCard(d);
                 }
@@ -1289,7 +1289,7 @@
             if (!c || !c.lastD) return null;
             if (c.lastD.ais) return 162.0;   // AIS dongle never follows the shared tune
             if (c.lastD.orbcomm) return 137.5;   // Orbcomm dongle is parked on the band center
-            if (c.lastD.aprs) return c.lastD.aprs_iss ? 145.825 : 144.8;     // APRS dongle is parked on the APRS channel (ISS checkbox: 145.825)
+            if (c.lastD.aprs) return c.lastD.aprs_lasar ? 436.925 : (c.lastD.aprs_iss ? 145.825 : 144.8);     // APRS dongle is parked on the APRS channel (LASAR/ISS checkboxes: 436.925/145.825)
             if (c.lastD.manual_frequency_mhz !== null && c.lastD.manual_frequency_mhz !== undefined)
                 return c.lastD.manual_frequency_mhz;
             return lastSharedMHz;
@@ -1336,6 +1336,7 @@
             c.listenBtn.style.display = (role === 'sat' || role === 'manual' || role === 'aprs') ? '' : 'none';
             // the ISS digipeater checkbox only exists in APRS mode
             c.aprsIssRow.style.display = role === 'aprs' ? 'flex' : 'none';
+            c.aprsLasarRow.style.display = role === 'aprs' ? 'flex' : 'none';
             if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
             c.roleLast = role;
             if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag' || role === 'adsb') && liveAudioOn === d.id) toggleLiveAudio(d.id);
@@ -1780,6 +1781,35 @@
             const aprsIssTxt = document.createElement('span');
             aprsIssTxt.textContent = '🛰 ISS digipeater (145.825 MHz)';
             aprsIssRow.appendChild(aprsIssBox); aprsIssRow.appendChild(aprsIssTxt);
+            // LASARsat digipeater checkbox (APRS mode only): retunes to
+            // 436.925 MHz and swaps the demod to GFSK 9600 (G3RUH) —
+            // LASARsat relays APRS frames during passes. Mutually
+            // exclusive with the ISS checkbox (server-side the flags
+            // clear each other; both boxes mirror dongles.json)
+            const aprsLasarRow = document.createElement('label');
+            aprsLasarRow.style.cssText = 'display:none;align-items:center;width:100%;margin-top:4px;padding:3px 10px;background:#0f2233;color:#a8b8d8;border:1px solid #1a3a5c;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.82em;box-sizing:border-box;';
+            aprsLasarRow.title = 'While this dongle listens for APRS: tune to the LASARsat digipeater on 436.925 MHz instead — GFSK 9600 (not Bell 202), frames relayed through the Czech LASARsat CubeSat show up during passes';
+            const aprsLasarBox = document.createElement('input');
+            aprsLasarBox.type = 'checkbox';
+            aprsLasarBox.style.cssText = 'accent-color:#53d769;margin-right:6px;';
+            const aprsLasarTxt = document.createElement('span');
+            aprsLasarTxt.textContent = '🛰 LASARsat digipeater (436.925 MHz, GFSK 9k6)';
+            aprsLasarRow.appendChild(aprsLasarBox); aprsLasarRow.appendChild(aprsLasarTxt);
+            aprsLasarBox.onchange = () => {
+                const on = aprsLasarBox.checked;
+                fetch('/aprs_lasar?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(on ? '🛰 APRS channel -> 436.925 MHz (LASARsat digipeater, GFSK 9600) — retuning'
+                                     : '📡 APRS channel -> 144.800 MHz (DL simplex) — retuning');
+                        } else {
+                            aprsLasarBox.checked = !on;
+                            toast('LASARsat switch failed: ' + (data.error || 'unknown error'), true);
+                        }
+                    })
+                    .catch(() => { aprsLasarBox.checked = !on; toast('LASARsat switch failed: receiver unreachable', true); });
+            };
             aprsIssBox.onchange = () => {
                 const on = aprsIssBox.checked;
                 fetch('/aprs_iss?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
@@ -1815,12 +1845,12 @@
                     })
                     .catch(() => toast('Pause failed: receiver unreachable', true));
             };
-            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(roleSel); card.appendChild(aprsIssRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
+            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(roleSel); card.appendChild(aprsIssRow); card.appendChild(aprsLasarRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
             col.appendChild(card);
             c = dongleCards[d.id] = {
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
-                hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, aprsIssRow, aprsIssBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
+                hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, aprsIssRow, aprsIssBox, aprsLasarRow, aprsLasarBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secMode, secBw, secScan, modeRow, modeSel, modeHint,
             };
@@ -1863,6 +1893,7 @@
             // already flipped it locally; this only follows external
             // changes, e.g. a second browser tab)
             if (c.issLast !== !!d.aprs_iss) { c.issLast = !!d.aprs_iss; c.aprsIssBox.checked = c.issLast; }
+            if (c.lasarLast !== !!d.aprs_lasar) { c.lasarLast = !!d.aprs_lasar; c.aprsLasarBox.checked = c.lasarLast; }
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
             // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise
@@ -1944,7 +1975,7 @@
             let fTxt = '—', fCol = '#888';
             if (d.ais) { fTxt = '🚢 AIS 161.975 / 162.025 MHz'; fCol = '#4da6ff'; }
             else if (d.orbcomm) { fTxt = '🛰 Orbcomm 137.0-138.0 MHz (center 137.5)'; fCol = '#b39ddb'; }
-            else if (d.aprs) { fTxt = '📡 APRS ' + (d.aprs_iss ? '145.825 MHz (ISS)' : '144.800 MHz'); fCol = '#53d769'; }
+            else if (d.aprs) { fTxt = '📡 APRS ' + (d.aprs_lasar ? '436.925 MHz (LASARsat)' : (d.aprs_iss ? '145.825 MHz (ISS)' : '144.800 MHz')); fCol = '#53d769'; }
             else if (d.pocsag) { fTxt = '📟 POCSAG 466.0 MHz (±1.2 MHz)'; fCol = '#f39c12'; }
             else if (d.adsb) { fTxt = '✈️ ADS-B 1090.0 MHz'; fCol = '#4da6ff'; }
             else if (eff !== null) {
@@ -1959,7 +1990,7 @@
                 : (d.orbcomm
                     ? '🛰 Orbcomm — satellite IoT downlink · 137.0-138.0 MHz · <a href="/orbcomm" style="color:#b39ddb;text-decoration:none;">→ full log</a> · <a href="/orbcomm.json" target="_blank" rel="noopener" style="color:#b39ddb;text-decoration:none;">orbcomm.json</a>'
                     : (d.aprs
-                    ? '📡 APRS — ' + (d.aprs_iss ? 'ISS (Zarya) digipeater · 145.825 MHz' : 'ham packet radio · 144.800 MHz') + ' · <a href="/aprs" style="color:#53d769;text-decoration:none;">→ full log</a> · <a href="/aprs.json" target="_blank" rel="noopener" style="color:#53d769;text-decoration:none;">aprs.json</a>'
+                    ? '📡 APRS — ' + (d.aprs_lasar ? 'LASARsat digipeater · 436.925 MHz · GFSK 9600' : (d.aprs_iss ? 'ISS (Zarya) digipeater · 145.825 MHz' : 'ham packet radio · 144.800 MHz')) + ' · <a href="/aprs" style="color:#53d769;text-decoration:none;">→ full log</a> · <a href="/aprs.json" target="_blank" rel="noopener" style="color:#53d769;text-decoration:none;">aprs.json</a>'
                     : (eff !== null
                     ? '📶 ' + bandLabel(bandFor(eff))
                     : '📶 <span style="color:#666;">—</span>')));

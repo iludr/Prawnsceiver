@@ -312,4 +312,65 @@ ack = [m for m in mv if m["ack"]][0]
 assert ack["from"] == "DL1DEF" and ack["to"] == "DL1ABC" and ack["ack"] == "ack", ack
 print("11. APRS text messages (filter + ack flagging): ok")
 
+# --- 12. GFSK 9600 chain (LASARsat digipeater mode): modulate ->
+#     channel FIR -> discriminator -> burst gate -> slicer phase trial
+#     -> G3RUH descramble -> FCS -> AX.25 ---
+info_l = "!4903.78N/01206.43E&LASARsat relayed beacon"
+pl1 = aprs.build_frame("OK0LSR", "APRS", info_l)
+pl2 = aprs.build_frame("DL1ABC", "APRS", ">hello via LASARsat", "OK0LSR*")
+# two frames back-to-back in one burst; ~0.36 s of RF at 9600 baud
+sig_l = aprs.gfsk96_modulate(aprs.frame_bits(pl1) + [0, 1] * 100
+                             + aprs.frame_bits(pl2))
+rng_l = np.random.default_rng(21)
+quiet = 0.12 * (rng_l.standard_normal(240000)
+                + 1j * rng_l.standard_normal(240000)).astype(np.complex64)
+sig_l = np.concatenate([quiet, sig_l, quiet])
+sig_l = sig_l + 0.05 * (rng_l.standard_normal(len(sig_l))
+                        + 1j * rng_l.standard_normal(len(sig_l))).astype(np.complex64)
+stl = aprs.new_channel_state("test:0", lasar=True)
+CH = 24000          # 10 ms of RF per batch - the production cadence
+frames_l = []
+for i in range(0, len(sig_l), CH):
+    freq48, energy = aprs.demod_channel_batch(sig_l[i:i + CH], stl)
+    if len(freq48) == 0:
+        continue
+    for burst in aprs.collect_bursts(freq48, energy, stl):
+        frames_l += aprs.decode_burst_gfsk96(burst)
+assert len(frames_l) == 2, (len(frames_l),)
+gl1, gl2 = frames_l
+assert aprs.parse_ax25(gl1)["info"] == info_l, aprs.parse_ax25(gl1)
+d2 = aprs.parse_ax25(gl2)
+assert d2["src"] == "DL1ABC" and d2["digis"] == ["OK0LSR"], d2   # 7-char "OK0LSR*" truncates to the 6-char callsign
+assert aprs.parse_ax25(gl1)["src"] == "OK0LSR"
+print("12. GFSK 9600 (G3RUH) RF chain: 2 frames, digipeater chain kept: ok")
+
+# --- 13. GFSK 9600 with +/-6 kHz carrier offset (Doppler): the
+#      median slicer must absorb it (LASARsat at 436.925 MHz swings
+#      ~ +/-9 kHz over a pass) ---
+sig_d = aprs.gfsk96_modulate(aprs.frame_bits(pl1), offset_hz=6000.0)
+# quiet lead-in first: the burst gate's floor EMA must establish the
+# noise floor before the signal arrives (a gate that meets the signal
+# first mistakes it for silence)
+quiet_d = 0.12 * (rng_l.standard_normal(240000)
+                  + 1j * rng_l.standard_normal(240000)).astype(np.complex64)
+sig_d = np.concatenate([quiet_d, sig_d, quiet_d])
+sig_d = sig_d + 0.05 * (rng_l.standard_normal(len(sig_d))
+                        + 1j * rng_l.standard_normal(len(sig_d))).astype(np.complex64)
+std = aprs.new_channel_state("test:0", lasar=True)
+frames_d = []
+for i in range(0, len(sig_d), CH):
+    freq48, energy = aprs.demod_channel_batch(sig_d[i:i + CH], std)
+    if len(freq48) == 0:
+        continue
+    for burst in aprs.collect_bursts(freq48, energy, std):
+        frames_d += aprs.decode_burst_gfsk96(burst)
+assert len(frames_d) == 1, (len(frames_d),)
+assert aprs.parse_ax25(frames_d[0])["info"] == info_l
+print("13. GFSK 9600 with +6 kHz Doppler offset: decoded: ok")
+
+# --- 14. scrambler round-trip: descramble(scramble(x)) == x ---
+bits_x = [int(b) for b in rng_l.integers(0, 2, 512)]
+assert aprs.descramble_g3ruh(aprs.scramble_g3ruh(bits_x)) == bits_x
+print("14. G3RUH scrambler/descrambler round-trip: ok")
+
 print("ALL APRS TESTS PASSED")

@@ -151,6 +151,12 @@ def connect():
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN aprs_iss INTEGER DEFAULT 0")
                 _conn.commit()
+            if "aprs_lasar" not in cols:
+                # LASARsat digipeater checkbox for a dongle in the APRS
+                # role (436.925 MHz, GFSK 9600 - see decoding/aprs.py)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN aprs_lasar INTEGER DEFAULT 0")
+                _conn.commit()
             if "pocsag" not in cols:
                 # POCSAG dongle role (see decoding/pocsag.py)
                 _conn.execute("ALTER TABLE dongles"

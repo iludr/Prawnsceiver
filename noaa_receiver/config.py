@@ -143,6 +143,12 @@ APRS_FREQ_HZ = 144800000
 # during passes. A per-dongle checkbox in APRS mode retunes the role
 # from APRS_FREQ_HZ to this frequency (see decoding/aprs.py).
 ISS_APRS_FREQ_HZ = 145825000
+# LASARsat (Czech 1U CubeSat, OK0LSR, 510 km / 45 deg): an APRS
+# digipeater on a DIFFERENT physical layer - GFSK 9600 bps AX.25 with
+# G3RUH scrambling, not Bell 202 AFSK. The aprs_lasar checkbox retunes
+# the APRS role here AND switches its demodulator to the 9600-baud
+# chain (see decoding/aprs.py).
+LASAR_FREQ_HZ = 436925000
 # Rolling decoded-frame log (aprs_messages table), trimmed by ts
 APRS_LOG_KEEP_HOURS = 24
 

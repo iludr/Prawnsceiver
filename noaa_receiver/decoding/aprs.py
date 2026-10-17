@@ -57,6 +57,7 @@ from ..sdr.dsp import frequency_shift, sinc_taps
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
 from ..config import (APRS_FREQ_HZ, APRS_LOG_KEEP_HOURS, APRS_RECENT_MSGS,
                       APRS_STATIONS_SAVE_SECS, ISS_APRS_FREQ_HZ,
+                      LASAR_FREQ_HZ,
                       FFT_SIZE, IQ_BLOCK, SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE)
 from .ais import (FLAG, FCS_RESIDUE, _find_flags, crc16_register,
                   destuff_bits, fcs_bits, payload_to_transmitted,
@@ -328,12 +329,15 @@ def parse_mice(dst, info):
 _APRS_TAPS = sinc_taps(12000, 610)
 _APRS_TAPS_C = _APRS_TAPS.astype(np.complex64)   # polyphase matmul form
 
-def new_channel_state(did):
-    """Fresh DSP state for the one APRS channel of one dongle."""
+def new_channel_state(did, lasar=False):
+    """Fresh DSP state for the one APRS channel of one dongle. lasar
+    selects the 18 kHz GFSK-9600 channel filter (LASARsat digipeater)
+    over the 12 kHz Bell 202 one."""
+    taps = _LASAR_TAPS if lasar else _APRS_TAPS
     return {
-        "dongle": did,
+        "dongle": did, "lasar": bool(lasar),
         "rot": 0,                        # offset rotator counter
-        "fir_tail": np.zeros(len(_APRS_TAPS) - 1, dtype=np.complex64),
+        "fir_tail": np.zeros(len(taps) - 1, dtype=np.complex64),
         "last_c": None,                  # discriminator previous sample
         "dec_pos": 0,                    # 48 kHz decimation phase
         "floor": None,                   # noise floor EMA
@@ -349,15 +353,17 @@ def demod_channel_batch(c, st):
     decimated output positions, keeping one channel around ~1 ms per
     13.7 ms batch (the full-rate FFT convolution costs ~13 ms and
     would not leave room for anything else on this CPU)."""
+    taps_c = _LASAR_TAPS_C if st.get("lasar") else _APRS_TAPS_C
+    ntap = taps_c.shape[0]
     x = np.concatenate([st["fir_tail"], c])
-    st["fir_tail"] = x[-(len(_APRS_TAPS) - 1):].copy()
-    m = len(x) - len(_APRS_TAPS) + 1
+    st["fir_tail"] = x[-(ntap - 1):].copy()
+    m = len(x) - ntap + 1
     if m <= 0:
         return np.empty(0, dtype=np.float32), 0.0
     start = (-st["dec_pos"]) % APRS_DEC
     st["dec_pos"] = (st["dec_pos"] + m) % APRS_DEC
-    f = (np.lib.stride_tricks.sliding_window_view(x, len(_APRS_TAPS))
-         [start::APRS_DEC] @ _APRS_TAPS_C)
+    f = (np.lib.stride_tricks.sliding_window_view(x, ntap)
+         [start::APRS_DEC] @ taps_c)
     energy = float(np.sqrt(np.mean(np.abs(f) ** 2))) if len(f) else 0.0
     prev = st["last_c"]
     if prev is None:
@@ -371,10 +377,15 @@ def demod_channel_batch(c, st):
 
 def collect_bursts(freq48, energy, st,
                     max_batches=APRS_MAX_BURST_BATCHES,
-                    min_batches=APRS_MIN_BURST_BATCHES):
+                    min_batches=None):
     """Noise-floor tracking + burst assembly at batch granularity
     (see ais.collect_bursts - the same EMA floor, the same one-quiet-
-    block close, with batch counts instead of 512-sample blocks)."""
+    block close, with batch counts instead of 512-sample blocks). The
+    minimum defaults by mode: 3 batches (~40 ms) for 1200-baud Bell 202
+    bursts, 2 for the 9600-baud GFSK ones (a single LASARsat frame can
+    be over in ~30 ms)."""
+    if min_batches is None:
+        min_batches = 2 if st.get("lasar") else APRS_MIN_BURST_BATCHES
     if st["floor"] is None:
         st["floor"] = energy
     active = energy > 1.5 * st["floor"]
@@ -447,6 +458,70 @@ def decode_burst(freq48):
         data = np.zeros(len(space) - 1, dtype=np.int8)
         data[space[1:] == space[:-1]] = 1           # NRZI: 1 = unchanged
         for p in ax25_frames(data.tolist()):
+            key = tuple(p)
+            if key not in seen:
+                seen.add(key)
+                out.append(list(p))
+    return out
+
+# ---------- GFSK 9600 (LASARsat digipeater) ----------
+
+# LASARsat relays APRS on 436.925 MHz as GFSK 9600 bps AX.25 with G3RUH
+# scrambling (the standard 9k6 satellite framing: the scrambler keeps
+# the NRZ bit stream transition-dense, so 9600 baud fits an FM channel).
+# The discriminator output IS the NRZ data (no tone pair like Bell 202):
+# 1 = frequency above the burst median (Doppler and detector offsets
+# shift the mean; the median removes it), 5 samples/symbol at 48 kHz.
+LASAR_BITRATE = 9600
+LASAR_SAMP = APRS_FS // LASAR_BITRATE   # 5 samples per symbol, exact
+assert APRS_FS % LASAR_BITRATE == 0
+
+# 9600 GFSK at +/-4.8 kHz deviation occupies ~2*(4.8+4.8) kHz (Carson);
+# an 18 kHz low-pass keeps it inside the +/-24 kHz Nyquist pair of the
+# 48 kHz decimated channel (the 12 kHz AFSK taps would clip it).
+_LASAR_TAPS = sinc_taps(18000, 610)
+_LASAR_TAPS_C = _LASAR_TAPS.astype(np.complex64)
+
+def scramble_g3ruh(bits):
+    """G3RUH transmit-side scrambler: out[i] = in[i] ^ out[i-17] ^
+    out[i-12] (x^17 + x^12 + 1). Used by the test chain (the station
+    only receives); the demodulator runs the inverse."""
+    out = []
+    for bit in bits:
+        v = bit & 1
+        if len(out) >= 17:
+            v ^= out[-17]
+        if len(out) >= 12:
+            v ^= out[-12]
+        out.append(v)
+    return out
+
+def descramble_g3ruh(bits):
+    """G3RUH receive-side descrambler: data[i] = rx[i] ^ rx[i-17] ^
+    rx[i-12] over the RECEIVED stream - self-synchronizing (the state
+    is just the last 17 received bits), so it works from any point in
+    the burst. Vectorized: one XOR per tap over the whole burst."""
+    b = np.asarray(bits, dtype=np.int8)
+    out = b.copy()
+    for t in (17, 12):
+        if len(b) > t:
+            out[t:] ^= b[:-t]
+    return out.tolist()
+
+def decode_burst_gfsk96(freq48):
+    """48 kHz FM-audio samples of one burst -> valid AX.25 payload
+    vectors, GFSK 9600 G3RUH. One slicer trial per symbol phase (5):
+    slice, descramble, let the X.25 FCS pick the phase - the same trial
+    scheme as the AFSK correlate-and-dump, minus the tone filters
+    (the discriminator output is already the NRZ data)."""
+    x = np.asarray(freq48, dtype=np.float64)
+    if len(x) < 3 * LASAR_SAMP:
+        return []
+    x = x - np.median(x)
+    out, seen = [], set()
+    for ph in range(LASAR_SAMP):
+        bits = (x[ph::LASAR_SAMP] > 0).astype(np.int8).tolist()
+        for p in ax25_frames(descramble_g3ruh(bits)):
             key = tuple(p)
             if key not in seen:
                 seen.add(key)
@@ -842,15 +917,19 @@ def aprs_capture_thread(did):
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
 
     entry = state.sdrs[did]
-    # The channel this thread listens to: the ISS digipeater checkbox
-    # (aprs_iss) selects 145.825 MHz over the 144.800 MHz simplex
-    # channel; read once here, a flip restarts the thread
-    freq_hz = ISS_APRS_FREQ_HZ if entry.get("aprs_iss") else APRS_FREQ_HZ
+    # The channel this thread listens to: the LASARsat digipeater
+    # checkbox (aprs_lasar) selects 436.925 MHz GFSK 9600, the ISS
+    # digipeater checkbox (aprs_iss) 145.825 MHz, over the 144.800 MHz
+    # simplex channel; read once here, a flip restarts the thread
+    lasar = bool(entry.get("aprs_lasar"))
+    freq_hz = (LASAR_FREQ_HZ if lasar
+               else ISS_APRS_FREQ_HZ if entry.get("aprs_iss")
+               else APRS_FREQ_HZ)
     # move the channel onto 0 Hz: the dongle is tuned SDR_OFFSET_HZ
     # above the channel, so the signal arrives at -SDR_OFFSET_HZ
     # (see ais._ais_shifts)
     shift = int(SDR_OFFSET_HZ)
-    st = new_channel_state(did)
+    st = new_channel_state(did, lasar=lasar)
 
     def aprs_reception_off():
         others = [d for d, e in state.sdrs.items()
@@ -871,8 +950,11 @@ def aprs_capture_thread(did):
         state.aprs_freq_hz = freq_hz
     state.log_console(f"📡 APRS receiver on dongle {did}: "
                       f"{freq_hz / 1e6:.3f} MHz "
-                      f"({'ISS digipeater' if entry.get('aprs_iss') else 'DL simplex channel'}, "
-                      f"Bell 202 AFSK 1200 baud)")
+                      f"({'LASARsat digipeater, GFSK 9600 (G3RUH)' if lasar
+                         else 'ISS digipeater' if entry.get('aprs_iss')
+                         else 'DL simplex channel'}, "
+                      f"{'GFSK' if lasar else 'Bell 202 AFSK'} "
+                      f"{LASAR_BITRATE if lasar else APRS_BITRATE} baud)")
     restart_backoff = 5.0
     while True:
         if entry.get("closed") or not entry.get("aprs") or entry.get("paused"):
@@ -936,10 +1018,11 @@ def aprs_capture_thread(did):
                                 -32767, 32767).astype(np.int16).tobytes()
                 state.push_live_audio(entry, audio)
                 for burst in collect_bursts(freq48, energy, st):
-                    payloads = decode_burst(burst)
+                    payloads = (decode_burst_gfsk96(burst) if lasar
+                                else decode_burst(burst))
                     if payloads:
                         handle_frames(payloads, st)
-                    elif len(burst) > 4 * SYM_SAMP:
+                    elif len(burst) > 4 * (LASAR_SAMP if lasar else SYM_SAMP):
                         st["bad"] += 1
                 with state.aprs_lock:
                     state.aprs_stats = {
@@ -1004,6 +1087,22 @@ def afsk_modulate(data_bits, fs=SDR_RATE, dev=2400.0, amp=0.6):
     tone = np.repeat(np.array(tones), fs // APRS_BITRATE)
     audio = np.sin(2 * np.pi * np.cumsum(tone) / fs)   # phase-continuous tone
     phase = 2 * np.pi * np.cumsum(dev * audio) / fs   # ...as FM deviation
+    return (amp * np.exp(1j * phase)).astype(np.complex64)
+
+def gfsk96_modulate(data_bits, fs=SDR_RATE, dev=4800.0, amp=0.6,
+                    offset_hz=0.0):
+    """Data bits -> GFSK-on-FM test signal at 9600 baud, G3RUH-scrambled
+    like a real 9k6 satellite transmitter (LASARsat digipeater). The
+    NRZ level codes the frequency directly (no NRZI - the scrambler
+    keeps the transitions); a one-symbol moving average approximates
+    the Gaussian filter of real GFSK. offset_hz adds a carrier offset
+    (Doppler test): the demodulator's median slicer must remove it."""
+    assert fs % LASAR_BITRATE == 0
+    k = fs // LASAR_BITRATE
+    bits = scramble_g3ruh([int(b) & 1 for b in data_bits])
+    nrz = np.repeat(np.array(bits, dtype=np.float64) * 2 - 1, k)
+    sm = np.convolve(nrz, np.ones(k) / k, mode="same")
+    phase = 2 * np.pi * np.cumsum(dev * sm + offset_hz) / fs
     return (amp * np.exp(1j * phase)).astype(np.complex64)
 
 def frame_bits(payload):

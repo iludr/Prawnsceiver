@@ -354,13 +354,14 @@ def _persist_dongles():
                 else:
                     host, port = e['host'], int(e['port'])
                 cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
-                            " aprs, aprs_iss, pocsag, adsb, added_ts)"
-                            " VALUES (?,?,?,?,?,?,?,?,?)",
+                            " aprs, aprs_iss, aprs_lasar, pocsag, adsb, added_ts)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?)",
                             (host, port,
                              1 if e.get('ais') else 0,
                              1 if e.get('orbcomm') else 0,
                              1 if e.get('aprs') else 0,
                              1 if e.get('aprs_iss') else 0,
+                             1 if e.get('aprs_lasar') else 0,
                              1 if e.get('pocsag') else 0,
                              1 if e.get('adsb') else 0, time.time()))
     except Exception as e:
@@ -381,7 +382,8 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         'id': did, 'host': host, 'port': int(port),
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
         'ais': did == AIS_DONGLE, 'orbcomm': False, 'aprs': False,
-        'aprs_iss': False, 'pocsag': False, 'adsb': False,
+        'aprs_iss': False, 'aprs_lasar': False,
+        'pocsag': False, 'adsb': False,
         'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
         # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
@@ -527,9 +529,11 @@ def _set_dongle_role(did, role, on):
     if bool(entry.get(role)) == on:
         return True
     emoji, band = _ROLE_DEFS[role]
-    if role == 'aprs':      # APRS names its live channel (ISS preset or DL)
-        band = band.format('145.825 MHz (ISS digipeater)' if entry.get('aprs_iss')
-                           else '144.800 MHz')
+    if role == 'aprs':      # APRS names its live channel (sub-mode preset)
+        band = band.format('436.925 MHz (LASARsat digipeater)'
+                           if entry.get('aprs_lasar')
+                           else '145.825 MHz (ISS digipeater)'
+                           if entry.get('aprs_iss') else '144.800 MHz')
     with state.status_lock:
         entry[role] = on
         if on:
@@ -561,8 +565,10 @@ def set_dongle_orbcomm(did, on):
 
 def set_dongle_aprs(did, on):
     """Dedicate this dongle to the APRS channel (144.800 MHz, or
-    145.825 MHz ISS digipeater when aprs_iss is set — see
-    set_dongle_aprs_iss) and back — see _set_dongle_role."""
+    145.825 MHz ISS digipeater when aprs_iss is set, or 436.925 MHz
+    GFSK 9600 LASARsat digipeater when aprs_lasar is set — see
+    set_dongle_aprs_iss / set_dongle_aprs_lasar) and back — see
+    _set_dongle_role."""
     return _set_dongle_role(did, 'aprs', on)
 
 
@@ -598,7 +604,39 @@ def set_dongle_aprs_iss(did, on):
         return True
     with state.status_lock:
         entry['aprs_iss'] = on
+        if on:      # the channel presets are mutually exclusive
+            entry['aprs_lasar'] = False
     freq = "145.825 MHz" if on else "144.800 MHz"
+    if entry.get('aprs'):
+        state.log_console(f"🛰 Dongle {did} APRS channel -> {freq} — retuning")
+        _stop_capture(entry)
+    else:
+        state.log_console(f"🛰 Dongle {did} APRS channel preset to {freq} (not in APRS role yet)")
+    _persist_dongles()
+    return True
+
+def set_dongle_aprs_lasar(did, on):
+    """Flip one dongle's APRS channel to the LASARsat digipeater
+    (436.925 MHz — GFSK 9600 bps AX.25 with G3RUH scrambling, a
+    different demodulator from Bell 202; LASARsat relays APRS frames
+    during passes) and back — the second checkbox under the APRS
+    button, mutually exclusive with the ISS preset. A running APRS
+    capture thread is restarted so it retunes AND swaps its demod
+    (within ~2 s); when the dongle is on the satellites the flag is
+    just stored and takes effect on the next APRS switch. Like the
+    role flags it survives restarts via the dongles table. Unknown id:
+    False; a no-op request still succeeds."""
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return False
+    on = bool(on)
+    if bool(entry.get('aprs_lasar')) == on:
+        return True
+    with state.status_lock:
+        entry['aprs_lasar'] = on
+        if on:      # the channel presets are mutually exclusive
+            entry['aprs_iss'] = False
+    freq = "436.925 MHz (LASARsat)" if on else "144.800 MHz"
     if entry.get('aprs'):
         state.log_console(f"🛰 Dongle {did} APRS channel -> {freq} — retuning")
         _stop_capture(entry)
@@ -612,17 +650,17 @@ def load_dongles():
     it has rows, else calibration.DEFAULT_DONGLES (persisted right away,
     so later dashboard additions update the database)."""
     entries = [(r['host'], r['port'], bool(r['ais']), bool(r['orbcomm']),
-                bool(r['aprs']), bool(r['aprs_iss']), bool(r['pocsag']),
-                bool(r['adsb']))
+                bool(r['aprs']), bool(r['aprs_iss']), bool(r['aprs_lasar']),
+                bool(r['pocsag']), bool(r['adsb']))
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
-                                 " aprs_iss, pocsag, adsb FROM dongles"
-                                 " ORDER BY port, host")]
+                                 " aprs_iss, aprs_lasar, pocsag, adsb"
+                                 " FROM dongles ORDER BY port, host")]
     from_db = bool(entries)   # persisted rows are the source of truth
     if not entries:
-        entries = [(h, p, False, False, False, False, False, False)
+        entries = [(h, p, False, False, False, False, False, False, False)
                    for h, p in DEFAULT_DONGLES]
-    for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_pocsag, \
-            was_adsb in entries:
+    for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_lasar, \
+            was_pocsag, was_adsb in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -637,7 +675,7 @@ def load_dongles():
             # the ADS-B dongle, measured live 2026-10-17)
             with state.status_lock:
                 for flag in ('ais', 'orbcomm', 'aprs', 'aprs_iss',
-                             'pocsag', 'adsb'):
+                             'aprs_lasar', 'pocsag', 'adsb'):
                     state.sdrs[did][flag] = False
         if was_ais:
             # the AIS switch is persisted too - a restart must not silently
@@ -654,12 +692,16 @@ def load_dongles():
             state.log_console(f"Dongle {did} restored to Orbcomm (satellite IoT downlink) - persisted role")
         elif was_aprs:
             # and the APRS role: the receiver resumes on 144.800 MHz (or
-            # 145.825 MHz, the ISS digipeater, when the checkbox was set)
+            # 145.825 MHz, the ISS digipeater / 436.925 MHz, the
+            # LASARsat digipeater, when a checkbox was set)
             with state.status_lock:
                 state.sdrs[did]['aprs'] = True
-                state.sdrs[did]['aprs_iss'] = was_iss
+                state.sdrs[did]['aprs_iss'] = was_iss and not was_lasar
+                state.sdrs[did]['aprs_lasar'] = was_lasar
             state.log_console(f"Dongle {did} restored to APRS (ham packet radio)"
-                              + (" — ISS digipeater 145.825 MHz" if was_iss else "")
+                              + (" — LASARsat digipeater 436.925 MHz" if was_lasar
+                                 else " — ISS digipeater 145.825 MHz" if was_iss
+                                 else "")
                               + " - persisted role")
         elif was_pocsag:
             # and the POCSAG role: the receiver resumes on the paging

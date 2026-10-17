@@ -24,7 +24,8 @@ from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
 from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_adsb,
                         set_dongle_ais, set_dongle_aprs,
-                        set_dongle_aprs_iss, set_dongle_orbcomm,
+                        set_dongle_aprs_iss, set_dongle_aprs_lasar,
+                        set_dongle_orbcomm,
                         set_dongle_pocsag, set_dongle_paused,
                         usb_dongles)
 
@@ -52,6 +53,7 @@ def _dongle_list():
                 "orbcomm": bool(e.get("orbcomm")),
                 "aprs": bool(e.get("aprs")),
                 "aprs_iss": bool(e.get("aprs_iss")),
+                "aprs_lasar": bool(e.get("aprs_lasar")),
                 "pocsag": bool(e.get("pocsag")),
                 "adsb": bool(e.get("adsb")),
                 "paused": bool(e.get("paused")),
@@ -849,6 +851,22 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 return
             set_dongle_aprs_iss(dev, on)
             self._send_json({'success': True, 'aprs_iss': bool(entry.get('aprs_iss'))}, code=200)
+        elif self.path.split('?')[0] == '/aprs_lasar':
+            # Flip one dongle's APRS channel to the LASARsat digipeater
+            # (436.925 MHz, GFSK 9600 AX.25 G3RUH) — the second checkbox
+            # below the APRS button, mutually exclusive with the ISS
+            # preset. /aprs_lasar?d=<id>&on=1 retunes a running APRS
+            # capture AND swaps its demodulator (Bell 202 AFSK 1200 ->
+            # GFSK 9600); on=0 returns to 144.800 MHz.
+            query = self._query()
+            dev = (query.get('d') or [''])[0].strip()
+            on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
+            entry = state.sdrs.get(dev)
+            if entry is None:
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
+                return
+            set_dongle_aprs_lasar(dev, on)
+            self._send_json({'success': True, 'aprs_lasar': bool(entry.get('aprs_lasar'))}, code=200)
         elif self.path.split('?')[0] == '/pause_dongle':
             # Temporarily stop one dongle's capture (dashboard
             # pause/play button): two dongles recording at the same
