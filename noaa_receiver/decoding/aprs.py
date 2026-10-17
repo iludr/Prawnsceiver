@@ -1014,7 +1014,13 @@ def aprs_capture_thread(did):
                 # the same ±fs/2 == ±32767 convention as fm_demodulate,
                 # it feeds the 🔊 Listen button — APRS stays listenable
                 # (the dongle card keeps the button, unlike AIS/Orbcomm).
-                audio = np.clip(freq48 * (32767.0 / (APRS_FS / 2.0)),
+                # Audio full-scale: the Bell 202 FM deviation spans most of
+                # the +/-24 kHz demod range, but GFSK 9600 only deviates
+                # +/-4.8 kHz - unscaled it would sit at ~20% amplitude and
+                # the LASARsat bursts would be barely audible on Listen
+                audio_scale = 32767.0 / (LASAR_BITRATE / 2.0 if lasar
+                                         else (APRS_FS / 2.0))
+                audio = np.clip(freq48 * audio_scale,
                                 -32767, 32767).astype(np.int16).tobytes()
                 state.push_live_audio(entry, audio)
                 for burst in collect_bursts(freq48, energy, st):
