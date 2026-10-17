@@ -140,7 +140,40 @@ SDR_DONGLE_CORRECTIONS = {
 # the V-dipole it under-drives the ADC. Entry removed -> AGC (SDR_GAIN=0),
 # the same gain path the v5 uses, so the next A/B isolates the dongle
 # itself from the gain setting.
+#
+# 2026-10-17 MEASURED SWEEP (the method this file prescribes): each
+# dongle paused, its rtl_tcp taken over directly, tuner gain stepped
+# through the table at the ROLE frequency (satellite 137.9725 / ADS-B
+# 1090.06 / AIS 162.06 MHz), 6 s IQ grab per step: IQ rms (ADC drive,
+# u8 units), time-domain max (clipping) and the strongest 512-bin FFT
+# peak in dBFS. Findings, all three dongles on 192.168.3.244:
+#   - daemon-default AGC on BOTH R820Ts clips (time max = 127.5): the
+#     satellite dongle pumps to rms 28 u8 against a recurring strong
+#     carrier in the 136.8-139.2 MHz span (peak bin -7.7 dBFS at 49.4 dB
+#     manual), and the ADS-B dongle pumps up between 1090 MHz pulses
+#     and clips on real squitters - the moving noise floor the ADS-B
+#     demod's threshold then chased (see the vectorized preamble scan).
+#   - No gain knee anywhere: the floor rises only 18.5 dB (satellite) /
+#     4.5 dB (ADS-B) over the full 44 dB range - tuner-noise limited;
+#     more gain never buys SNR here, it only fixes ADC quantization.
+#   - 49.4 dB on the satellite dongle clips on the strong carrier (17
+#     samples > 110 of 14.4M); 43.9 dB holds 5.3 dB of headroom
+#     (max 69.5) at rms 5.9 u8 - 4.6x the drive of the old 29.7 dB
+#     experiment, without intermod during passes.
+#   - ADS-B at 49.4 dB: rms 2.3, time max 54.5 with live traffic - no
+#     clipping anywhere near; maximum gain it is (the R820T is nearly
+#     deaf at 1090 MHz, every dB counts).
+#   - The FC0012 (AIS) tops out at 21.6 dB and even then drives the ADC
+#     to only rms 1.5-1.6 u8 (its daemon default sat at 0.71 = ~1 bit
+#     of noise). Deaf tuner, but max gain + a stable floor is all it
+#     has; AIS frames are strong (river ships are close).
+# NOTE: keys are the CURRENT rtl_tcp addresses on 192.168.3.244 - when
+# the dongle host's IP changes (WiFi/wired), the persisted dongles
+# table AND these entries must be re-keyed.
 SDR_DONGLE_GAIN = {
+    "192.168.3.244:1234": 43.9,   # satellite (R820T): knee-free, clip-free
+    "192.168.3.244:1235": 49.4,   # ADS-B (R820T): max drive, no clipping
+    "192.168.3.244:1236": 21.6,   # AIS (FC0012): tuner maximum
 }
 
 def correction_info(freq_hz, dongle=None):
