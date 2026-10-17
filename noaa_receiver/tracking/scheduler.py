@@ -11,6 +11,7 @@ from ..decoding.decode import decode_recording, read_decode_marker, sat_short_na
 from ..web.history import log_pass
 from .passes import HAS_SKYFIELD, load, load_tles_from_cache, predict_passes, refresh_tles, wgs84
 from .satnogs import satellite_info
+from . import txstatus
 
 def _doppler_hz(sat, freq_hz):
     """Live Doppler shift of the satellite's carrier at the site (Hz).
@@ -57,11 +58,6 @@ def _same_pass(p, q):
     if p is None or q is None or p["sat_name"] != q["sat_name"]:
         return False
     return abs((p["rise_utc"] - q["rise_utc"]).total_seconds()) <= 30
-
-def _tune_freq(p):
-    """Frequency the receiver actually tunes for a pass: the satellite's
-    tracked band."""
-    return p["frequency"]
 
 def scheduler_thread():
     """Background thread: refresh TLEs, predict passes, trigger frequency switches."""
@@ -160,7 +156,13 @@ def scheduler_thread():
                             with state.signal_lock:
                                 pass_peak = state.pass_signal_peak
                                 state.pass_signal_peak = 0.0
-                        tune = _tune_freq(triggered)
+                        # Effective tune with the SatNOGS dead-transmitter
+                        # fallback (txstatus): fb_note is set when the
+                        # tracked frequency's transmitter is flagged dead
+                        # and an alternate alive one was chosen instead
+                        tune, fb_note = txstatus.effective_freq(
+                            triggered["catnr"], triggered["sat_name"],
+                            triggered["frequency"])
                         # Reflect the actually-tuned frequency in the pass
                         # dict so banner, Doppler block and history logging
                         # all agree (Doppler follows automatically:
@@ -174,6 +176,8 @@ def scheduler_thread():
                             state.pass_signal_peak = 0.0
                         local_rise = triggered["rise_utc"] + timedelta(hours=UTC_OFFSET)
                         state.log_console(f"🔴 PASS START: {triggered['sat_name']} {round(tune/1e6,4)} MHz, max {triggered['max_alt']:.0f}° at {local_rise.strftime('%H:%M')}")
+                        if fb_note:
+                            state.log_console(f"🛰 {fb_note}")
                     elif not triggered and state.current_pass is not None:
                         finished_pass = state.current_pass
                         local_set = finished_pass["set_utc"] + timedelta(hours=UTC_OFFSET)
@@ -279,6 +283,11 @@ def scheduler_thread():
                              finished_pass["max_alt"], finished_pass["duration_min"],
                              finished_pass["rise_utc"], finished_pass["set_utc"],
                              pass_peak, decoded, png_file, wav_name, quality, satnogs)
+                    # Home-grown transmitter ledger: this pass's lit/dark
+                    # result rolls into the per-satellite activity stats,
+                    # and a state change raises the console alert
+                    txstatus.note_pass_result(finished_pass["sat_name"],
+                                              png_file)
                 
                 # Manual TLE sync requested: break to the outer loop, which
                 # refetches and re-predicts

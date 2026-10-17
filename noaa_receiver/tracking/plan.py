@@ -15,6 +15,10 @@ from ..config import RECORD_ISS, TRACKED_SATS
 # catnr -> matching transmitter dict (or None: fetched, no match / DB down).
 # Absent = not fetched yet — the pass list omits the tx details until then.
 _tx_cache = {}
+# catnr -> the satellite's FULL transmitter list (for the frequency
+# fallback in txstatus.effective_freq: an alternate alive transmitter
+# when SatNOGS flags the tuned one dead)
+_tx_all = {}
 _loader_started = False
 
 
@@ -63,6 +67,7 @@ def _loader():
             if info:
                 freq = _tuned_freq(catnr)
                 _tx_cache[catnr] = _match_transmitter(info, freq)
+                _tx_all[catnr] = info.get("transmitters") or []
             time.sleep(2)   # be gentle with the rate-limited DB
         if any(c not in _tx_cache for c in TRACKED_SATS):
             time.sleep(1800)
@@ -82,3 +87,11 @@ def transmitter_status(catnr):
     """Cached transmitter record for the satellite's tuned frequency, or
     None when not loaded yet / no match / DB unreachable. Never blocks."""
     return _tx_cache.get(catnr)
+
+
+def all_transmitters(catnr):
+    """Cached FULL transmitter list of a tracked satellite (SatNOGS),
+    or None when not loaded yet. Never blocks, never touches the
+    network — the fallback decision (txstatus.effective_freq) runs in
+    the pass list and the scheduler tick."""
+    return _tx_all.get(catnr)

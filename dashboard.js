@@ -2339,10 +2339,19 @@
                     // Receive plan: what this pass is listened to with and how
                     // the recording will be decoded (hover for details)
                     const txDead = p.tx && p.tx.alive === false;
+                    // Home-grown transmitter ledger (our own decode
+                    // history): dark streak of passes without an image.
+                    // Chip next to the curated SatNOGS flag - stale
+                    // SatNOGS vs. measured truth
+                    const homeDark = p.tx_home && p.tx_home.dark_streak >= 3;
                     const modeCls = 'pass-mode m-' + (p.mode || '').toLowerCase() + (txDead ? ' tx-dead' : '');
                     let planTip = p.plan || '';
                     if (p.tx) planTip += `\nSatNOGS: ${p.tx.description || '?'} [${p.tx.mode || '?'}] ${p.tx.alive === false ? 'inactive' : 'active'} · ${p.tx.downlink_mhz} MHz`;
-                    const modeChip = p.mode ? `<span class="${modeCls}">${p.mode}</span>` : '';
+                    if (p.tx_home) planTip += `\nCrabArk ledger: ${p.tx_home.dark_streak} dark pass(es) of ${p.tx_home.passes} tracked, last image ${p.tx_home.last_heard_ts ? Math.round((now - p.tx_home.last_heard_ts) / 3600) + ' h ago' : 'never'}`;
+                    if (p.freq_note) planTip += `\n${p.freq_note}`;
+                    const modeChip = (p.mode ? `<span class="${modeCls}">${p.mode}</span>` : '')
+                        + (homeDark ? `<span class="pass-mode tx-dead" title="our own decode history: no image in ${p.tx_home.dark_streak} passes">🦀${p.tx_home.dark_streak}×</span>` : '')
+                        + (p.freq_note ? `<span class="pass-mode m-sstv" title="${escHtml(p.freq_note)}">🔄</span>` : '');
                     html += `<div class="pass-row ${cls}" title="${escHtml(planTip)}">
                         <div class="pass-sat">${qIcon} ${p.sat_name} ${modeChip}</div>
                         <div class="pass-time">${p.rise_local} → ${p.set_local}</div>

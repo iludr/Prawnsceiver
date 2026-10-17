@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from .. import db
 from .. import state
 from .plan import receive_plan, transmitter_status
+from . import txstatus
 from ..config import LAT, LON, TRACKED_SATS, PASS_MIN_ALT, TLE_USER_AGENT, UTC_OFFSET
 
 try:
@@ -198,6 +199,10 @@ def passes_to_json(passes):
     result = []
     for p in passes:
         tuned = p["frequency"]
+        # Dead-transmitter fallback (SatNOGS): show the frequency the
+        # scheduler will actually tune, and why it differs
+        tuned, freq_note = txstatus.effective_freq(p["catnr"],
+                                                   p["sat_name"], tuned)
         mode, plan, demod_bw_khz, iq = receive_plan(p["catnr"], p["sat_name"])
         entry = {
             "sat_name": p["sat_name"],
@@ -216,6 +221,8 @@ def passes_to_json(passes):
             "plan": plan,
             "iq_recording": iq,
         }
+        if freq_note:
+            entry["freq_note"] = freq_note
         if demod_bw_khz:
             entry["demod_bw_khz"] = demod_bw_khz
         tx = transmitter_status(p["catnr"])
@@ -225,6 +232,15 @@ def passes_to_json(passes):
                 "mode": tx.get("mode"),
                 "alive": tx.get("alive"),
                 "downlink_mhz": round(tx["downlink_hz"] / 1e6, 4),
+            }
+        # Home-grown transmitter activity ledger: our OWN decode history
+        # (dark streak / last heard), next to the curated SatNOGS flag
+        led = txstatus.cached_ledger(p["sat_name"])
+        if led:
+            entry["tx_home"] = {
+                "dark_streak": led["dark_streak"],
+                "passes": led["passes"],
+                "last_heard_ts": led["last_heard_ts"],
             }
         result.append(entry)
     return result
