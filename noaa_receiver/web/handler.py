@@ -1391,8 +1391,13 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'Product not found')
                 return
-            ctype = ('image/png' if parts[1].lower().endswith('.png')
-                     else 'application/json' if parts[1].lower().endswith('.json')
+            # The FILE is the last segment (nested products have the
+            # instrument subdir in between) - the content type must
+            # follow it, or image/png files serve as octet-stream and
+            # browsers download instead of displaying them.
+            fname = parts[-1]
+            ctype = ('image/png' if fname.lower().endswith('.png')
+                     else 'application/json' if fname.lower().endswith('.json')
                      else 'application/octet-stream')
             self.send_response(200)
             self.send_header('Content-type', ctype)
