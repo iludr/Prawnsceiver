@@ -39,7 +39,8 @@ from ..calibration import (AIRBAND, AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMAR
                           SDR_DONGLE_GAIN, correction_info, tuning_correction)
 from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION,
                      FFT_SIZE, IQ_BLOCK, IQ_RECORD_FREQS, LAT, LOGDIR, LON,
-                     MANUAL_REC_MAX_SECS, RECORD_DIR, SDR_GAIN, SDR_OFFSET_HZ,
+                     MANUAL_REC_MAX_SECS, RECORD_LOCAL_DIR, SDR_GAIN,
+                     SDR_OFFSET_HZ,
                      SDR_RATE, WATERFALL_ROWS)
 
 from ..decoding.decode import sat_short_name
@@ -765,7 +766,7 @@ def sdr_capture_thread(did):
     entry = state.sdrs[did]
     primary = entry['primary']
     os.makedirs(LOGDIR, exist_ok=True)
-    os.makedirs(RECORD_DIR, exist_ok=True)
+    os.makedirs(RECORD_LOCAL_DIR, exist_ok=True)
     # This dongle's own DSP chain state — demod filters, rotator and NCO
     # phases must not be shared across the concurrently demodulating threads
     dst = new_state()
@@ -809,13 +810,13 @@ def sdr_capture_thread(did):
         nonlocal wav_retry_at
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         suffix = "" if primary else f"_{did.replace(':', '-')}"
-        path = os.path.join(RECORD_DIR, f"{sat_short_name(sat_name)}_{timestamp}{suffix}.wav")
+        path = os.path.join(RECORD_LOCAL_DIR, f"{sat_short_name(sat_name)}_{timestamp}{suffix}.wav")
         # Never overwrite: a WAV split and reopened within the same second
         # (fast A -> B -> A pass switch) gets the same timestamp
         n = 1
         while os.path.exists(path):
             n += 1
-            path = os.path.join(RECORD_DIR, f"{sat_short_name(sat_name)}_{timestamp}-{n}{suffix}.wav")
+            path = os.path.join(RECORD_LOCAL_DIR, f"{sat_short_name(sat_name)}_{timestamp}-{n}{suffix}.wav")
         try:
             wav = wave.open(path, 'wb')
             wav.setnchannels(1)
@@ -846,9 +847,9 @@ def sdr_capture_thread(did):
         """Start the dashboard Record button's raw-IQ capture: the
         UNTOUCHED uint8 IQ stream (pre offset-shift, pre Doppler -
         the true RF baseband as the dongle sampled it) is written to
-        RECORD_DIR/manual/, wrapped into an analysis zip (raw IQ +
+        RECORD_LOCAL_DIR/manual/, wrapped into an analysis zip (raw IQ +
         description.json + waterfall.png) when it finishes."""
-        manual_dir = os.path.join(RECORD_DIR, "manual")
+        manual_dir = os.path.join(RECORD_LOCAL_DIR, "manual")
         os.makedirs(manual_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         base = os.path.join(manual_dir, "Manual_%.4fMHz_%s"

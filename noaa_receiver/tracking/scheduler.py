@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .. import state
-from ..config import LAT, LON, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_DIR, RECORD_ISS, TLE_REFRESH_HOURS, UTC_OFFSET
+from ..config import LAT, LON, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_ISS, RECORD_LOCAL_DIR, TLE_REFRESH_HOURS, UTC_OFFSET
 
 from ..decoding.decode import decode_recording, read_decode_marker, sat_short_name
 from ..web.history import log_pass
@@ -223,7 +223,9 @@ def scheduler_thread():
                     # same-frequency passes interleave neighbor-satellite
                     # WAVs in the same time window
                     attrib_prefix = sat_short_name(finished_pass["sat_name"]) + "_"
-                    recordings = sorted(glob.glob(os.path.join(RECORD_DIR, "*.wav")), key=os.path.getmtime, reverse=True)
+                    # Fresh pass recordings sit in the LOCAL capture dir until the
+                    # archiver moves them (see archive.py)
+                    recordings = sorted(glob.glob(os.path.join(RECORD_LOCAL_DIR, "*.wav")), key=os.path.getmtime, reverse=True)
                     # Never pick WAVs that are still being written
                     with state.status_lock:
                         active_wav = state.current_wav_path

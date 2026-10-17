@@ -34,7 +34,7 @@ from noaa_receiver.config import AIS_CENTER_HZ, SDR_OFFSET_HZ, SDR_RATE, WATERFA
 from noaa_receiver.calibration import tuning_correction
 
 tmp = tempfile.mkdtemp(prefix='prawn_')
-radio.LOGDIR = os.path.join(tmp, 'log'); radio.RECORD_DIR = os.path.join(tmp, 'rec')
+radio.LOGDIR = os.path.join(tmp, 'log'); radio.RECORD_LOCAL_DIR = os.path.join(tmp, 'rec')
 from noaa_receiver import db   # dongle persistence lives in the station database
 db.query("SELECT 1")           # schema ready against the isolated test DB
 radio.WAV_RETRY_SECS = 0.5
@@ -132,7 +132,7 @@ def expect_cmd(freq):
     wait_for(lambda: want in commands, what=f'retune command {want}')
     commands.remove(want)
 
-def wavs(): return sorted(glob.glob(os.path.join(radio.RECORD_DIR, '*.wav')))
+def wavs(): return sorted(glob.glob(os.path.join(radio.RECORD_LOCAL_DIR, '*.wav')))
 
 # 1. idle streaming
 wait_for(lambda: entry['last_data'] > 0 and len(entry['waterfall']) > 3, what='IQ flowing')
@@ -207,7 +207,7 @@ with state.status_lock: state.manual_recording.pop(DID, None)
 wait_for(lambda: entry.get('manual_iq') is None and entry.get('manual_zip'),
          secs=8, what='manual recording finalizes into a zip')
 mzip6b = entry['manual_zip']
-with zf.ZipFile(os.path.join(radio.RECORD_DIR, 'manual', os.path.basename(mzip6b))) as z:
+with zf.ZipFile(os.path.join(radio.RECORD_LOCAL_DIR, 'manual', os.path.basename(mzip6b))) as z:
     names = z.namelist()
     assert 'raw_iq.u8' in names and 'description.json' in names, names
     assert 'analysis.json' in names, names        # pre-flight analysis
@@ -294,7 +294,7 @@ poc_frep = np.repeat(poc_f, SDR_RATE // 1200)
 poc_ph = (2 * np.pi * np.cumsum(poc_frep + 1_000_000.0)
           / SDR_RATE)
 synth[:len(poc_frep)] += (60.0 * np.exp(1j * poc_ph)).astype(np.complex64)
-ap_synth = os.path.join(radio.RECORD_DIR, 'synth.iq.u8')
+ap_synth = os.path.join(radio.RECORD_LOCAL_DIR, 'synth.iq.u8')
 u8 = np.empty(n_synth * 2, dtype=np.uint8)
 u8[0::2] = (np.clip(synth.real, -127, 127) + 127.5).astype(np.uint8)
 u8[1::2] = (np.clip(synth.imag, -127, 127) + 127.5).astype(np.uint8)
@@ -323,7 +323,7 @@ print("6e pre-flight analysis: OOK + carrier + LO flag + sparse max-hold + POCSA
 
 # 7. WAV open failure must not kill the receiver; retried later
 # (wave.open is monkeypatched to fail while the flag is set: a chmod'd
-# read-only RECORD_DIR only blocks the open on Linux, not on Windows)
+# read-only RECORD_LOCAL_DIR only blocks the open on Linux, not on Windows)
 fail_wav_open = {'fail': True}
 real_wave_open = wave.open
 def failing_wave_open(path, mode='rb'):

@@ -105,6 +105,11 @@ recordings_paused = False
 scans = {}
 current_wav = None
 current_wav_path = None
+# Bases (recording filename without extension) with a decode running
+# right now - synchronous decodes (SSTV) and background SatDump runs
+# register here (see decoding/decode.py). The recording archiver
+# (archive.py) never moves a family while its base is in this set.
+decodes_active = set()
 upcoming_passes = []
 current_pass = None
 last_tle_refresh = 0

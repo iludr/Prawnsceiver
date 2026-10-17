@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from .. import db
 from .. import state
-from ..config import RECORD_DIR, UTC_OFFSET
+from ..config import RECORD_DIR, RECORD_LOCAL_DIR, UTC_OFFSET
 from ..decoding.decode import read_decode_marker
 
 def log_pass(sat_name, frequency, max_alt, duration_min, rise_time, set_time, signal_peak, decoded, png_file, wav_file, quality=None, satnogs=None):
@@ -92,16 +92,27 @@ def quality_map():
             for r in db.query("SELECT wav, quality FROM passes"
                              " WHERE wav IS NOT NULL")}
 
-def get_recordings():
-    """List available recordings (with reception quality where known)."""
-    qualities = quality_map()
-    with state.status_lock:
-        active_wav = state.current_wav_path if state.is_recording else None
+def recording_path(*parts):
+    """Absolute path of a recording artifact by its (sanitized) path
+    segments under the recordings tree: the LOCAL capture dir first
+    (fresh, still-decoding recordings - see archive.py), then the
+    archive. Falls back to the archive path when the local copy is gone
+    (or never existed)."""
+    local = os.path.join(RECORD_LOCAL_DIR, *parts)
+    if os.path.exists(local):
+        return local
+    return os.path.join(RECORD_DIR, *parts)
+
+
+def _scan_recordings(root, qualities, active_wav):
+    """The recordings in one directory, in the shape get_recordings()
+    has always returned (see there). Split out so the local capture dir
+    and the archive can be scanned with the same code."""
     recordings = []
-    if os.path.exists(RECORD_DIR):
-        for f in sorted(os.listdir(RECORD_DIR), reverse=True):
+    if os.path.exists(root):
+        for f in sorted(os.listdir(root), reverse=True):
             if f.endswith('.wav'):
-                path = os.path.join(RECORD_DIR, f)
+                path = os.path.join(root, f)
                 size = os.path.getsize(path)
                 has_png = os.path.exists(path.replace('.wav', '.png'))
                 marker = read_decode_marker(path)
@@ -132,9 +143,29 @@ def get_recordings():
                         {"name": pname,
                          "size_kb": round(os.path.getsize(os.path.join(pdir, pname)) / 1024.0, 1),
                          "path": os.path.basename(pdir) + '/' + pname}
-                        for pdir in sorted(glob.glob(os.path.join(RECORD_DIR, f[:-4] + '_*')))
+                        for pdir in sorted(glob.glob(os.path.join(root, f[:-4] + '_*')))
                         if os.path.isdir(pdir)
                         for pname in sorted(os.listdir(pdir))
                         if os.path.isfile(os.path.join(pdir, pname))],
                 })
     return recordings
+
+
+def get_recordings():
+    """List available recordings (with reception quality where known).
+
+    The fresh recordings sit in the LOCAL capture dir (RECORD_LOCAL_DIR)
+    until the archiver moves them to the archive (RECORD_DIR - a network
+    share); both are listed, the local copy winning while a family
+    straddles the two mid-move. A single-directory setup scans once."""
+    qualities = quality_map()
+    with state.status_lock:
+        active_wav = state.current_wav_path if state.is_recording else None
+    local = _scan_recordings(RECORD_LOCAL_DIR, qualities, active_wav)
+    if os.path.realpath(RECORD_DIR) == os.path.realpath(RECORD_LOCAL_DIR):
+        return local
+    merged = {r["filename"]: r
+              for r in _scan_recordings(RECORD_DIR, qualities, active_wav)}
+    for r in local:
+        merged[r["filename"]] = r
+    return [merged[k] for k in sorted(merged, reverse=True)]

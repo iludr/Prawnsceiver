@@ -387,7 +387,7 @@ def build_backup(dest_path, record_dir):
     recordings tree (audio, raw IQ, images, product directories) into a
     zip. Stored (not deflated): the payloads are incompressible media.
     Returns (path, bytes_written)."""
-    from .config import RECORD_DIR
+    from .config import RECORD_DIR, RECORD_LOCAL_DIR
     record_dir = record_dir or RECORD_DIR
     manifest = {"format": "prawntenna-backup", "version": 1,
                 "created": time.time()}
@@ -403,13 +403,30 @@ def build_backup(dest_path, record_dir):
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_STORED) as z:
         z.writestr("manifest.json", json.dumps(manifest))
         z.write(snap, "station.db")
+        have = set()
         for root, dirs, files in os.walk(record_dir):
             for name in sorted(files):
                 p = os.path.join(root, name)
                 arc = os.path.join("recordings",
                                    os.path.relpath(p, record_dir))
                 z.write(p, arc)
+                have.add(arc.replace(os.sep, "/"))
                 total += os.path.getsize(p)
+        # Pending local captures (recorded but not yet archived - see
+        # archive.py) ride along under the same archive root; a name
+        # that exists in both (a family mid-move) is taken from the
+        # archive copy only, so the zip never holds it twice.
+        if os.path.realpath(RECORD_LOCAL_DIR) != os.path.realpath(record_dir):
+            for root, dirs, files in os.walk(RECORD_LOCAL_DIR):
+                for name in sorted(files):
+                    p = os.path.join(root, name)
+                    arc = os.path.join("recordings",
+                                       os.path.relpath(p, RECORD_LOCAL_DIR)
+                                       ).replace(os.sep, "/")
+                    if arc in have:
+                        continue
+                    z.write(p, arc)
+                    total += os.path.getsize(p)
         total += os.path.getsize(snap)
     os.remove(snap)
     return dest_path, total

@@ -12,11 +12,22 @@ PORT = 8085
 # imported into the database once at startup and then retired to
 # <name>.migrated
 LOGDIR = "/var/log/noaa"
-# Raw recordings (WAV + IQ) go to RECORD_DIR. It defaults to the local
-# disk but can be pointed at a network share (recommended: NFS, see
-# AGENTS.md deployment notes) via PRAWN_RECORD_DIR, e.g. a systemd
-# unit 'Environment=PRAWN_RECORD_DIR=/mnt/nas/prawnceiver-recordings'.
-RECORD_DIR = os.environ.get("PRAWN_RECORD_DIR") or "/var/log/noaa/recordings"
+# Raw recordings (WAV + IQ) are ALWAYS captured to the LOCAL disk first
+# (RECORD_LOCAL_DIR): a network share can vanish mid-pass and kill the
+# recording with it (the 2026-10-17 outage), and a SQLite-grade stall on
+# the share must never sit under a 4.8 MB/s IQ stream. When
+# PRAWN_RECORD_DIR points elsewhere (recommended: NFS, see AGENTS.md
+# deployment notes - e.g. a systemd unit
+# 'Environment=PRAWN_RECORD_DIR=/mnt/nfs/prawnceiver/recordings'), the
+# archiver thread (noaa_receiver/archive.py) moves every finished,
+# decoded recording family over once the share is really mounted; the
+# dashboard/history pages serve both locations transparently. Without
+# PRAWN_RECORD_DIR the archive IS the local dir: a single-directory
+# setup where nothing ever moves (the notebook field station).
+# PRAWN_RECORD_LOCAL_DIR can override the capture dir itself (e.g. to a
+# second local disk).
+RECORD_LOCAL_DIR = os.environ.get("PRAWN_RECORD_LOCAL_DIR") or "/var/log/noaa/recordings"
+RECORD_DIR = os.environ.get("PRAWN_RECORD_DIR") or RECORD_LOCAL_DIR
 PASS_HISTORY_FILE = os.path.join(LOGDIR, "pass_history.json")
 # Dongles added at runtime (dashboard "Add dongle") persist across restarts
 # as a JSON list of {"host": ..., "port": ...} entries

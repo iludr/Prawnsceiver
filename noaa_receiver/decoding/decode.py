@@ -468,8 +468,19 @@ def _decode_iq(wav_path, pipeline, suffix, force=False):
                       f"signal {'measured at' if measured is not None else 'NOT FOUND, assuming'} "
                       f"{(measured if measured is not None else -SDR_OFFSET_HZ) / 1000:.1f} kHz, "
                       f"rotating {shift_hz / 1000:.1f} kHz")
-    threading.Thread(target=_satdump_decode,
-                     args=(pipeline, iq_path, out_dir, label, shift_hz),
+    def _run_satdump(pipeline=pipeline, iq_path=iq_path, out_dir=out_dir,
+                     label=label, shift_hz=shift_hz):
+        # Registered for the archiver for the whole background run: the
+        # decode marker written at spawn time already says 'success', so
+        # the family must stay on the local disk until the products are
+        # really there (see archive.py)
+        base = os.path.splitext(os.path.basename(iq_path))[0]
+        state.decodes_active.add(base)
+        try:
+            _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz)
+        finally:
+            state.decodes_active.discard(base)
+    threading.Thread(target=_run_satdump,
                      daemon=True, name='satdump').start()
     return True, 'decode started in the background (SatDump)'
 
@@ -498,22 +509,34 @@ def decode_recording(wav_path, force=False):
                 png = _png_path(wav_path)
                 return True, (png if os.path.exists(png) else None), marker.get('message')
             return False, None, f"decode already attempted: {marker.get('message')}"
-    output_png = _png_path(wav_path)
-    sat = satellite_from_filename(wav_path)
-    if sat is None:
-        state.log_console(f"Decode: no tracked satellite in the name of {os.path.basename(wav_path)}", "warn")
-        result = (False, None, 'no tracked satellite in the recording name - cannot decode')
-    elif sat.startswith('ISS'):
-        result = _decode_sstv(wav_path, output_png)
-    elif sat.startswith('Meteor'):
-        # LRPT is a ~72 kHz wide OQPSK digital mode - the FM-demod audio
-        # cannot carry it, but the raw IQ capture can (meteor_m2-x_lrpt)
-        started, msg = _decode_iq(wav_path, 'meteor_m2-x_lrpt', '_lrpt', force)
-        result = (started, None, f'LRPT recording - {msg}')
-    else:
-        result = (False, None, f'{sat} has no decoder in this station')
-    _write_decode_marker(wav_path, result[0], result[2] or 'decoded')
-    return result
+    # Registered for the archiver: a decode in progress (this function or
+    # the background SatDump run it may spawn) keeps the recording family
+    # on the local disk until it finished (see archive.py).
+    _base = os.path.splitext(os.path.basename(wav_path))[0]
+    state.decodes_active.add(_base)
+    try:
+        output_png = _png_path(wav_path)
+        sat = satellite_from_filename(wav_path)
+        if sat is None:
+            state.log_console(f"Decode: no tracked satellite in the name of {os.path.basename(wav_path)}", "warn")
+            result = (False, None, 'no tracked satellite in the recording name - cannot decode')
+        elif sat.startswith('ISS'):
+            result = _decode_sstv(wav_path, output_png)
+        elif sat.startswith('Meteor'):
+            # LRPT is a ~72 kHz wide OQPSK digital mode - the FM-demod audio
+            # cannot carry it, but the raw IQ capture can (meteor_m2-x_lrpt)
+            started, msg = _decode_iq(wav_path, 'meteor_m2-x_lrpt', '_lrpt', force)
+            result = (started, None, f'LRPT recording - {msg}')
+        else:
+            result = (False, None, f'{sat} has no decoder in this station')
+        _write_decode_marker(wav_path, result[0], result[2] or 'decoded')
+        return result
+    finally:
+        # NOTE: a background SatDump run keeps its OWN entry (registered
+        # inside _satdump_decode) until it wrote its products - the
+        # marker this function wrote at spawn time says 'success', but
+        # the analysis is only done when that entry clears.
+        state.decodes_active.discard(_base)
 
 
 def _decode_sstv(wav_path, output_png):

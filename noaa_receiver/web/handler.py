@@ -10,12 +10,13 @@ from urllib.parse import parse_qs, urlparse
 from .. import db
 from .. import state
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
-                   RECORD_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
+                   RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
 
 from ..decoding import adsb, ais, aprs, orbcomm, pocsag
 from ..sdr import scan
 from ..decoding.decode import decode_recording, forget_decode_marker
-from .history import _load_history, get_recordings, quality_map, set_recording_quality
+from .history import (_load_history, get_recordings, quality_map,
+                        recording_path, set_recording_quality)
 from .pages import (ADSB_HTML, AIS_HTML, APRS_HTML, CONSOLE_HTML,
                     HISTORY_HTML, ORBCOMM_HTML, POCSAG_HTML)
 from .thumbs import THUMB_SUFFIX, ensure_thumb
@@ -692,7 +693,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(400)
                 self.end_headers()
                 return
-            zpath = os.path.join(RECORD_DIR, 'manual', filename)
+            zpath = recording_path('manual', filename)
             if not os.path.isfile(zpath):
                 self.send_response(404)
                 self.end_headers()
@@ -716,7 +717,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(400)
                 self.end_headers()
                 return
-            wav_path = os.path.join(RECORD_DIR, filename)
+            wav_path = recording_path(filename)
             if not os.path.exists(wav_path):
                 self.send_response(404)
                 self.end_headers()
@@ -1203,7 +1204,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'Invalid filename')
                 return
-            wav_path = os.path.join(RECORD_DIR, filename)
+            wav_path = recording_path(filename)
             if not os.path.exists(wav_path):
                 state.log_console(f"Decode requested missing recording: {filename}", "warn")
                 self.send_response(404)
@@ -1243,7 +1244,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'Invalid filename')
                 return
-            wav_path = os.path.join(RECORD_DIR, filename)
+            wav_path = recording_path(filename)
             if not os.path.exists(wav_path):
                 state.log_console(f"Delete requested missing recording: {filename}", "warn")
                 self._send_json({"success": False, "error": "Recording not found"}, code=404)
@@ -1257,30 +1258,37 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 return
             deleted = []
             try:
-                os.remove(wav_path)
-                deleted.append(filename)
-                png_path = wav_path[:-4] + '.png'
-                if os.path.exists(png_path):
-                    os.remove(png_path)
-                    deleted.append(os.path.basename(png_path))
-                thumb = png_path[:-4] + THUMB_SUFFIX
-                if os.path.exists(thumb):
-                    os.remove(thumb)
-                    deleted.append(os.path.basename(thumb))
-                # The decode-attempt marker is a decodes-table row
-                forget_decode_marker(wav_path)
-                # Raw IQ capture and the SatDump product directories
-                # belong to the recording too - deleting takes the full set
-                iq_path = wav_path[:-4] + '.iq.u8'
-                if os.path.exists(iq_path):
-                    os.remove(iq_path)
-                    deleted.append(os.path.basename(iq_path))
                 import glob
                 import shutil
-                for d in glob.glob(wav_path[:-4] + '_*'):
-                    if os.path.isdir(d):
-                        shutil.rmtree(d)
-                        deleted.append(os.path.basename(d) + '/')
+                # A family can straddle the LOCAL capture dir and the
+                # archive mid-move (see archive.py) - sweep both roots
+                for root in {RECORD_LOCAL_DIR, RECORD_DIR}:
+                    base = os.path.join(root, filename[:-len('.wav')])
+                    wav_p = base + '.wav'
+                    if os.path.exists(wav_p):
+                        os.remove(wav_p)
+                        deleted.append(filename)
+                    png_path = base + '.png'
+                    if os.path.exists(png_path):
+                        os.remove(png_path)
+                        deleted.append(os.path.basename(png_path))
+                    thumb = png_path[:-4] + THUMB_SUFFIX
+                    if os.path.exists(thumb):
+                        os.remove(thumb)
+                        deleted.append(os.path.basename(thumb))
+                    # Raw IQ capture and the SatDump product directories
+                    # belong to the recording too - deleting takes the full set
+                    iq_path = base + '.iq.u8'
+                    if os.path.exists(iq_path):
+                        os.remove(iq_path)
+                        deleted.append(os.path.basename(iq_path))
+                    for d in glob.glob(base + '_*'):
+                        if os.path.isdir(d):
+                            shutil.rmtree(d)
+                            deleted.append(os.path.basename(d) + '/')
+                # The decode-attempt marker is a decodes-table row
+                forget_decode_marker(wav_path)
+                deleted = list(dict.fromkeys(deleted))
                 state.log_console(f"🗑 Deleted: {', '.join(deleted)}")
                 self._send_json({"success": True, "deleted": deleted}, code=200)
             except Exception as e:
@@ -1308,7 +1316,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'Invalid filename')
                 return
-            img_path = os.path.join(RECORD_DIR, filename)
+            img_path = recording_path(filename)
             if os.path.exists(img_path):
                 self.send_response(200)
                 self.send_header('Content-type', 'image/png')
@@ -1334,7 +1342,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'Image not found')
                 return
-            img_path = os.path.join(RECORD_DIR, filename)
+            img_path = recording_path(filename)
             if not os.path.exists(img_path):
                 self.send_response(404)
                 self.end_headers()
@@ -1368,7 +1376,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'Invalid product path')
                 return
-            ppath = os.path.join(RECORD_DIR, parts[0], parts[1])
+            ppath = recording_path(parts[0], parts[1])
             if not os.path.isfile(ppath):
                 self.send_response(404)
                 self.end_headers()

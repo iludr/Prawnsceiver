@@ -5,8 +5,10 @@ import threading
 
 from .. import db
 from .. import state
-from ..config import LAT, LON, LOGDIR, PASS_MIN_ALT, PORT, RECORD_DIR
+from ..config import (LAT, LON, LOGDIR, PASS_MIN_ALT, PORT, RECORD_DIR,
+                     RECORD_LOCAL_DIR)
 
+from ..archive import archive_thread
 from .handler import NOAAHandler
 from ..tracking.plan import prime_transmitters
 from ..sdr.radio import sdr_thread
@@ -18,17 +20,24 @@ def main():
     socketserver.ThreadingTCPServer.daemon_threads = True
 
     os.makedirs(LOGDIR, exist_ok=True)
-    os.makedirs(RECORD_DIR, exist_ok=True)
-    # If recordings were moved to a network share (PRAWN_RECORD_DIR), a
-    # missing mount silently degrades to the local disk — the exact
-    # way the VM root disk once filled overnight. Warn loudly instead.
-    # ismount() is not enough (RECORD_DIR is usually a subdirectory of
-    # the real mount point): compare filesystem devices instead.
+    # Capture dir first (always the LOCAL disk — a network share must
+    # never sit under a running IQ stream), then the archive dir.
+    os.makedirs(RECORD_LOCAL_DIR, exist_ok=True)
+    if os.path.realpath(RECORD_DIR) != os.path.realpath(RECORD_LOCAL_DIR):
+        os.makedirs(RECORD_DIR, exist_ok=True)
+    # If the recording ARCHIVE was pointed at a network share
+    # (PRAWN_RECORD_DIR) but no share is mounted, the path silently sits
+    # on the local disk — the exact way the VM root disk once filled
+    # overnight. Captures land on the local disk either way now; the
+    # warn says the archive will not drain anywhere else. ismount() is
+    # not enough (RECORD_DIR is usually a subdirectory of the real
+    # mount point): compare filesystem devices instead.
     if os.environ.get("PRAWN_RECORD_DIR") and \
             os.stat(RECORD_DIR).st_dev == os.stat("/").st_dev:
         state.log_console("⚠️ RECORD_DIR is set via PRAWN_RECORD_DIR but "
                           "sits on the LOCAL disk (no network share "
-                          "mounted) — recordings may fill it!", "warn")
+                          "mounted) — recordings stay local and may "
+                          "fill it!", "warn")
     # One-time import of the legacy JSON stores into station.db,
     # then load the AIS ship registry from it. ORDER MATTERS: the
     # registry lives in memory and save_ships() mirrors memory back
@@ -64,6 +73,11 @@ def main():
 
     # Start SDR thread
     threading.Thread(target=sdr_thread, daemon=True).start()
+
+    # Recording archiver: drains the local capture dir into the
+    # archive share once recordings are decoded and the share is up
+    # (no-op on single-directory setups — see archive.py)
+    threading.Thread(target=archive_thread, daemon=True).start()
 
     # Background: fetch SatNOGS transmitter metadata for the pass-list
     # receive plans (never on the request path — see plan.py)
