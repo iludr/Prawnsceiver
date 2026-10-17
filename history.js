@@ -1,6 +1,8 @@
 const decodingInProcess = {};
 let historyData = [];
 let recordingsData = [];
+const HIST_PAGE_SIZE = 25;     // pass list: 25 cards per page
+let histPage = 0;              // page 0 = the 25 most recent passes
 function productsHtml(rec) {
     return '<div class="filename" style="margin-top:6px;">' + '📂 Products (' + rec.products.length + '):'
         + rec.products.map(p => '<div style="padding:1px 0 1px 14px;"><a href="/products/' + encodeURIComponent(p.path) + '" target="_blank">'
@@ -30,11 +32,25 @@ function decodeButtonsHtml(r) {
 
 function render() {
     const list = document.getElementById('history-list');
+    const pager = document.getElementById('histpager');
     if (historyData.length === 0) {
         list.innerHTML = '<div class="muted">No passes logged yet. Passes appear here after they complete.</div>';
+        pager.style.display = 'none';
     } else {
+        // Newest first, then only one page of HIST_PAGE_SIZE cards
+        const newest = [...historyData].reverse();
+        const pages = Math.max(1, Math.ceil(newest.length / HIST_PAGE_SIZE));
+        if (histPage >= pages) histPage = pages - 1;
+        const start = histPage * HIST_PAGE_SIZE;
+        const slice = newest.slice(start, start + HIST_PAGE_SIZE);
+        pager.style.display = newest.length > HIST_PAGE_SIZE ? '' : 'none';
+        document.getElementById('hist-prev').disabled = histPage === 0;
+        document.getElementById('hist-next').disabled = histPage >= pages - 1;
+        document.getElementById('hist-pageinfo').textContent =
+            'passes ' + (start + 1) + '–' + (start + slice.length)
+            + ' of ' + newest.length;
         let html = '';
-        for (const h of [...historyData].reverse()) {
+        for (const h of slice) {
             const q = h.max_alt >= 35 ? 'high' : (h.max_alt >= 15 ? 'medium' : 'low');
             const qi = q === 'high' ? '🟢' : (q === 'medium' ? '🟡' : '🔴');
             const rec = h.wav ? recordingsData.find(r => r.filename === h.wav) : null;
@@ -194,6 +210,11 @@ function connectHistWs() {
     }
 }
 connectHistWs();
+
+document.getElementById('hist-prev').addEventListener('click',
+    () => { if (histPage > 0) { histPage--; render(); } });
+document.getElementById('hist-next').addEventListener('click',
+    () => { histPage++; render(); });
 
 refresh();
 setInterval(() => { if (!histWsLive()) refresh(); }, 8000);

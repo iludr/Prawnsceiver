@@ -44,18 +44,39 @@ const REG_HEAD_PLAIN = '<th>callsign</th><th>ICAO</th><th>alt</th>'
     + '<th>message history</th>';
 const REG_HEAD_TRACK = '<th>path</th>' + REG_HEAD_PLAIN;
 
+const REG_PAGE_SIZE = 25;      // registry table: 25 rows per page
+let regPage = 0;               // page 0 = the 25 most recent aircraft
+
 function applyRegistry(aircraft) {
     regAircraft = aircraft;
     updateMapStats();
     document.getElementById('regcount').textContent = aircraft.length;
+    renderRegistryPage();
+}
+
+// The registry list arrives newest-first and can hold hundreds of
+// aircraft — the table renders one page of REG_PAGE_SIZE rows at a
+// time (the pager below the table walks the window).
+function renderRegistryPage() {
     const rows = document.getElementById('regrows');
-    if (!aircraft.length) {
+    const pages = Math.max(1, Math.ceil(regAircraft.length / REG_PAGE_SIZE));
+    if (regPage >= pages) regPage = pages - 1;
+    const start = regPage * REG_PAGE_SIZE;
+    const slice = regAircraft.slice(start, start + REG_PAGE_SIZE);
+    const pager = document.getElementById('regpager');
+    pager.style.display = regAircraft.length > REG_PAGE_SIZE ? '' : 'none';
+    document.getElementById('reg-prev').disabled = regPage === 0;
+    document.getElementById('reg-next').disabled = regPage >= pages - 1;
+    document.getElementById('reg-pageinfo').textContent =
+        'aircraft ' + (start + 1) + '–' + (start + slice.length)
+        + ' of ' + regAircraft.length;
+    if (!regAircraft.length) {
         rows.innerHTML = '<tr><td colspan="' + (trackMode ? 12 : 11)
             + '" class="muted">No aircraft heard in the last 24 h — the registry fills as aircraft come into range.</td></tr>';
         return;
     }
     let html = '';
-    for (const a of aircraft) {
+    for (const a of slice) {
         const recent = a.recent || [];
         let msgs = '';
         for (const e of recent.slice().reverse()) {   // newest first
@@ -182,6 +203,10 @@ setInterval(() => { if (!adsbWsLive()) loadRegistry(); }, 30000);
 setInterval(loadCoverage, 300000);
 loadRegistry();
 document.getElementById('trackmode-btn').addEventListener('click', toggleTrackMode);
+document.getElementById('reg-prev').addEventListener('click',
+    () => { if (regPage > 0) { regPage--; renderRegistryPage(); } });
+document.getElementById('reg-next').addEventListener('click',
+    () => { regPage++; renderRegistryPage(); });
 
 // ---------- live aircraft map (Leaflet + OpenStreetMap tiles) ----------
 // Aircraft are placed by their latest position and rotated by their
@@ -297,6 +322,11 @@ function updateMap(aircraft) {
         if (a.lat === undefined || a.lat === null || a.lon === undefined || a.lon === null) { noPos++; continue; }
         seen.add(String(a.icao));
         onMap++;
+        // Remember the real fix — the dead-reckoning timer below
+        // projects each marker forward from it between fixes
+        lastFix[a.icao] = { ts: a.last_seen, lat: a.lat, lon: a.lon,
+                            speed_kt: a.speed_kt, track_deg: a.track_deg,
+                            onground: a.onground, ac: a };
         const age = Math.max(0, Math.round(now - a.last_seen));
         if (age > 600) staleCount++;
         let m = markers[a.icao];
@@ -310,12 +340,51 @@ function updateMap(aircraft) {
         m.setPopupContent(planePopup(a, age));
     }
     for (const k of Object.keys(markers)) {
-        if (!seen.has(k)) { map.removeLayer(markers[k]); delete markers[k]; }
+        if (!seen.has(k)) { map.removeLayer(markers[k]); delete markers[k]; delete lastFix[k]; }
     }
     if (onMap && !fitted) fitted = true, fitAircraft();
     mapStats = { onMap: onMap, stale: staleCount, noPos: noPos };
     updateMapStats();
 }
+
+// ---------- dead reckoning: planes glide between real fixes ----------
+// ADS-B position squitters arrive only every so often, so between
+// fixes each marker is projected forward from its last real position
+// along its track at its ground speed — the map keeps moving. The
+// projection is capped so a plane that goes silent freezes in place
+// instead of flying off into fantasy; the next real fix snaps the
+// marker back onto the true path. Grounded planes never move.
+const EXTRAP_MS = 5000;        // advance the markers every 5 s
+const EXTRAP_MAX_SECS = 120;   // never project further than this
+const lastFix = {};            // icao -> last real fix + the aircraft row
+
+function projectedLatLng(f, nowSec) {
+    const dt = Math.min(Math.max(0, nowSec - f.ts), EXTRAP_MAX_SECS);
+    if (f.onground || !f.speed_kt || f.track_deg === undefined
+            || f.track_deg === null || dt <= 0) return [f.lat, f.lon];
+    const nm = f.speed_kt * dt / 3600;              // nautical miles travelled
+    const tr = f.track_deg * Math.PI / 180;
+    const dLat = nm * Math.cos(tr) / 60;            // 1 nm = 1/60° latitude
+    const dLon = nm * Math.sin(tr) / (60 * Math.cos(f.lat * Math.PI / 180));
+    return [f.lat + dLat, f.lon + dLon];
+}
+
+function advanceMarkers() {
+    if (!map) return;
+    const now = Date.now() / 1000;
+    for (const icao in markers) {
+        const f = lastFix[icao];
+        if (!f) continue;
+        const p = projectedLatLng(f, now);
+        markers[icao].setLatLng(p);
+        if (f.ac) {   // keep the popup on the projected position too
+            const age = Math.max(0, Math.round(now - f.ac.last_seen));
+            const pa = Object.assign({}, f.ac, { lat: p[0], lon: p[1] });
+            markers[icao].setPopupContent(planePopup(pa, age));
+        }
+    }
+}
+setInterval(advanceMarkers, EXTRAP_MS);
 
 initMap();
 loadCoverage();   // the map exists now — the early call above only armed the timer

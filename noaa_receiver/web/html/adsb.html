@@ -31,6 +31,9 @@ tr:hover td { background: #16213e; }
 #mapinfo { font-size: 0.85em; color: #888; margin: 4px 0 6px; display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
 #fitbtn, #trackmode-btn { background: #0f3460; color: #4da6ff; border: 1px solid #4da6ff; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
 #fitbtn:hover, #trackmode-btn:hover { background: #16294e; }
+.pgbtn { background: #0f3460; color: #4da6ff; border: 1px solid #4da6ff; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
+.pgbtn:hover { background: #16294e; }
+.pgbtn:disabled { opacity: 0.35; cursor: default; }
 #trackmode-hint { font-size: 0.8em; color: #888; margin-left: 8px; }
 #map { height: 460px; border: 1px solid #0f3460; border-radius: 4px; background: #000; }
 .leaflet-tile { filter: brightness(0.9) saturate(0.85); }
@@ -96,6 +99,11 @@ tr:hover td { background: #16213e; }
     </tr></thead>
     <tbody id="regrows"><tr><td colspan="11" class="muted">Loading aircraft registry…</td></tr></tbody>
     </table>
+    <div id="regpager" style="margin-top:6px;display:none;">
+        <button id="reg-prev" class="pgbtn">&#9664; newer</button>
+        <span id="reg-pageinfo" style="color:#888;margin:0 8px;"></span>
+        <button id="reg-next" class="pgbtn">older &#9654;</button>
+    </div>
 </div>
 <table><thead><tr>
     <th>time</th><th>DF</th><th>type</th><th>ICAO</th><th>callsign</th>
