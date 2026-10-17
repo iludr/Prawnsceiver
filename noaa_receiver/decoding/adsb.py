@@ -698,6 +698,15 @@ def adsb_status():
 # other gaps have no integer sample that is safely outside the pulses).
 _PULSE_OFF = (0, 2, 6, 8)
 _GAP_OFF = (4, 10)
+# Failed (pattern-passing but CRC-rejected) candidates a single batch
+# may work through before giving up on the rest of it: each failure
+# costs up to 10 grid phases of slice+CRC (~0.15 ms), so this is the
+# hard CPU ceiling of the scan under pathological noise. It counts
+# FAILURES only — decoded frames never accrue — and the live band
+# shows ~23 multipath/overlap ghosts per batch (measured 2026-10-17),
+# so a batch holding several real overlapping squitters still decodes
+# them all; only the noise beyond the 8th failure is dropped.
+_MAX_FAIL_CANDIDATES = 8
 _SAMPLES_LONG = int(np.ceil((8 + BITS_LONG) * SPS)) + 2
 _TAIL = _SAMPLES_LONG   # carry across blocks: a frame can straddle two
 
@@ -752,19 +761,6 @@ def new_demod_state():
     }
 
 
-def _preamble_ok(x, p, hi, lo):
-    """4-pulse pattern check at frame-start candidate p."""
-    if p + _GAP_OFF[-1] + 1 >= len(x):
-        return False
-    for off in _PULSE_OFF:
-        if x[p + off] <= hi and x[p + off + 1] <= hi:
-            return False
-    for off in _GAP_OFF:
-        if x[p + off] >= lo:
-            return False
-    return True
-
-
 def _slice_bits(x, p, tables):
     """Envelope window -> 112 data bits (max per half-bit window)."""
     a, b, ma, mb = tables
@@ -800,9 +796,18 @@ def decode_batch(mag, st):
     # so a low percentile sits deep inside the noise (a third of all
     # samples crossed the first 2.2 x p20 threshold in the field,
     # 444k bogus candidates in 6 s). The 90th percentile anchors the
-    # threshold above the noise peaks: 2 x p90 (~4.3 sigma) is crossed
-    # by ~1e-4 of noise samples, and the 4-pulse pattern (4 crossings at
-    # exact offsets) makes false preambles vanishingly rare.
+    # threshold above the noise peaks — but nowhere near the modeled
+    # 1e-4 of samples: measured on the live 1090 MHz band
+    # (2026-10-17, R820T auto-gain) 2 x p90 is crossed by ~1.6% of
+    # samples, hundreds of candidates per batch. The scalar
+    # per-candidate preamble loop that grew out of the "vanishingly
+    # rare" assumption cost ~5 ms of GIL-holding Python per 13.6 ms
+    # batch: the ADS-B thread saturated a core and starved the
+    # satellite/AIS capture threads — every waterfall hung with three
+    # dongles attached. The scan is now one vectorized pattern match;
+    # the per-candidate Python work only runs on pattern-passing
+    # positions, and a per-batch failure cap bounds even pathological
+    # noise to a fraction of a core.
     floor = float(np.percentile(x, 90))
     st["floor"] = floor if st["floor"] is None \
         else 0.85 * st["floor"] + 0.15 * floor
@@ -810,17 +815,32 @@ def decode_batch(mag, st):
     lo = hi
     out = []
     last_end = st["last_end_abs"]           # absolute skip mark
-    for q in np.flatnonzero(x > hi):
-        q = int(q)
+    n = len(x)
+    w = n - _SAMPLES_LONG                   # last position a whole frame fits
+    if w <= 0:
+        st["last_end_abs"] = last_end
+        return out
+    # Vectorized preamble check (the scalar _preamble_ok semantics,
+    # batch-wide): a position q is a candidate when x[q] > hi (the
+    # pulse-0 pair then always passes, as in the scalar scan), the
+    # pulse pairs at _PULSE_OFF[1:] each have a sample above hi, and
+    # the gap samples at _GAP_OFF sit below lo. Slices are aligned by
+    # construction: the largest offset (10) plus one stays inside the
+    # _SAMPLES_LONG (~240) frame window.
+    cross = x > hi
+    cand = cross[:w].copy()
+    for off in _PULSE_OFF[1:]:
+        cand &= cross[off:off + w] | cross[off + 1:off + 1 + w]
+    for off in _GAP_OFF:
+        cand &= x[off:off + w] < lo
+    qs = np.flatnonzero(cand)
+    fails = 0
+    for q in qs.tolist():
         q_abs = q + base
         if q_abs <= last_end:
             continue
-        if q + _SAMPLES_LONG >= len(x):
-            break
         hit = False
         for shift in _BIT_WIN:
-            if not _preamble_ok(x, q, hi, lo):
-                break     # pattern check is shift-independent: give up
             bits = _slice_bits(x, q, _BIT_WIN[shift])
             d = parse_frame(bits.tolist())
             hexbits = bits
@@ -847,6 +867,13 @@ def decode_batch(mag, st):
         if not hit:
             st["bad"] += 1
             last_end = q_abs + 4   # skip a little past the noise blip
+            fails += 1
+            if fails >= _MAX_FAIL_CANDIDATES:
+                # Pathological noise: each failed candidate costs up to
+                # 10 grid phases of slice+CRC. Give up on the rest of
+                # this batch instead of starving the other threads.
+                last_end = base + n
+                break
     st["last_end_abs"] = last_end
     return out
 
@@ -861,7 +888,7 @@ def adsb_capture_thread(did):
     from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
-                             CAPTURE_BATCH,
+                             CAPTURE_BATCH, FFT_EVERY,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
 
     entry = state.sdrs[did]
@@ -937,8 +964,11 @@ def adsb_capture_thread(did):
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
                 # waterfall + signal for the dongle card (see push_wf_row);
-                # every 4th row keeps the 1090 card light
-                for k in range(0, len(c) // FFT_SIZE, 4):
+                # the satellite thread's FFT_EVERY cadence (~234 rows/s at
+                # 2.4 Msps) — the previous every-4th-block (~1171 rows/s)
+                # burned ~7% of a core on FFTs 40x faster than any client
+                # displays, all of it GIL-holding small-op work
+                for k in range(0, len(c) // FFT_SIZE, FFT_EVERY):
                     try:
                         push_wf_row(entry, c, k, sig_bins)
                     except Exception:
