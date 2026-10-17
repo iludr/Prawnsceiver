@@ -1737,3 +1737,42 @@ one 87.9°, all 0-byte CADU):
 Verified end-to-end on the VM after deploy: forced re-decode of the
 87.9° and 39.8° passes produced the station's first real LRPT
 images (MSU-MR composites + map overlays).
+
+
+### 2026-10-17 ~16:45 CEST — 🎚️ Dongle calibration on 192.168.3.244: fresh measurements (and a correction of the LRPT entry's attribution)
+
+The calibration module's own prescription (re-measure on the new
+host, replace the Pi-era values) executed with the station's own
+tools, no dongle-host access needed: park the dongle on a
+known-exact carrier via /tune_dongle, grab 15-20 s of raw IQ with
+the manual Record button, fit the carrier peak at 36.6 Hz FFT
+resolution. References: the station's own identified DMR Tier-III
+control channel at 153.1125 MHz (German 4m channel raster) and FM
+broadcast 99.6 MHz. Correction = carrier position + 60 kHz
+(the offset tune puts a 0-error dongle's carrier at -60 kHz).
+
+- 192.168.3.244:1234 (satellite R820T): +344 Hz @ 153.1125 MHz
+  (+2.25 ppm, identical on two runs 8 min apart), +51 Hz @ 99.6 MHz
+  (+0.51 ppm). Plain-crystal wander of +/-2 ppm; entries are 2 orders
+  under the narrowest demod and mostly mark the dongle MEASURED.
+- 192.168.3.244:1235 (ADS-B R820T): -12766 Hz @ 153.1125 MHz =
+  -83.4 ppm - physically the old Pi-era generic R820T (serial
+  77771111153705700, -79.6 ppm then; consistent aging/drift). At
+  1090 MHz that is -90.9 kHz; the demod's full-band preamble scan
+  tolerated it at correction 0, with the correction the squitters
+  now land at baseband center after the offset rotation. The
+  operator-disabled Pi-era block is superseded by the fresh values.
+- 192.168.3.244:1236 (AIS FC0012): NOT measured - the manager is
+  not publishing it right now; stays "unmeasured" (0) until the
+  same procedure runs once it is back.
+- PRIMARY_DONGLE / AIS_DONGLE / DEFAULT_DONGLES re-keyed from the
+  dead 192.168.3.65 addresses to 192.168.3.244.
+
+ATTRIBUTION CORRECTION for the LRPT entry above: the ~17 kHz
+offset of the Meteor-M 2-4 LRPT plateau (satellite at ~-77 kHz
+instead of the nominal -60) is the TRANSMITTER - true downlink
+~137.896 MHz, near the SatNOGS 137.9000 alternate channel entry -
+NOT the (previously unmeasured) dongle, which turns out to be
+within ~2 ppm. The per-slice-max centering fix is unaffected
+(it measures whatever offset there is), but the dongle is not the
+reason the fallback rotation was 17 kHz off.

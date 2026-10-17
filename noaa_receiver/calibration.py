@@ -15,34 +15,31 @@ recalibrating a dongle (or plugging in a new one) never touches config.py.
 # Primary dongle: the id whose dongle feeds live audio and WAV recording.
 # If it is not registered at startup, the first added non-AIS dongle
 # becomes primary.
-# 2026-10-08: the NESDR SMArt v5 (R820T2, 0.5 ppm TCXO) is the primary; the
-# R820T listens for AIS. The station moved BACK to the VM on 2026-10-11
-# (the flaky-rtl_tcp premise was disproved: that day's audio hangs were
-# GIL saturation + decode memory bugs, both fixed and host-independent);
-# the notebook serves both dongles again via the prawntenna manager,
-# pinned by serial: v5 48263793 -> rtl_tcp :1234 (satellites), generic
-# R820T 77771111153705700 -> :1235 (AIS). Wired Ethernet since
-# 2026-10-11 evening (192.168.3.35): WiFi could not carry 2x2.4 Msps
-# (76.8 Mbit/s over 2.4 GHz = link saturation, 50-375 ms RTT to the VM
-# and starved capture streams - THAT was the original "flaky
-# connection"; wired: 0.7 ms).
-PRIMARY_DONGLE = "192.168.3.65:1234"
+# Dongle host since 2026-10-17: 192.168.3.244 (the station's persisted
+# dongles table wins at runtime either way - these are the static
+# fallbacks, re-keyed per this module's own NOTE whenever the host IP
+# changes). :1234 = satellite R820T, :1235 = R820T in the ADS-B role
+# (physically the old Pi-era generic R820T, serial 77771111153705700 -
+# its -79.6 ppm crystal error re-measured at -83.4 ppm on 2026-10-17),
+# :1236 = AIS FC0012 (not currently published by the manager).
+PRIMARY_DONGLE = "192.168.3.244:1234"
 
 # AIS dongle: id of a dongle dedicated to ship-traffic reception
 # (161.975/162.025 MHz, Danube vessels -- see noaa_receiver/ais.py). AIS
 # needs a continuously listening receiver, so a dongle pinned here is
-# excluded from satellite tracking and never becomes the primary. The
-# generic R820T (serial 77771111153705700) is rtl_tcp 192.168.3.65:1235.
+# excluded from satellite tracking and never becomes the primary.
+# The FC0012's expected rtl_tcp id on the current host (192.168.3.244:1236
+# per the gain table below); persisted role flags win over this pin.
 # None = off.
-AIS_DONGLE = "192.168.3.65:1235"
+AIS_DONGLE = "192.168.3.244:1236"
 
 # Dongles registered at startup when no persisted list exists yet (the
 # dashboard's "Add dongle" persists runtime additions in station.db's
 # dongles table; that table then wins over this default). One (host,
 # port) per rtl_tcp server published by the prawntenna manager.
 DEFAULT_DONGLES = [
-    ("192.168.3.65", 1234),   # NESDR SMArt v5 (serial 48263793, primary)
-    ("192.168.3.65", 1235),   # generic R820T (serial 77771111153705700, AIS)
+    ("192.168.3.244", 1234),   # satellite R820T (primary)
+    ("192.168.3.244", 1235),   # R820T (ADS-B)
 ]
 
 
@@ -63,28 +60,61 @@ AIRBAND = (117_975_000, 136_975_000)
 #   'fm_band': FM broadcast band (87.5-108 MHz) correction
 #   'ppm': fallback for frequencies not listed (scaled); None = no fallback
 # Dongles not listed here fall back to the primary dongle's values.
+#
+# MEASUREMENT METHOD (used 2026-10-17, home-grown, no host access
+# needed): park the dongle on a known-exact carrier via /tune_dongle,
+# grab 15-20 s of raw IQ with the manual Record button, fit the carrier
+# peak (36.6 Hz FFT bins). References: the station's own identified
+# DMR Tier-III control channel at 153.1125 MHz (German 4m channel
+# raster) and FM broadcast 99.6 MHz. Correction = peak position + 60
+# kHz (the offset tune puts a 0-error dongle's carrier at -60 kHz).
 SDR_DONGLE_CORRECTIONS = {
-    # DISABLED 2026-10-17 by operator: every value below was measured on
-    # the old Raspberry Pi, whose USB ports had issues — the scaled ppm
-    # fallback put -87.2 kHz on the 1090 MHz ADS-B tune and the dongle
-    # decoded nothing. Disabled until the dongle is re-measured on the
-    # notebook (rtl_test -p / waterfall carrier fit); restore this block
-    # — or replace with fresh values — when the operator says so.
-    #   "192.168.3.65:1235": {
-    #       "freqs": {
-    #           137912500: -10977,  # Meteor LRPT band (79.6 ppm x 137.91 MHz)
-    #           437550000: -34827,  # ISS (Zarya) (79.6 ppm x 437.55 MHz)
-    #       },
-    #       "fm_band": -8200,  # VHF2: tunes ~8 kHz HIGH (carriers 6-11 kHz below nominal, measured on 89.7/93.0/95.0/99.6/103.0/105.0)
-    #       # ppm fallback, correctly signed since 2026-10-11: the old +80
-    #       # entry contradicted this dongle's OWN measured values
-    #       # (-10977 Hz @ 137.9 MHz / -34827 Hz @ 437.55 MHz, both
-    #       # -79.6 ppm) and mistuned the 162 MHz AIS band by +26 kHz.
-    #       # -80 ppm follows the measurements' trend (-12960 Hz at the
-    #       # AIS band); a direct measurement on prawntenna2 would still
-    #       # be better than the fallback.
-    #       "ppm": -80,
-    #   },
+    # Satellite R820T on 192.168.3.244:1234, measured 2026-10-17 with
+    # the method above:
+    #   153.1125 MHz DMR carrier: -59655.8 Hz twice (8 min apart,
+    #     identical) -> +344 Hz = +2.25 ppm
+    #   99.6 MHz FM carrier: -59948.7 Hz -> +51 Hz = +0.51 ppm
+    # Band-to-band wander of +/-2 ppm (plain crystal, not the old v5
+    # TCXO); every value below is two orders under the narrowest demod
+    # here (DSB, 6 kHz) - they mostly mark the dongle as MEASURED so
+    # the dashboard stops saying "unmeasured dongle" and the ppm
+    # fallback is honest.
+    # IMPORTANT: the ~17 kHz offset of the Meteor-M 2-4 LRPT plateau in
+    # pass recordings (satellite at ~-77 kHz instead of -60) is the
+    # TRANSMITTER (true downlink ~137.896 MHz, near the SatNOGS
+    # 137.9000 alternate channel entry) - NOT this dongle. The decode's
+    # own measurement handles any transmitter offset; this correction
+    # only covers the (tiny) dongle error.
+    "192.168.3.244:1234": {
+        "freqs": {
+            137912500: 300,    # LRPT band (2.2 ppm scaled from the 153.1125 fit)
+            437550000: 980,    # ISS (Zarya) (SSTV FM: kHz-scale tolerance)
+        },
+        "fm_band": 51,          # measured at 99.6 MHz
+        "ppm": 2,
+    },
+    # R820T on 192.168.3.244:1235 (ADS-B role) - physically the old
+    # Pi-era generic R820T (serial 77771111153705700), whose -79.6 ppm
+    # crystal error re-measured 2026-10-17 as:
+    #   153.1125 MHz DMR carrier: -72766 Hz -> -12766 Hz = -83.4 ppm
+    # (consistent with the old -10977 Hz @ 137.9 MHz / -34827 Hz @
+    # 437.55 MHz, both -79.6 ppm - same dongle, aging/temperature).
+    # The Pi-era DISABLED block is superseded by this fresh measurement;
+    # at 1090 MHz the error is -90.9 kHz, which the ADS-B demod's
+    # full-capture-band preamble scan tolerated at correction 0 - with
+    # the correction the squitters land at baseband center after the
+    # offset rotation, like every other role.
+    "192.168.3.244:1235": {
+        "freqs": {
+            1090000000: -90900,  # ADS-B center (-83.4 ppm x 1090 MHz)
+        },
+        "ppm": -83,
+    },
+    # FC0012 (AIS) expected on 192.168.3.244:1236 - NOT measured yet
+    # (the manager is not currently publishing it). Measure with the
+    # method above (park on 153.1125, record, fit) before trusting AIS
+    # channel centering on this dongle; until then it stays
+    # "unmeasured" and gets a 0 correction.
     # NESDR SMArt v5 (R820T2 + 0.5 ppm TCXO), measured 2026-10-10 during
     # high-rate mode (960 kHz capture, 1875 Hz FFT bins):
     #   - NOAA 19 DSB pass 19:09-19:11: the waterfall carrier (post-offset
