@@ -254,4 +254,19 @@ reg = adsb.aircrafts_registry()
 assert [a["icao"] for a in reg] == ["0A00F3", "0A00F2"], reg
 print("14. registry window: stale aircraft filtered, recent kept: ok")
 
+# --- 15. stream-rate watchdog: wrong-rate streams are flagged ---
+# nominal 2.4 Msps passes; the wedged-dongle rates measured in the
+# field (0.82 / 1.44 Msps, 2026-10-19) are rejected
+ok, msps = adsb._rate_check(2 * SDR_RATE * 6, 6.0)
+assert ok and abs(msps - SDR_RATE / 1e6) < 0.01, (ok, msps)
+ok, msps = adsb._rate_check(2 * 0.8202e6 * 6, 6.0)
+assert not ok and abs(msps - 0.8202) < 0.01, (ok, msps)
+ok, msps = adsb._rate_check(2 * 1.4432e6 * 6, 6.0)
+assert not ok and abs(msps - 1.4432) < 0.01, (ok, msps)
+ok, msps = adsb._rate_check(2 * SDR_RATE * 6, 6.0 * 1.1)   # 10% slow: ok
+assert ok, (ok, msps)
+ok, msps = adsb._rate_check(2 * SDR_RATE * 6, 6.0 * 2.0)  # half rate: bad
+assert not ok, (ok, msps)
+print("15. stream-rate watchdog: nominal ok, 0.82/1.44 Msps flagged: ok")
+
 print("\nAll ADS-B tests passed.")

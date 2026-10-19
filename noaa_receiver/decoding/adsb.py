@@ -883,6 +883,27 @@ def decode_batch(mag, st):
 
 # ---------- capture thread ----------
 
+# Stream-rate watchdog: check the received byte rate roughly every ~6 s
+# of nominal stream (2 bytes per sample).
+_RATE_CHECK_BYTES = int(2 * SDR_RATE * 6)
+
+
+def _rate_check(n_bytes, dt, rate=SDR_RATE):
+    """(ok, measured_msps) for n_bytes of received IQ over dt seconds.
+
+    The received byte rate is the one thing rtl_tcp cannot lie about:
+    a wedged RTL2832 (or a rtl_tcp child the prawntenna watchdog
+    re-spawned without this client's tune commands — it then serves
+    its default rate, gain and frequency while the manager keeps this
+    socket alive) delivers a stream at the WRONG rate, the demod slices
+    every bit at a wrong scale and CRC-rejects everything forever,
+    silently (measured 2026-10-19: 0.82 and 1.44 Msps from a dongle
+    whose PLL never locks — 262 bad candidates/s, 0 frames, for hours).
+    """
+    msps = n_bytes / 2.0 / dt / 1e6 if dt > 0 else float("inf")
+    return abs(msps - rate / 1e6) <= 0.15 * rate / 1e6, msps
+
+
 def adsb_capture_thread(did):
     """rtl_tcp/rtl_sdr connection + envelope decoding for a dongle
     switched to the ADS-B role. Mirrors the POCSAG capture thread's
@@ -957,7 +978,9 @@ def adsb_capture_thread(did):
                                   f"correction {correction:+d}Hz)")
                 reader = _IQReader(sock, IQ_BLOCK)
             sig_bins = max(1, round(39375 / (SDR_RATE / FFT_SIZE)))
-            while True:
+            rate_ts = time.time()          # stream-rate watchdog (see
+            rate_bytes = 0                 # _rate_check): a wrong-rate
+            while True:                     # stream cannot decode
                 if entry.get("closed") or not entry.get("adsb"):
                     break
                 raw = reader.read_batch(CAPTURE_BATCH)
@@ -966,6 +989,19 @@ def adsb_capture_thread(did):
                                       f"{did}), reconnecting...", "warn")
                     break
                 entry["last_data"] = time.time()
+                rate_bytes += len(raw)
+                if rate_bytes >= _RATE_CHECK_BYTES:
+                    ok, msps = _rate_check(rate_bytes,
+                                           time.time() - rate_ts)
+                    if not ok:
+                        state.log_console(
+                            f"✈️ ADS-B dongle {did} streams {msps:.2f} Msps"
+                            f" (expected {SDR_RATE / 1e6:.2f}) — wedged RTL"
+                            f" or re-published rtl_tcp without its tune;"
+                            f" reconnecting...", "warn")
+                        break
+                    rate_ts = time.time()
+                    rate_bytes = 0
                 c = iq_to_complex(raw)
                 # waterfall + signal for the dongle card (see push_wf_row);
                 # the satellite thread's FFT_EVERY cadence (~234 rows/s at

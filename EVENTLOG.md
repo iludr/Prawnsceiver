@@ -1840,3 +1840,44 @@ Also verified end-to-end on this occasion: the new raw-IQ
 auto-delete fired on both re-decoded passes (023340: 3.65 GB,
 140000: 3.30 GB removed right after the success marker, images
 and products kept).
+
+
+### 2026-10-19 ~18:10 UTC — ✈️ ADS-B dead: NOT the decoder — the generic R820T wedged (PLL never locks); stream-rate watchdog added
+
+Operator report "ADS-B decoding broke" right after the demod
+commits looked like a code regression. It was not: the decoder
+(79aa6da/ffb510e/9375683) ran all morning at a healthy 260-330
+frames/h, and station.db shows the collapse at ~13:00 UTC — hours
+BEFORE the 15:45 UTC deploy/restart. Evidence chain:
+
+- The station showed frames=0, bad=+262/s, floor=1.58 (p90 |IQ|
+  EMA) for hours — a stream of pattern-matching CRC-rejecting
+  candidates and no decodes.
+- Passive tcpdump sniffing of the :1235 stream on the VM (the
+  manager serves one client only) + TCP-seq rate measurement:
+  the stream delivered 0.8202 Msps, NOT the commanded 2.4. A
+  fresh rtl_tcp child (manager watchdog swap 15:55, spawn opts
+  "-P -3" only) delivered 1.4432 Msps at rtl_tcp defaults — and
+  the station never noticed: the manager keeps the client socket
+  across the child swap, so the setup commands (rate/gain/freq)
+  sent at 15:45:53 went to the OLD child and were never re-sent.
+- The capture had sub-LSB noise (|IQ| dust 0.7-1.6 counts, gain
+  effectively not applied), DME-like pulse-pair interference
+  blobs, and zero Mode S PPM structure — a tuner not converting.
+- Direct rtl_sdr on the Pi (manager /stop first): "[R82XX] PLL
+  not locked!" on EVERY attempt — 1090 MHz, 137 MHz, twice. Same
+  wedge family as the 2026-10-17 v5 event (that one delivered
+  zero bytes; this one delivers wrong-rate garbage).
+
+FIX (hardware): replug the ADS-B dongle (generic R820T, serial
+77771111153705700, USB hub on Krabstral). After the replug:
+/stop?d=77771111153705700 then
+/publish?d=77771111153705700&port=1235 on the manager — the
+station reconnects by itself and re-asserts rate/gain/freq.
+
+FIX (code): the received byte rate is the one thing rtl_tcp
+cannot fake — adsb.py's capture thread now measures it every ~6 s
+(_rate_check) and reconnects with a loud console warning when the
+stream is not within 15% of SDR_RATE. That catches both the
+wedged-RTL garbage rate and the silent rtl_tcp child swap that
+serves defaults, instead of CRC-rejecting garbage for hours.
