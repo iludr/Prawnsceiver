@@ -70,7 +70,9 @@
         const response = await fetch(requestUrl, options || {});
         const data = await response.json();
         if (!response.ok || data.success === false) {
-            throw new Error(data.error || ('Receiver returned ' + response.status));
+            const errorMsg = data.error || ('Receiver returned ' + response.status);
+            console.error('🦀 Prawntuner request failed:', path, params, '->', errorMsg);
+            throw new Error(errorMsg);
         }
         return data;
     }

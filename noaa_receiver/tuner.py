@@ -500,37 +500,52 @@ def _watch_sessions():
 
 def start_session(did, service, antenna, wave_factor="0.25"):
     """Claim one free dongle, park it and begin its first measurement."""
+    state.log_console(f"🦀 Prawntuner start_session called: dongle={did}, service={service}, antenna={antenna}, wave_factor={wave_factor}")
     did = str(did or "").strip()
     if service not in SERVICES:
+        state.log_console(f"🦀 Prawntuner: unknown service '{service}'", "error")
         return {"success": False, "error": "Unknown service"}, 400
     if antenna not in ("whip", "vdipole"):
+        state.log_console(f"🦀 Prawntuner: invalid antenna '{antenna}'", "error")
         return {"success": False, "error": "Choose Whip or V-Dipole"}, 400
     entry = state.sdrs.get(did)
     if entry is None:
+        state.log_console(f"🦀 Prawntuner: unknown dongle '{did}'", "error")
         return {"success": False, "error": "Unknown dongle"}, 404
     gain = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
+    state.log_console(f"🦀 Prawntuner: dongle {did} gain={gain} (SDR_GAIN={SDR_GAIN})")
     if gain is None or float(gain) <= 0:
+        state.log_console(f"🦀 Prawntuner: gain check failed for {did}", "error")
         return {"success": False,
                 "error": "This dongle has no fixed manual gain; configure SDR_DONGLE_GAIN first"}, 409
     target = _pass_target_hz() if service == "satellite" else SERVICES[service]["frequency_hz"]
+    state.log_console(f"🦀 Prawntuner: target freq={target} for service={service}")
     if service == "satellite" and target is None:
+        state.log_console(f"🦀 Prawntuner: no active pass for satellite tuning", "error")
         return {"success": False, "error": "Wait for a live LRPT pass before tuning satellites"}, 409
     if entry.get("primary") and state.is_pass_active:
+        state.log_console(f"🦀 Prawntuner: primary dongle {did} protected during pass", "error")
         return {"success": False,
                 "error": "The primary satellite dongle is protected during a pass"}, 409
     if entry.get("paused") or not entry.get("connected"):
+        state.log_console(f"🦀 Prawntuner: dongle {did} paused={entry.get('paused')}, connected={entry.get('connected')}", "error")
         return {"success": False, "error": "Dongle is paused or disconnected"}, 409
     if entry.get("is_recording") or did in state.manual_recording:
+        state.log_console(f"🦀 Prawntuner: dongle {did} is recording", "error")
         return {"success": False, "error": "Stop recording before tuning this dongle"}, 409
     scan_state = state.scans.get(did)
     if scan_state and scan_state.get("active"):
+        state.log_console(f"🦀 Prawntuner: scan active on {did}", "error")
         return {"success": False, "error": "Stop the frequency scan before tuning"}, 409
     try:
         previous = _role_snapshot(did, entry)
     except ValueError as e:
+        state.log_console(f"🦀 Prawntuner: role snapshot failed for {did}: {e}", "error")
         return {"success": False, "error": str(e)}, 409
     wanted_role = service if service in _ROLES else None
+    state.log_console(f"🦀 Prawntuner: previous role={previous['role']}, wanted_role={wanted_role}")
     if previous["role"] in _ROLES and previous["role"] != wanted_role:
+        state.log_console(f"🦀 Prawntuner: dongle already dedicated to {previous['role']}", "error")
         return {"success": False,
                 "error": "Dongle is already dedicated to %s" % previous["role"]}, 409
     if service == "satellite" and previous["role"] in _ROLES:
@@ -584,6 +599,7 @@ def start_session(did, service, antenna, wave_factor="0.25"):
             _ensure_watchdog()
             _measurement_thread(session)
         except Exception as e:
+            state.log_console(f"🦀 Prawntuner: exception in start_session for {did}: {e}", "error")
             _restore_hardware(session)
             return {"success": False, "error": str(e)}, 500
     state.log_console("🦀 Prawntuner started on %s for %s feelers" % (did, service))
