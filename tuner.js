@@ -14,6 +14,7 @@
     let sessionDongle = null;
     let active = false;
     let dongles = [];
+    let serverLength = null;
 
     function selectedAntenna() {
         return document.querySelector('input[name="antenna"]:checked').value;
@@ -227,7 +228,11 @@ async function loadDongles() {
         elements['initial-mm'].textContent = (data.initial_length_cm * 10).toFixed(1) + ' mm';
         elements.nominal.textContent = 'Quarter-wave nominal: ' + data.nominal_cm.toFixed(2) +
             ' cm' + (data.antenna === 'vdipole' ? ' per leg.' : '.');
-        elements.length.value = data.length_cm.toFixed(2);
+        const newServerLength = data.length_cm.toFixed(2);
+        if (elements.length.value === serverLength || elements.length.value === '') {
+            elements.length.value = newServerLength;
+        }
+        serverLength = newServerLength;
         elements['element-hint'].textContent = data.antenna === 'vdipole'
             ? 'Enter the length of each equal dipole leg.' : 'Enter the radiating whip length.';
         elements['session-state'].textContent = data.status === 'measuring'
@@ -284,6 +289,7 @@ async function loadDongles() {
                 antenna: selectedAntenna(),
                 wave_factor: selectedWaveFactor()
             }, { method: 'POST' });
+            serverLength = null;
             render(data);
         } catch (error) {
             setFeedback(error.message, true);
@@ -299,6 +305,7 @@ async function loadDongles() {
                 note: elements.note.value
             }, { method: 'POST' });
             elements.note.value = '';
+            serverLength = null;
             render(data);
         } catch (error) {
             setFeedback(error.message, true);
@@ -308,6 +315,7 @@ async function loadDongles() {
     elements.measure.addEventListener('click', async () => {
         setFeedback('');
         try {
+            serverLength = null;
             render(await requestJson('tuner_measure', { d: sessionDongle }, { method: 'POST' }));
         } catch (error) {
             setFeedback(error.message, true);
@@ -317,6 +325,7 @@ async function loadDongles() {
     elements.stop.addEventListener('click', async () => {
         setFeedback('');
         try {
+            serverLength = null;
             render(await requestJson('tuner_stop', { d: sessionDongle }, { method: 'POST' }));
             active = false;
             sessionDongle = null;
