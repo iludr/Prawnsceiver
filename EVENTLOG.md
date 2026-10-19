@@ -1881,3 +1881,20 @@ cannot fake — adsb.py's capture thread now measures it every ~6 s
 stream is not within 15% of SDR_RATE. That catches both the
 wedged-RTL garbage rate and the silent rtl_tcp child swap that
 serves defaults, instead of CRC-rejecting garbage for hours.
+
+UPDATE ~16:12 UTC: the replug did NOT fix it. With the replugged
+device: "[R82XX] PLL not locked!" on every direct rtl_sdr attempt
+(1090 MHz and 97.5 MHz), and a 97.5 MHz FM-band capture at 20 dB
+gain sits within +/-3 LSB of the ADC center — Regensburg's FM
+broadcasters are invisible; the tuner converts nothing. Solo on
+the bus (satellite dongle's rtl_tcp stopped): still not locked —
+hub power excluded. Verdict: the generic R820T (serial
+77771111153705700) is defective hardware, PLL dead after the
+~13:00 UTC collapse; unlike the v5's 2026-10-17 wedge it does not
+recover on replug. It is left unpublished; the station retries
+:1235 (Connection refused, backoff) and will tune + decode by
+itself once a replacement dongle is published there:
+http://192.168.3.244:8080/publish?d=<new serial>&port=1235
+(SDR_DONGLE_GAIN keys by host:port, so the gain map needs no
+change). The satellite dongle (:1234) was republished right
+after the solo test and reconnected cleanly at 16:11:29 UTC.
