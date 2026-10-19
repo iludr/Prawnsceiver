@@ -239,7 +239,7 @@ async function loadDongles() {
         elements.instruction.className = data.status === 'converged' ? 'good' :
             (data.retry_only ? 'bad' : '');
         elements.measure.disabled = !active || data.status === 'measuring';
-        elements.report-form.classList.toggle('hidden', !active ||
+        elements['report-form'].classList.toggle('hidden', !active ||
             data.status === 'measuring' || data.status === 'converged' || data.retry_only);
         elements.measure.classList.toggle('hidden', !active || data.status === 'converged');
         elements.stop.disabled = !active;
