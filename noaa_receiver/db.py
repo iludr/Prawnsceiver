@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS adsb_aircrafts (
 CREATE TABLE IF NOT EXISTS tuner_sessions (
     id INTEGER PRIMARY KEY,
     dongle TEXT NOT NULL, service TEXT NOT NULL, antenna TEXT NOT NULL,
+    wave_factor REAL NOT NULL DEFAULT 0.25,
     started REAL NOT NULL, ended REAL,
     target_hz INTEGER, nominal_cm REAL, initial_length_cm REAL,
     converged_length_cm REAL, best_dbfs REAL, restore_json TEXT);

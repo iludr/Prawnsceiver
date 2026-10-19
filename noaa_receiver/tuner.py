@@ -589,8 +589,9 @@ def start_session(did, service, antenna, wave_factor="0.25"):
                 cur.execute("INSERT INTO tuner_sessions"
                             " (dongle, service, antenna, wave_factor, started, target_hz,"
                             " nominal_cm, initial_length_cm, restore_json)"
-                            " VALUES (?,?,?,?,?,?,?,?)",
-                            (did, service, antenna, session["started"], target,
+                            " VALUES (?,?,?,?,?,?,?,?,?)",
+                            (did, service, antenna, session["wave_factor"],
+                             session["started"], target,
                              session["nominal_cm"], session["initial_length_cm"],
                              json.dumps(previous, separators=(",", ":"))))
                 session["id"] = cur.lastrowid
