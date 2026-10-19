@@ -250,7 +250,7 @@ function planeIcon(a) {
     const shape = '<svg width="22" height="22" viewBox="0 0 24 24">'
         + '<path d="M12 1 L14 9 L21 12 L14 14.5 L14 19 L12 23 L10 19 L10 14.5 L3 12 L10 9 Z"'
         + ' fill="' + color + '" stroke="#10131f" stroke-width="0.8"/></svg>';
-    const stale = (Date.now() / 1000 - a.last_seen) > 600;
+    const stale = (Date.now() / 1000 - (heard[a.icao] || 0)) > 600;
     return L.divIcon({
         className: '',
         iconSize: [28, 28],
@@ -322,12 +322,28 @@ function updateMap(aircraft) {
         if (a.lat === undefined || a.lat === null || a.lon === undefined || a.lon === null) { noPos++; continue; }
         seen.add(String(a.icao));
         onMap++;
-        // Remember the real fix — the dead-reckoning timer below
-        // projects each marker forward from it between fixes
-        lastFix[a.icao] = { ts: a.last_seen, lat: a.lat, lon: a.lon,
-                            speed_kt: a.speed_kt, track_deg: a.track_deg,
-                            onground: a.onground, ac: a };
-        const age = Math.max(0, Math.round(now - a.last_seen));
+        // CLOCK-SKEW IMMUNITY: every 'how long ago' on this page is
+        // measured from the moment a row ARRIVES here (local clock),
+        // never by comparing the browser clock to server timestamps —
+        // a skewed PC clock made the dead-reckoning project planes
+        // skew-seconds ahead of their fix every 5 s tick and the
+        // next status push snap them back: planes jumping back and
+        // forth (2026-10-19).
+        heard[a.icao] = now;
+        const fixId = (a.last_pos_seen !== undefined && a.last_pos_seen !== null)
+            ? a.last_pos_seen : (a.lat + ':' + a.lon);
+        let f = lastFix[a.icao];
+        if (!f || f.fixId !== fixId) {
+            // a new real fix — stamp its local arrival; the
+            // dead-reckoning timer below projects from here
+            f = lastFix[a.icao] = { fixId: fixId, ts: now,
+                                   lat: a.lat, lon: a.lon,
+                                   speed_kt: a.speed_kt, track_deg: a.track_deg,
+                                   onground: a.onground, ac: a };
+        } else {
+            f.ac = a;    // fresher row (callsign etc) for the popup
+        }
+        const age = Math.max(0, Math.round(now - (heard[a.icao] || now)));
         if (age > 600) staleCount++;
         let m = markers[a.icao];
         if (!m) {
@@ -340,7 +356,7 @@ function updateMap(aircraft) {
         m.setPopupContent(planePopup(a, age));
     }
     for (const k of Object.keys(markers)) {
-        if (!seen.has(k)) { map.removeLayer(markers[k]); delete markers[k]; delete lastFix[k]; }
+        if (!seen.has(k)) { map.removeLayer(markers[k]); delete markers[k]; delete lastFix[k]; delete heard[k]; }
     }
     if (onMap && !fitted) fitted = true, fitAircraft();
     mapStats = { onMap: onMap, stale: staleCount, noPos: noPos };
@@ -357,6 +373,7 @@ function updateMap(aircraft) {
 const EXTRAP_MS = 5000;        // advance the markers every 5 s
 const EXTRAP_MAX_SECS = 120;   // never project further than this
 const lastFix = {};            // icao -> last real fix + the aircraft row
+const heard = {};              // icao -> local arrival time of its last push
 
 function projectedLatLng(f, nowSec) {
     const dt = Math.min(Math.max(0, nowSec - f.ts), EXTRAP_MAX_SECS);
@@ -378,7 +395,7 @@ function advanceMarkers() {
         const p = projectedLatLng(f, now);
         markers[icao].setLatLng(p);
         if (f.ac) {   // keep the popup on the projected position too
-            const age = Math.max(0, Math.round(now - f.ac.last_seen));
+            const age = Math.max(0, Math.round(now - (heard[icao] || now)));
             const pa = Object.assign({}, f.ac, { lat: p[0], lon: p[1] });
             markers[icao].setPopupContent(planePopup(pa, age));
         }

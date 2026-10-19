@@ -1946,3 +1946,23 @@ episode) — the reconnect churn was dropping decode time on a
 flaky-but-working dongle. The watchdog reconnects only when the
 rate is wrong AND no frame decoded in the last 15 s — the wedged
 state that never heals by itself.
+
+### 2026-10-19 ~16:50 UTC — 🗺️ ADS-B map yo-yo: dead-reckoning trusted the browser clock
+
+Operator report: planes on the ADS-B map "jump back and forth".
+The server positions were clean (log and live table both monotonic
+within aircraft-speed plausibility; the only outliers were 4 one-off
+~6 km receiver-seeded first fixes in 44 aircraft, corrected by the
+next CPR pair). The yo-yo was the MAP: the dead-reckoning glide
+computed dt = Date.now() (browser) - last_seen (server) — with a
+skewed PC clock every plane was projected skew-seconds ahead of its
+fix on each 5 s advanceMarkers tick and snapped back by the next
+status push. At 470 kt, 30 s of skew = 3.5 km jumps, forever.
+
+Fix (adsb.js): all 'how long ago' math now uses LOCAL ARRIVAL time —
+updateMap stamps each aircraft's push arrival (heard[]) and each
+real fix's arrival (lastFix.ts, keyed by last_pos_seen so the glide
+restarts only on a genuinely new fix); the projection, the stale
+class and the popup ages never compare the browser clock to server
+timestamps. Timestamp displays still show server clock time as an
+absolute label.
