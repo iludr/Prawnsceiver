@@ -15,31 +15,31 @@ recalibrating a dongle (or plugging in a new one) never touches config.py.
 # Primary dongle: the id whose dongle feeds live audio and WAV recording.
 # If it is not registered at startup, the first added non-AIS dongle
 # becomes primary.
-# Dongle host since 2026-10-17: 192.168.3.244 (the station's persisted
+# Dongle host since 2026-10-17: 192.168.3.245 (the station's persisted
 # dongles table wins at runtime either way - these are the static
 # fallbacks, re-keyed per this module's own NOTE whenever the host IP
 # changes). :1234 = satellite R820T, :1235 = R820T in the ADS-B role
 # (physically the old Pi-era generic R820T, serial 77771111153705700 -
 # its -79.6 ppm crystal error re-measured at -83.4 ppm on 2026-10-17),
 # :1236 = AIS FC0012 (not currently published by the manager).
-PRIMARY_DONGLE = "192.168.3.244:1234"
+PRIMARY_DONGLE = "192.168.3.245:1234"
 
 # AIS dongle: id of a dongle dedicated to ship-traffic reception
 # (161.975/162.025 MHz, Danube vessels -- see noaa_receiver/ais.py). AIS
 # needs a continuously listening receiver, so a dongle pinned here is
 # excluded from satellite tracking and never becomes the primary.
-# The FC0012's expected rtl_tcp id on the current host (192.168.3.244:1236
+# The FC0012's expected rtl_tcp id on the current host (192.168.3.245:1236
 # per the gain table below); persisted role flags win over this pin.
 # None = off.
-AIS_DONGLE = "192.168.3.244:1236"
+AIS_DONGLE = "192.168.3.245:1236"
 
 # Dongles registered at startup when no persisted list exists yet (the
 # dashboard's "Add dongle" persists runtime additions in station.db's
 # dongles table; that table then wins over this default). One (host,
 # port) per rtl_tcp server published by the prawntenna manager.
 DEFAULT_DONGLES = [
-    ("192.168.3.244", 1234),   # satellite R820T (primary)
-    ("192.168.3.244", 1235),   # R820T (ADS-B)
+    ("192.168.3.245", 1234),   # satellite R820T (primary)
+    ("192.168.3.245", 1235),   # R820T (ADS-B)
 ]
 
 
@@ -69,7 +69,7 @@ AIRBAND = (117_975_000, 136_975_000)
 # raster) and FM broadcast 99.6 MHz. Correction = peak position + 60
 # kHz (the offset tune puts a 0-error dongle's carrier at -60 kHz).
 SDR_DONGLE_CORRECTIONS = {
-    # Satellite R820T on 192.168.3.244:1234, measured 2026-10-17 with
+    # Satellite R820T on 192.168.3.245:1234, measured 2026-10-17 with
     # the method above:
     #   153.1125 MHz DMR carrier: -59655.8 Hz twice (8 min apart,
     #     identical) -> +344 Hz = +2.25 ppm
@@ -85,7 +85,7 @@ SDR_DONGLE_CORRECTIONS = {
     # 137.9000 alternate channel entry) - NOT this dongle. The decode's
     # own measurement handles any transmitter offset; this correction
     # only covers the (tiny) dongle error.
-    "192.168.3.244:1234": {
+    "192.168.3.245:1234": {
         "freqs": {
             137912500: 300,    # LRPT band (2.2 ppm scaled from the 153.1125 fit)
             437550000: 980,    # ISS (Zarya) (SSTV FM: kHz-scale tolerance)
@@ -93,7 +93,7 @@ SDR_DONGLE_CORRECTIONS = {
         "fm_band": 51,          # measured at 99.6 MHz
         "ppm": 2,
     },
-    # R820T on 192.168.3.244:1235 (ADS-B role) - physically the old
+    # R820T on 192.168.3.245:1235 (ADS-B role) - physically the old
     # Pi-era generic R820T (serial 77771111153705700), whose -79.6 ppm
     # crystal error re-measured 2026-10-17 as:
     #   153.1125 MHz DMR carrier: -72766 Hz -> -12766 Hz = -83.4 ppm
@@ -104,13 +104,13 @@ SDR_DONGLE_CORRECTIONS = {
     # full-capture-band preamble scan tolerated at correction 0 - with
     # the correction the squitters land at baseband center after the
     # offset rotation, like every other role.
-    "192.168.3.244:1235": {
+    "192.168.3.245:1235": {
         "freqs": {
             1090000000: -90900,  # ADS-B center (-83.4 ppm x 1090 MHz)
         },
         "ppm": -83,
     },
-    # FC0012 (AIS) expected on 192.168.3.244:1236 - NOT measured yet
+    # FC0012 (AIS) expected on 192.168.3.245:1236 - NOT measured yet
     # (the manager is not currently publishing it). Measure with the
     # method above (park on 153.1125, record, fit) before trusting AIS
     # channel centering on this dongle; until then it stays
@@ -176,7 +176,7 @@ SDR_DONGLE_CORRECTIONS = {
 # through the table at the ROLE frequency (satellite 137.9725 / ADS-B
 # 1090.06 / AIS 162.06 MHz), 6 s IQ grab per step: IQ rms (ADC drive,
 # u8 units), time-domain max (clipping) and the strongest 512-bin FFT
-# peak in dBFS. Findings, all three dongles on 192.168.3.244:
+# peak in dBFS. Findings, all three dongles on 192.168.3.245:
 #   - daemon-default AGC on BOTH R820Ts clips (time max = 127.5): the
 #     satellite dongle pumps to rms 28 u8 against a recurring strong
 #     carrier in the 136.8-139.2 MHz span (peak bin -7.7 dBFS at 49.4 dB
@@ -197,13 +197,13 @@ SDR_DONGLE_CORRECTIONS = {
 #     to only rms 1.5-1.6 u8 (its daemon default sat at 0.71 = ~1 bit
 #     of noise). Deaf tuner, but max gain + a stable floor is all it
 #     has; AIS frames are strong (river ships are close).
-# NOTE: keys are the CURRENT rtl_tcp addresses on 192.168.3.244 - when
+# NOTE: keys are the CURRENT rtl_tcp addresses on 192.168.3.245 - when
 # the dongle host's IP changes (WiFi/wired), the persisted dongles
 # table AND these entries must be re-keyed.
 SDR_DONGLE_GAIN = {
-    "192.168.3.244:1234": 43.9,   # satellite (R820T): knee-free, clip-free
-    "192.168.3.244:1235": 49.4,   # ADS-B (R820T): max drive, no clipping
-    "192.168.3.244:1236": 21.6,   # AIS (FC0012): tuner maximum
+    "192.168.3.245:1234": 43.9,   # satellite (R820T): knee-free, clip-free
+    "192.168.3.245:1235": 49.4,   # ADS-B (R820T): max drive, no clipping
+    "192.168.3.245:1236": 21.6,   # AIS (FC0012): tuner maximum
 }
 
 def correction_info(freq_hz, dongle=None):
