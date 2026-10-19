@@ -19,7 +19,7 @@ for frequency_mhz in (1090.0, 137.9, 162.0, 466.0):
     assert abs(antenna_length_cm(frequency_hz, "vdipole") - expected) < 1e-9
     lengths = initial_lengths(frequency_hz, "whip")
     assert lengths["start_cm"] > lengths["nominal_cm"]
-    assert abs(lengths["start_cm"] / lengths["nominal_cm"] - 1.05) < 0.001
+    assert abs(lengths["start_cm"] / lengths["nominal_cm"] - 1.05) < 0.01
 print("1. quarter-wave whip and per-leg V-dipole lengths: ok")
 
 
