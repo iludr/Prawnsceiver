@@ -96,7 +96,6 @@
             select.title = 'For V-Dipole: 0.25 = half-wave total (legs λ/4 each), 0.5 = full-wave total (legs λ/2 each), 1.0 = two wavelength total (legs λ each)';
         }
         updateRecommendation();
-        updateWaveFactorChoices();
     }
 
 async function loadDongles() {
