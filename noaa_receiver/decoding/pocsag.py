@@ -483,6 +483,7 @@ class BandDecoder:
             p["ts"] = round(now, 2)
             p["time"] = datetime.now().strftime("%H:%M:%S")
             p["channel_mhz"] = round((self.tuner_hz + st["off_hz"]) / 1e6, 5)
+            p["dongle"] = self.did
             out.append(p)
         for k in [k for k, t in self.seen.items()
                   if now - t > _PAGE_DEDUPE_SECS * 2]:

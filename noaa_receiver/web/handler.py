@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .. import db
 from .. import state
+from .. import tuner
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
 
@@ -18,7 +19,7 @@ from ..decoding.decode import decode_recording, forget_decode_marker
 from .history import (_load_history, get_recordings, quality_map,
                         recording_path, set_recording_quality)
 from .pages import (ADSB_HTML, AIS_HTML, APRS_HTML, CONSOLE_HTML,
-                    HISTORY_HTML, ORBCOMM_HTML, POCSAG_HTML)
+                    HISTORY_HTML, ORBCOMM_HTML, POCSAG_HTML, TUNER_HTML)
 from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
@@ -548,6 +549,10 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/adsb.json':
             # ADS-B: live aircraft table + receiver stats + raw frames
             self._send_json(adsb.adsb_status(), code=200)
+        elif self.path.startswith('/tuner.json'):
+            query = self._query()
+            dev = (query.get('d') or [''])[0]
+            self._send_json(tuner.tuner_snapshot(dev), code=200)
         elif self.path == '/adsb_aircrafts.json':
             # ADS-B: aircraft heard in the last 24 h (persistent
             # registry restored from the adsb_aircrafts table)
@@ -629,6 +634,11 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(POCSAG_HTML.encode())
+        elif self.path == '/tuner' or self.path == '/tuner.html':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(TUNER_HTML.encode())
         elif self.path == '/adsb' or self.path == '/adsb.html':
             # ADS-B page: live aircraft map + aircraft table + frame log
             self.send_response(200)
@@ -1455,7 +1465,31 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         """Upload a station backup archive: /restore with the raw zip
         as the request body (the dashboard posts the chosen file)."""
-        if self.path.split('?')[0] != '/restore':
+        endpoint = self.path.split('?')[0]
+        query = self._query()
+        if endpoint == '/tuner_start':
+            payload, code = tuner.start_session(
+                (query.get('d') or [''])[0],
+                (query.get('service') or [''])[0],
+                (query.get('antenna') or [''])[0])
+            self._send_json(payload, code=code)
+            return
+        if endpoint == '/tuner_point':
+            payload, code = tuner.report_length(
+                (query.get('d') or [''])[0],
+                (query.get('length_cm') or [''])[0],
+                (query.get('note') or [''])[0])
+            self._send_json(payload, code=code)
+            return
+        if endpoint == '/tuner_measure':
+            payload, code = tuner.measure_again((query.get('d') or [''])[0])
+            self._send_json(payload, code=code)
+            return
+        if endpoint == '/tuner_stop':
+            payload, code = tuner.stop_session((query.get('d') or [''])[0])
+            self._send_json(payload, code=code)
+            return
+        if endpoint != '/restore':
             self.send_response(404)
             self.end_headers()
             return

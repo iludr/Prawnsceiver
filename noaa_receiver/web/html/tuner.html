@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prawntuner — Antenna Length Tuning</title>
+<style>
+:root {
+    --bg: #101a2a;
+    --band: #16213e;
+    --line: #0f3460;
+    --blue: #4da6ff;
+    --green: #53d769;
+    --amber: #f0a84a;
+    --ink: #e0e0e0;
+    --muted: #8996aa;
+    --red: #e07890;
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0 15px 24px; background: var(--bg); color: var(--ink); font: 15px/1.45 monospace; }
+#header { margin: 0 -15px 18px; }
+#header h1 { color: var(--green); font-size: 1.2rem; }
+.lede { max-width: 900px; color: #c1ccdc; margin: 0 0 18px; }
+main { max-width: 1080px; margin: 0 auto; }
+.step { border-top: 1px solid var(--line); padding: 16px 0 18px; }
+h2 { margin: 0 0 11px; font-size: 1rem; color: var(--blue); font-weight: normal; }
+.controls { display: grid; grid-template-columns: repeat(3, minmax(190px, 1fr)); gap: 12px; }
+label.field { display: grid; gap: 5px; color: var(--muted); }
+select, input[type="number"], input[type="text"] {
+    width: 100%; min-height: 38px; border: 1px solid #315477; border-radius: 3px;
+    padding: 7px 9px; color: var(--ink); background: #111d30; font: inherit;
+}
+select:focus, input:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+.antenna-options { display: flex; gap: 8px; flex-wrap: wrap; }
+.antenna-options label { border: 1px solid #315477; border-radius: 3px; padding: 8px 12px; color: var(--ink); cursor: pointer; }
+.antenna-options label:has(input:checked) { color: var(--blue); border-color: var(--blue); background: #142b47; }
+.antenna-options input { accent-color: var(--blue); }
+.geometry { color: var(--muted); margin: 8px 0 0; }
+.readout { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.length { font-size: 2rem; color: var(--green); font-weight: bold; }
+.secondary { color: var(--muted); }
+.notice { color: var(--amber); margin-top: 8px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+button { min-height: 38px; padding: 7px 12px; border: 1px solid var(--blue); border-radius: 3px; background: #15375b; color: var(--ink); font: inherit; cursor: pointer; }
+button:hover:not(:disabled) { background: #1b4a76; }
+button.primary { border-color: var(--green); background: #183d35; }
+button.danger { border-color: var(--red); color: #f0a1b3; background: #342333; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+#instruction { margin: 8px 0 14px; padding: 14px 16px; border-left: 4px solid var(--amber); background: linear-gradient(100deg, #1c2c3d, #142033 75%); color: #ffd08a; font-size: 1.2rem; font-weight: bold; }
+#instruction.good { color: var(--green); border-color: var(--green); }
+#instruction.bad { color: var(--red); border-color: var(--red); }
+#session-state, #feedback { color: var(--muted); min-height: 1.5em; }
+.form-row { display: grid; grid-template-columns: minmax(160px, 240px) minmax(200px, 1fr) auto; gap: 8px; align-items: end; max-width: 850px; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+th { text-align: left; color: var(--muted); border-bottom: 1px solid var(--line); padding: 7px 8px; white-space: nowrap; }
+td { padding: 7px 8px; border-bottom: 1px solid #202e42; white-space: nowrap; }
+tr:hover td { background: #15243a; }
+td.invalid { color: var(--red); }
+td.valid { color: var(--green); }
+#plot { display: block; width: 100%; height: 180px; border: 1px solid #223b56; background: #0d1726; }
+#converged { display: none; margin-top: 12px; padding: 12px 0; border-top: 1px solid var(--green); color: var(--green); }
+#converged strong { font-size: 1.4rem; }
+.small { font-size: .85rem; color: var(--muted); }
+.hidden { display: none !important; }
+@media (max-width: 680px) {
+    .controls { grid-template-columns: 1fr; }
+    .form-row { grid-template-columns: 1fr; }
+    .length { font-size: 1.7rem; }
+    #header .head-right { display: none; }
+}
+</style>
+</head>
+<body>
+<div id="header">
+    <div class="head-left">
+        <img class="logo" src="prawnceiver.jpg" alt="Prawnsceiver">
+        <div>
+            <h1>🦀 Prawntuner — tune your feelers</h1>
+            <div class="info">Antenna length tuning by live receive measurements</div>
+        </div>
+    </div>
+    <div class="head-right"><a href="tuner.json">live status (JSON)</a></div>
+</div>
+<main>
+    <p class="lede">An RTL-SDR cannot measure SWR; Prawntuner tunes for best received signal and decode rate on the selected service.</p>
+
+    <section class="step" aria-labelledby="choose-title">
+        <h2 id="choose-title">1 · Choose your receiver</h2>
+        <div class="controls">
+            <label class="field" for="dongle">Dongle
+                <select id="dongle"><option value="">Loading registered dongles…</option></select>
+            </label>
+            <label class="field" for="service">Service
+                <select id="service">
+                    <option value="adsb">✈️ ADS-B · 1090 MHz</option>
+                    <option value="ais">🚢 AIS · 162.000 MHz</option>
+                    <option value="orbcomm">🛰 Orbcomm · 137.500 MHz</option>
+                    <option value="aprs">📡 APRS · 144.800 MHz</option>
+                    <option value="pocsag">📟 POCSAG · 466.000 MHz</option>
+                    <option value="satellite">🛰 Satellites (LRPT) · live pass</option>
+                </select>
+            </label>
+            <div>
+                <div class="field">Antenna type</div>
+                <div class="antenna-options">
+                    <label><input type="radio" name="antenna" value="whip" checked> Whip</label>
+                    <label><input type="radio" name="antenna" value="vdipole"> V-Dipole</label>
+                </div>
+            </div>
+        </div>
+        <p id="geometry" class="geometry"></p>
+        <div id="initial" class="step hidden" aria-live="polite">
+            <h2>🦀 Initial antenna length</h2>
+            <div class="readout"><span id="initial-cm" class="length">-- cm</span><span id="initial-mm" class="secondary">-- mm</span></div>
+            <div id="nominal" class="small"></div>
+            <p class="notice">Start about 5% long. Wire can be trimmed shorter; adding length later is a crabby business.</p>
+        </div>
+        <div class="actions">
+            <button id="start" class="primary" type="button" disabled>🦀 Start tuning session</button>
+        </div>
+    </section>
+
+    <section id="session" class="step hidden" aria-labelledby="session-title">
+        <h2 id="session-title">2 · Tune your feelers</h2>
+        <div id="session-state" aria-live="polite"></div>
+        <div id="instruction" aria-live="assertive">🦀 Waiting for a measurement.</div>
+        <div class="actions">
+            <button id="measure" type="button">📶 Measure again</button>
+            <button id="stop" class="danger" type="button">⏹ End session</button>
+        </div>
+        <form id="report-form" class="hidden">
+            <div class="form-row">
+                <label class="field" for="length">Current element length (cm)
+                    <input id="length" type="number" min="0.1" max="1000" step="0.01" required>
+                </label>
+                <label class="field" for="note">Note (optional)
+                    <input id="note" type="text" maxlength="200" placeholder="e.g. trimmed 2 cm">
+                </label>
+                <button class="primary" type="submit">✅ Report length & measure</button>
+            </div>
+            <p id="element-hint" class="small"></p>
+        </form>
+        <div id="feedback" role="status"></div>
+        <div id="converged"><div>🦀 TUNED LENGTH</div><strong id="final-length"></strong><span id="final-note"></span></div>
+    </section>
+
+    <section id="history" class="step hidden" aria-labelledby="history-title">
+        <h2 id="history-title">📊 Measurement history</h2>
+        <canvas id="plot" width="960" height="180" aria-label="Peak dBFS versus antenna length"></canvas>
+        <div class="table-wrap" style="margin-top:12px">
+            <table>
+                <thead><tr><th>Point</th><th>Length</th><th>Peak</th><th>Floor</th><th>Ratio</th><th>Decodes</th><th>Result</th></tr></thead>
+                <tbody id="points"><tr><td colspan="7" class="small">No measurements yet.</td></tr></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+<script src="tuner.js"></script>
+<script src="nav.js"></script>
+</body>
+</html>

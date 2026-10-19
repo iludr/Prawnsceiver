@@ -648,6 +648,7 @@ def handle_frames(payloads, st, now=None):
                 if mice["msg"]:
                     d["comment"] = "[%s] %s" % (mice["msg"], d["comment"])
         entry = _display_entry(d, now)
+        entry["dongle"] = st.get("dongle")
         entry["ts"] = round(now, 2)
         entry["time"] = datetime.now().strftime("%H:%M:%S")
         tlm = parse_telemetry(d["info"])

@@ -544,6 +544,7 @@ def handle_frames(payloads, channel, ch_st):
             entry = build_log_entry(d, channel, sentences, now)
             if ch_st.get("dongle"):
                 entry["dng"] = ch_st["dongle"]
+                entry["dongle"] = ch_st["dongle"]
             reg["recent"].append(entry)
             if len(reg["recent"]) > AIS_RECENT_MSGS:
                 del reg["recent"][:len(reg["recent"]) - AIS_RECENT_MSGS]

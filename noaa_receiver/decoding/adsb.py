@@ -446,11 +446,12 @@ def handle_message(d, demod_st=None):
     if demod_st is not None:
         demod_st["frames"] += 1
         demod_st["last_frame"] = now
-    log_message(_log_entry(d, pos, hexstr, now))
+    log_message(_log_entry(d, pos, hexstr, now,
+                           demod_st.get("dongle") if demod_st else None))
     _maybe_save_aircrafts()
 
 
-def _log_entry(d, pos, hexstr, now=None):
+def _log_entry(d, pos, hexstr, now=None, dongle=None):
     """The jsonl line content for one decoded frame."""
     lat, lon = pos if pos else (None, None)
     e = {
@@ -469,6 +470,8 @@ def _log_entry(d, pos, hexstr, now=None):
         "vs_fpm": d.get("vs_fpm"),
         "onground": d.get("onground"),
     }
+    if dongle:
+        e["dongle"] = dongle
     if hexstr:
         e["hex"] = hexstr
     return e
@@ -910,6 +913,7 @@ def adsb_capture_thread(did):
         state.adsb_dongle = did
         state.adsb_stats = {}
     st = new_demod_state()
+    st["dongle"] = did
     state.log_console(f"✈️ ADS-B receiver on dongle {did}: "
                       f"{ADSB_CENTER_HZ / 1e6:.1f} MHz — decoding Mode S "
                       f"extended squitters")

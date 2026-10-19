@@ -101,6 +101,8 @@ def push_wf_row(entry, c, k, sig_bins):
         / (31.875 * FFT_SIZE)) * 10).astype(np.int16), rot).tobytes()
     rolled = np.roll(magnitude, rot)
     with entry["lock"]:
+        entry["last_mag"] = rolled.astype(np.float32)
+        entry["last_mag_ts"] = time.time()
         entry["signal"] = float(
             magnitude[center - sig_bins:center + sig_bins].mean())
         peak = magnitude.max()
@@ -1235,6 +1237,7 @@ def sdr_capture_thread(did):
                             # recorded-bandwidth fit need true magnitudes;
                             # the waterfall row below is display-scaled
                             entry['last_mag'] = magnitude.astype(np.float32)
+                            entry['last_mag_ts'] = now_ts
                         if primary:
                             with state.signal_lock:
                                 state.signal_strength = band

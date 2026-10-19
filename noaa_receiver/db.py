@@ -116,6 +116,23 @@ CREATE INDEX IF NOT EXISTS adsb_messages_ts ON adsb_messages(ts);
 -- the full aircraft dict is kept as JSON so the page shape is stable
 CREATE TABLE IF NOT EXISTS adsb_aircrafts (
     icao TEXT PRIMARY KEY, data TEXT, updated_ts REAL);
+
+-- Prawntuner receive-antenna sessions and their measured length points
+CREATE TABLE IF NOT EXISTS tuner_sessions (
+    id INTEGER PRIMARY KEY,
+    dongle TEXT NOT NULL, service TEXT NOT NULL, antenna TEXT NOT NULL,
+    started REAL NOT NULL, ended REAL,
+    target_hz INTEGER, nominal_cm REAL, initial_length_cm REAL,
+    converged_length_cm REAL, best_dbfs REAL, restore_json TEXT);
+CREATE INDEX IF NOT EXISTS tuner_sessions_started ON tuner_sessions(started);
+CREATE TABLE IF NOT EXISTS tuner_points (
+    id INTEGER PRIMARY KEY,
+    session_id INTEGER NOT NULL, ts REAL NOT NULL, length_cm REAL NOT NULL,
+    peak_dbfs REAL, floor_dbfs REAL, ratio REAL, decodes INTEGER,
+    valid INTEGER NOT NULL, note TEXT,
+    FOREIGN KEY(session_id) REFERENCES tuner_sessions(id));
+CREATE INDEX IF NOT EXISTS tuner_points_session_ts
+    ON tuner_points(session_id, ts);
 """
 
 
