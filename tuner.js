@@ -144,7 +144,6 @@ async function loadDongles() {
         elements.start.disabled = active || available.length === 0;
         updateRecommendation();
         document.getElementById('wave-factor').addEventListener('change', updateRecommendation);
-    document.querySelectorAll('input[name="antenna"]').forEach{r => r.addEventListener('change', updateRecommendation)};
     }
 
     function setFeedback(message, isError) {
@@ -331,9 +330,6 @@ async function loadDongles() {
         navigator.sendBeacon(stopUrl, new Blob([], { type: 'text/plain' }));
     });
 
-    updateRecommendation();
-        document.getElementById('wave-factor').addEventListener('change', updateRecommendation);
-    document.querySelectorAll('input[name="antenna"]').forEach{r => r.addEventListener('change', updateRecommendation)};
     loadDongles().catch(error => setFeedback(error.message, true));
     window.setInterval(poll, 1000);
 })();
