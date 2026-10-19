@@ -815,7 +815,7 @@ def decode_batch(mag, st):
     st["floor"] = floor if st["floor"] is None \
         else 0.85 * st["floor"] + 0.15 * floor
     hi = 2.0 * max(st["floor"], 1e-9)
-    lo = hi
+    lo = 1.5 * max(st["floor"], 1e-9)
     out = []
     last_end = st["last_end_abs"]           # absolute skip mark
     n = len(x)
