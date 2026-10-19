@@ -107,6 +107,13 @@ td.valid { color: var(--green); }
                     <label><input type="radio" name="antenna" value="whip" checked> Whip</label>
                     <label><input type="radio" name="antenna" value="vdipole"> V-Dipole</label>
                 </div>
+                <label class="field" for="wave-factor">Electrical wave factor
+                    <select id="wave-factor">
+                        <option value="0.25"">¼-wave (λ/4)</option>
+                        <option value="0.5" >½-wave (λ/2)</option>
+                        <option value="1.0">Full wave (λ)</option>
+                    </select>
+                </label>
             </div>
         </div>
         <p id="geometry" class="geometry"></p>

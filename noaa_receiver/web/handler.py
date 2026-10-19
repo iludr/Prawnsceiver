@@ -1471,7 +1471,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             payload, code = tuner.start_session(
                 (query.get('d') or [''])[0],
                 (query.get('service') or [''])[0],
-                (query.get('antenna') or [''])[0])
+                (query.get('antenna') or [''])[0],
+                (query.get('wave_factor') or ['0.25'])[0])
             self._send_json(payload, code=code)
             return
         if endpoint == '/tuner_point':

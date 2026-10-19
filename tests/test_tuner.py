@@ -12,14 +12,20 @@ from noaa_receiver.tuner import (apply_measurement, antenna_length_cm,
                                  role_restore_plan)
 
 
-for frequency_mhz in (1090.0, 137.9, 162.0, 466.0):
-    frequency_hz = frequency_mhz * 1e6
-    expected = 7125.0 / frequency_mhz
-    assert abs(antenna_length_cm(frequency_hz, "whip") - expected) < 1e-9
-    assert abs(antenna_length_cm(frequency_hz, "vdipole") - expected) < 1e-9
-    lengths = initial_lengths(frequency_hz, "whip")
-    assert lengths["start_cm"] > lengths["nominal_cm"]
-    assert abs(lengths["start_cm"] / lengths["nominal_cm"] - 1.05) < 0.01
+# quarter-wave = 0.25: length is lambda / 4
+# half-wave   = 0.50: length is lambda / 2
+# full-wave   = 1.00: length is lambda
+for wave_factor in (0.25, 0.5, 1.0):
+    for frequency_mhz in (1090.0, 137.9, 162.0, 466.0):
+        frequency_hz = frequency_mhz * 1e6
+        expected = round(28500.0 * wave_factor / frequency_mhz, 2)
+        actual = antenna_length_cm(frequency_hz, "whip", wave_factor)
+        assert abs(actual - expected) < 1e-9, f"wave {wave_factor} freq {frequency_mhz}: got {actual} expected {expected}"
+        lengths = initial_lengths(frequency_hz, "whip", wave_factor)
+        assert lengths["nominal_cm"] == expected
+        assert lengths["start_cm"] > lengths["nominal_cm"]
+        assert abs(lengths["start_cm"] / lengths["nominal_cm"] - 1.05) < 0.01
+print("1. quarter/half/full wave whip and per-leg V-dipole lengths: ok")
 print("1. quarter-wave whip and per-leg V-dipole lengths: ok")
 
 

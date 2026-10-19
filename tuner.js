@@ -19,23 +19,42 @@
         return document.querySelector('input[name="antenna"]:checked').value;
     }
 
+    function selectedWaveFactor() {
+        return parseFloat(document.getElementById('wave-factor').value);
+    }
+
     function lengthRecommendation() {
         const frequency = FREQUENCIES[elements.service.value];
-        const nominal = 7125 / frequency;
-        return { nominal, start: nominal * 1.05 };
+        const antenna = selectedAntenna();
+        const waveFactor = selectedWaveFactor();
+        const nominal = 28500 * waveFactor / frequency;
+        return { nominal, start: nominal * 1.05, waveFactor };
     }
 
     function updateRecommendation() {
         const antenna = selectedAntenna();
+        const wf = selectedWaveFactor();
         const result = lengthRecommendation();
         elements.initial.classList.remove('hidden');
         elements['initial-cm'].textContent = result.start.toFixed(2) + ' cm';
         elements['initial-mm'].textContent = (result.start * 10).toFixed(1) + ' mm';
-        elements.nominal.textContent = 'Quarter-wave nominal: ' + result.nominal.toFixed(2) + ' cm' +
-            (antenna === 'vdipole' ? ' per leg (' + (result.start * 2).toFixed(2) + ' cm total starting wire).' : '.');
-        elements.geometry.textContent = antenna === 'whip'
-            ? 'Quarter-wave whip. Provide a counterpoise or conductive ground plane.'
-            : 'Two equal quarter-wave legs, apex at the feed point, opened about 120° apart and drooping.';
+        let nominalText = '';
+        if (antenna === 'whip') {
+            nominalText = 'Electrical length: wave_factor=' + wf + ' &lambda; (Element length)';
+        } else {
+            nominalText = 'Electrical length: wave_factor=' + wf + ' &lambda; (Each leg length)';
+        }
+        elements.nominal.textContent = nominalText + ': ' + result.nominal.toFixed(2) + ' cm';
+        if (antenna === 'whip') {
+            elements.geometry.textContent = (wf === 0.25 ? 'Quarter' : wf === 0.5 ? 'Half' : 'Full') + '-wave whip. Provide a ground plane.';
+        } else {
+            const totalLen = (result.nominal * 2).toFixed(2);
+            elements.nominal.textContent += ' (Total ~' + totalLen + ' cm for both legs)';
+            elements.geometry.textContent = (wf === 0.25 ? 'V-Dipole with half-wave total length' :
+                                          wf === 0.5 ? 'V-Dipole with full-wave total length' :
+                                          'V-Dipole with 2 &lambda; total length') +
+                ': two equal legs opened ~120° apart, drooping.';
+        }
     }
 
     function makeUrl(path, params) {
@@ -63,7 +82,24 @@
         return dongle.manual_frequency_mhz == null ? 'satellite' : 'manual';
     }
 
-    async function loadDongles() {
+    
+    function updateWaveFactorChoices() {
+        const antenna = selectedAntenna();
+        const select = document.getElementById('wave-factor');
+        Array.from(select.options).forEach(opt => { opt.disabled = false; });
+        if (antenna === 'whip') {
+            // Whip is always quarter-wave monopole
+            Array.from(select.options).forEach(opt => { opt.disabled = opt.value !== '0.25'; });
+            if (select.value !== '0.25') select.value = '0.25';
+            select.title = 'Whip is a quarter-wave monopole; wave factor fixed to 0.25';
+        } else {
+            select.title = 'For V-Dipole: 0.25 = half-wave total (legs λ/4 each), 0.5 = full-wave total (legs λ/2 each), 1.0 = two wavelength total (legs λ each)';
+        }
+        updateRecommendation();
+        updateWaveFactorChoices();
+    }
+
+async function loadDongles() {
         const donglesUrl = 'dongles.json';
         const response = await fetch(donglesUrl);
         if (!response.ok) throw new Error('Could not load registered dongles');
@@ -108,6 +144,8 @@
         }
         elements.start.disabled = active || available.length === 0;
         updateRecommendation();
+        document.getElementById('wave-factor').addEventListener('change', updateRecommendation);
+    document.querySelectorAll('input[name="antenna"]').forEach{r => r.addEventListener('change', updateRecommendation)};
     }
 
     function setFeedback(message, isError) {
@@ -243,7 +281,8 @@
         try {
             const data = await requestJson('tuner_start', {
                 d: elements.dongle.value, service: elements.service.value,
-                antenna: selectedAntenna()
+                antenna: selectedAntenna(),
+                wave_factor: selectedWaveFactor()
             }, { method: 'POST' });
             render(data);
         } catch (error) {
@@ -294,6 +333,8 @@
     });
 
     updateRecommendation();
+        document.getElementById('wave-factor').addEventListener('change', updateRecommendation);
+    document.querySelectorAll('input[name="antenna"]').forEach{r => r.addEventListener('change', updateRecommendation)};
     loadDongles().catch(error => setFeedback(error.message, true));
     window.setInterval(poll, 1000);
 })();

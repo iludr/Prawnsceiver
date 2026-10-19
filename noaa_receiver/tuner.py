@@ -53,19 +53,32 @@ _latest = {}
 _watchdog = None
 
 
-def antenna_length_cm(frequency_hz, antenna):
-    """Quarter-wave receive element in cm, with a 0.95 velocity factor."""
+def antenna_length_cm(frequency_hz, antenna, wave_factor=0.25):
+    """Element/leg length in cm = wave_factor * wavelength * 0.95 VC.
+    Wavelength_cm = 30000 / f_MHz (speed of light = 3e10 cm/s).
+    For whip (monopole): use wave_factor=0.25 (quarter-wave monopole).
+    For V-dipole legs: wave_factor=0.25 (half-wave dipole - each leg is lambda/4),
+    wave_factor=0.5 (full-wave total length - each leg lambda/2),
+    wave_factor=1.0 (each leg lambda).
+    VC 0.95 implicit: lambda_cm = 28500 / f_MHz.
+    """
     if antenna not in ("whip", "vdipole"):
         raise ValueError("Antenna must be whip or vdipole")
     if float(frequency_hz) <= 0:
         raise ValueError("Frequency must be positive")
-    return 7125.0 / (float(frequency_hz) / 1e6)
+    if wave_factor not in (0.25, 0.5, 1.0):
+        raise ValueError("wave_factor must be 0.25, 0.5, or 1.0")
+    f_mhz = float(frequency_hz) / 1e6
+    return round(28500.0 * wave_factor / f_mhz, 2)
 
 
-def initial_lengths(frequency_hz, antenna):
-    """Return nominal and 5%-long starting element lengths in cm."""
-    nominal = antenna_length_cm(frequency_hz, antenna)
-    return {"nominal_cm": round(nominal, 2),
+def initial_lengths(frequency_hz, antenna, wave_factor=0.25):
+    """Return nominal and 5%-long starting element/leg lengths in cm.
+    For whip: wave_factor must be 0.25.
+    For V-dipole: recommended wave_factor 0.25, 0.5 or 1.0.
+    """
+    nominal = antenna_length_cm(frequency_hz, antenna, wave_factor)
+    return {"nominal_cm": nominal,
             "start_cm": round(nominal * 1.05, 2)}
 
 
@@ -430,6 +443,7 @@ def _snapshot(session):
         "status": session["status"], "session": session["id"],
         "dongle": session["dongle"], "service": session["service"],
         "antenna": session["antenna"], "target_hz": session["target_hz"],
+        "wave_factor": session.get("wave_factor", 0.25),
         "nominal_cm": session["nominal_cm"],
         "initial_length_cm": session["initial_length_cm"],
         "length_cm": session["length_cm"],
@@ -484,7 +498,7 @@ def _watch_sessions():
             stop_session(did, reason="inactive")
 
 
-def start_session(did, service, antenna):
+def start_session(did, service, antenna, wave_factor="0.25"):
     """Claim one free dongle, park it and begin its first measurement."""
     did = str(did or "").strip()
     if service not in SERVICES:
@@ -526,9 +540,10 @@ def start_session(did, service, antenna):
         return {"success": False,
                 "error": "Switch APRS to the 144.800 MHz simplex channel first"}, 409
 
-    lengths = initial_lengths(target, antenna)
+    lengths = initial_lengths(target, antenna, float(wave_factor))
     session = {
         "id": None, "dongle": did, "service": service, "antenna": antenna,
+        "wave_factor": float(wave_factor),
         "target_hz": int(target), "nominal_cm": lengths["nominal_cm"],
         "initial_length_cm": lengths["start_cm"],
         "length_cm": lengths["start_cm"], "step_cm": 2.0,
@@ -557,7 +572,7 @@ def start_session(did, service, antenna):
                 _set_manual_frequency(did, target)
             with db.write() as cur:
                 cur.execute("INSERT INTO tuner_sessions"
-                            " (dongle, service, antenna, started, target_hz,"
+                            " (dongle, service, antenna, wave_factor, started, target_hz,"
                             " nominal_cm, initial_length_cm, restore_json)"
                             " VALUES (?,?,?,?,?,?,?,?)",
                             (did, service, antenna, session["started"], target,
