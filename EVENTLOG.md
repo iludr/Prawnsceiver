@@ -1898,3 +1898,32 @@ http://192.168.3.244:8080/publish?d=<new serial>&port=1235
 (SDR_DONGLE_GAIN keys by host:port, so the gain map needs no
 change). The satellite dongle (:1234) was republished right
 after the solo test and reconnected cleanly at 16:11:29 UTC.
+
+### 2026-10-19 ~16:25 UTC — ✈️ ADS-B demod v3: the v5 + ADS-B antenna decodes ~35 frames/s live
+
+The operator moved the ADS-B antenna to the NESDR v5 and switched it
+to the ADS-B role as a test. A 7.26 s direct rtl_sdr capture proved
+the RF chain hears plenty of aircraft (force-decode found 13 ICAOs),
+but the production demod decoded ZERO of them: on real hardware the
+2.5 us preamble pulse rides a tuner filter-ripple null (down to dust
+while P0/P1/P3 are full strength) and the inter-pulse positions ring
+to near-pulse level — the absolute 4-pulse + gap pattern rejected
+every real frame and burned 350 bad candidates/s on interference.
+
+Demod v3 (commit 038ff54) keeps only what holds on ideal AND field
+signals: a rising edge through the energy bar (4x p90), a quiet
+sample at 2.1 us (position 5 — the only inter-pulse spot quiet in
+both worlds) and the P3 pair above the bar; a failed candidate skips
+its whole would-be frame span (the data section of an undecodable
+frame spawned most of the 65k ghost candidates/s). Offline on the
+capture: 188 CRC-valid frames in 7.26 s at 16% CPU (old chain:
+~300 frames/h). Live on the station with the v5 (43.9 dB, the
+satellite gain entry — the pattern is gain-robust): ~35 frames/s,
+12 aircraft within the first minute.
+
+Note: with the v5 on the ADS-B role there is NO satellite dongle —
+the Meteor passes tonight (19 deg 20:02, 81 deg 21:40 local) will not
+be recorded until the v5 is switched back or a replacement ADS-B
+dongle is published. Also cosmetic: with two ADS-B-role dongles the
+adsb.json "dongle" label shows whichever thread started last (the
+stats themselves come from the decoding thread).
