@@ -269,4 +269,23 @@ ok, msps = adsb._rate_check(2 * SDR_RATE * 6, 6.0 * 2.0)  # half rate: bad
 assert not ok, (ok, msps)
 print("15. stream-rate watchdog: nominal ok, 0.82/1.44 Msps flagged: ok")
 
+# --- 16. field preamble: P2 nulled by tuner ripple + inter-pulse ring ---
+# Measured on the v5 + ADS-B antenna (2026-10-19): the 2.5 us pulse
+# rides a filter-ripple null down to dust while P0/P1/P3 stay strong,
+# and the positions between pulses ring to ~half pulse level. The
+# old per-pulse absolute pattern rejected every such frame.
+HX = "8D4840D6202CC371C32CE0576098"
+env = ppm_modulate(hex_to_bits(HX))
+env = env.copy()
+env[6:8] *= 0.15          # P2 (2.5 us) -> filter-ripple null
+env[4] = max(env[4], 0.5 * env[2])    # ring between P1 and P2
+env[10] = max(env[10], 0.4 * env[9])  # ring after P3
+b = 0.05 + 0.02 * rng.rand(SDR_RATE)
+b[3000:3000 + len(env)] += env
+st = new_demod_state()
+out = decode_batch(b, st)
+assert len(out) == 1 and out[0]["hex"] == HX, out
+assert st["bad"] == 0, st
+print("16. field preamble (weak P2 + ringed gaps) still decodes: ok")
+
 print("\nAll ADS-B tests passed.")

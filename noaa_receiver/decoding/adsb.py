@@ -694,22 +694,27 @@ def adsb_status():
 
 # ---------- envelope demodulator ----------
 
-# Preamble pulses start at 0, 1.0, 2.5, 3.5 us, each 0.5 us wide. At
-# SPS samples/us the pulse peaks land inside [off, off+2) for offsets
-# (0, 2, 6, 8) — tolerant to +/-0.5 sample of frame-start error. The
-# gap samples 4 and 10 are low for every shift in that range (the
-# other gaps have no integer sample that is safely outside the pulses).
-_PULSE_OFF = (0, 2, 6, 8)
-_GAP_OFF = (4, 10)
+# Preamble detection (v3, field-validated on the v5 + ADS-B antenna
+# 2026-10-19): a rising edge through the energy bar (4x the p90 noise
+# EMA), a quiet sample at 2.1 us (position 5 — the only inter-pulse
+# spot that is quiet on BOTH an ideal signal and the field data: the
+# 2.5 us pulse owns position 6, and position 4 rings to near-pulse
+# level on real tuners) and the P3 pulse pair present at 3.3/4.2 us
+# (positions 8/9). The field data killed the earlier per-pulse
+# absolute pattern: on real hardware the 2.5 us pulse rides a tuner
+# filter-ripple null (down to dust while P0/P1/P3 stay strong) and the
+# inter-pulse positions ring to nearly pulse level — an absolute
+# threshold cannot pass one without flooding on the other. Energy +
+# the 2.1 us dip + P3 survives both, and a single wide interference
+# pulse (DME-style) fails the dip.
 # Failed (pattern-passing but CRC-rejected) candidates a single batch
 # may work through before giving up on the rest of it: each failure
-# costs up to 10 grid phases of slice+CRC (~0.15 ms), so this is the
-# hard CPU ceiling of the scan under pathological noise. It counts
-# FAILURES only — decoded frames never accrue — and the live band
-# shows ~23 multipath/overlap ghosts per batch (measured 2026-10-17),
-# so a batch holding several real overlapping squitters still decodes
-# them all; only the noise beyond the 8th failure is dropped.
-_MAX_FAIL_CANDIDATES = 8
+# costs up to 10 grid phases of slice+CRC (~0.15 ms). A failure skips
+# the whole would-be frame span — the data section of an undecodable
+# frame otherwise spawns dozens of failing ghost candidates (measured:
+# 65k/s of candidates collapse to ~3700/s), so the cap is rarely
+# reached at all; when it is, the batch's tail is dropped.
+_MAX_FAIL_CANDIDATES = 16
 _SAMPLES_LONG = int(np.ceil((8 + BITS_LONG) * SPS)) + 2
 _TAIL = _SAMPLES_LONG   # carry across blocks: a frame can straddle two
 
@@ -775,13 +780,15 @@ def _slice_bits(x, p, tables):
 def decode_batch(mag, st):
     """One capture batch of |IQ| samples -> list of decoded frame dicts.
 
-    Envelope -> noise-floor EMA -> preamble scan (first threshold
-    crossing, tried at three half-sample grid phases; the CRC
-    arbitrates) -> bit slicing -> CRC/DF dispatch (long frame first,
-    short-reply CRC on the same 112-bit slice as fallback). Frames do
-    not overlap: an accepted frame skips the scan past its end, and
-    the absolute sample counter keeps the block tail (a frame can
-    straddle two batches) from being decoded twice.
+    Envelope -> noise-floor EMA -> preamble scan (energy onset + the
+    2 us dip + the P3 pulse, one vectorized pattern; the CRC
+    arbitrates over 10 quarter-sample grid phases) -> bit slicing ->
+    CRC/DF dispatch (long frame first, short-reply CRC on the same
+    112-bit slice as fallback). Frames do not overlap: an accepted
+    frame skips the scan past its end, a rejected candidate skips its
+    whole would-be span, and the absolute sample counter keeps the
+    block tail (a frame can straddle two batches) from being decoded
+    twice.
     """
     mag = np.asarray(mag, dtype=np.float64)
     prev_tail = st["tail"]
@@ -799,23 +806,18 @@ def decode_batch(mag, st):
     # so a low percentile sits deep inside the noise (a third of all
     # samples crossed the first 2.2 x p20 threshold in the field,
     # 444k bogus candidates in 6 s). The 90th percentile anchors the
-    # threshold above the noise peaks — but nowhere near the modeled
+    # energy bar above the noise peaks — but nowhere near the modeled
     # 1e-4 of samples: measured on the live 1090 MHz band
     # (2026-10-17, R820T auto-gain) 2 x p90 is crossed by ~1.6% of
-    # samples, hundreds of candidates per batch. The scalar
-    # per-candidate preamble loop that grew out of the "vanishingly
-    # rare" assumption cost ~5 ms of GIL-holding Python per 13.6 ms
-    # batch: the ADS-B thread saturated a core and starved the
-    # satellite/AIS capture threads — every waterfall hung with three
-    # dongles attached. The scan is now one vectorized pattern match;
-    # the per-candidate Python work only runs on pattern-passing
-    # positions, and a per-batch failure cap bounds even pathological
-    # noise to a fraction of a core.
+    # samples, hundreds of candidates per batch. The scan is fully
+    # vectorized; the per-candidate Python work only runs on
+    # pattern-passing positions, and a per-batch failure cap bounds
+    # even pathological noise to a fraction of a core.
     floor = float(np.percentile(x, 90))
     st["floor"] = floor if st["floor"] is None \
         else 0.85 * st["floor"] + 0.15 * floor
-    hi = 2.0 * max(st["floor"], 1e-9)
-    lo = 1.5 * max(st["floor"], 1e-9)
+    hi = 4.0 * max(st["floor"], 1e-9)       # energy bar: onset + P3
+    dip = 3.5 * max(st["floor"], 1e-9)      # the 2.1 us dip sample
     out = []
     last_end = st["last_end_abs"]           # absolute skip mark
     n = len(x)
@@ -823,19 +825,16 @@ def decode_batch(mag, st):
     if w <= 0:
         st["last_end_abs"] = last_end
         return out
-    # Vectorized preamble check (the scalar _preamble_ok semantics,
-    # batch-wide): a position q is a candidate when x[q] > hi (the
-    # pulse-0 pair then always passes, as in the scalar scan), the
-    # pulse pairs at _PULSE_OFF[1:] each have a sample above hi, and
-    # the gap samples at _GAP_OFF sit below lo. Slices are aligned by
-    # construction: the largest offset (10) plus one stays inside the
-    # _SAMPLES_LONG (~240) frame window.
-    cross = x > hi
-    cand = cross[:w].copy()
-    for off in _PULSE_OFF[1:]:
-        cand &= cross[off:off + w] | cross[off + 1:off + 1 + w]
-    for off in _GAP_OFF:
-        cand &= x[off:off + w] < lo
+    # Vectorized preamble check, batch-wide (see the pattern note at
+    # the constants above): rising edge through the energy bar, the
+    # 2.1 us dip quiet, and the P3 pair (3.5 us) above the bar.
+    # Slices are aligned by construction: the largest offset (9) plus
+    # one stays far inside the _SAMPLES_LONG (~240) frame window.
+    on = x > hi
+    onset = np.zeros(n, dtype=bool)
+    onset[1:] = on[1:] & ~on[:-1]
+    cand = onset[:w] & (x[5:5 + w] < dip) \
+        & (np.maximum(x[8:8 + w], x[9:9 + w]) > hi)
     qs = np.flatnonzero(cand)
     fails = 0
     for q in qs.tolist():
@@ -869,7 +868,10 @@ def decode_batch(mag, st):
                 break
         if not hit:
             st["bad"] += 1
-            last_end = q_abs + 4   # skip a little past the noise blip
+            # skip the whole would-be frame span: the data section of
+            # an undecodable frame spawns dozens of ghost candidates
+            # (measured: 65k candidates/s collapse to ~3.7k/s)
+            last_end = q_abs + _SAMPLES_LONG
             fails += 1
             if fails >= _MAX_FAIL_CANDIDATES:
                 # Pathological noise: each failed candidate costs up to
