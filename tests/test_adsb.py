@@ -268,6 +268,12 @@ assert ok, (ok, msps)
 ok, msps = adsb._rate_check(2 * SDR_RATE * 6, 6.0 * 2.0)  # half rate: bad
 assert not ok, (ok, msps)
 print("15. stream-rate watchdog: nominal ok, 0.82/1.44 Msps flagged: ok")
+# a flaky-but-decoding dongle is kept connected; a wrong-rate silent one
+# is reconnected
+assert adsb._rate_action(False, True) == "keep"
+assert adsb._rate_action(False, False) == "reconnect"
+assert adsb._rate_action(True, False) == "keep"
+print("    rate action: keep while decoding, reconnect when silent: ok")
 
 # --- 16. field preamble: P2 nulled by tuner ripple + inter-pulse ring ---
 # Measured on the v5 + ADS-B antenna (2026-10-19): the 2.5 us pulse

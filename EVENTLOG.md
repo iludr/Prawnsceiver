@@ -1927,3 +1927,22 @@ be recorded until the v5 is switched back or a replacement ADS-B
 dongle is published. Also cosmetic: with two ADS-B-role dongles the
 adsb.json "dongle" label shows whichever thread started last (the
 stats themselves come from the decoding thread).
+
+CORRECTION ~16:35 UTC: the "defective hardware" verdict on the
+generic R820T was premature. After the operator's SECOND replug
+(the first one was tested directly at 16:02-16:11 UTC with a deaf
+FM band and a never-locking PLL) the dongle came back on :1235 and
+DECODES: 1600+ frames in the first minutes, 16 aircraft with full
+callsign/altitude/position/velocity. The tuner revived; what
+remains broken is the sample DELIVERY: the stream rate oscillates
+0.68-1.95 Msps against the 2.4 nominal (the rate watchdog measured
+every window) — the RTL2832 stalls and catches up in bursts, and
+frames decode in the good stretches. Working, but marginal: keep a
+replacement dongle on the list.
+
+Consequent watchdog refinement (same commit): a wrong-rate stream
+that still decodes is now KEPT connected (one console note per
+episode) — the reconnect churn was dropping decode time on a
+flaky-but-working dongle. The watchdog reconnects only when the
+rate is wrong AND no frame decoded in the last 15 s — the wedged
+state that never heals by itself.

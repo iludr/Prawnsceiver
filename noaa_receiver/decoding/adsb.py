@@ -922,6 +922,16 @@ def _rate_check(n_bytes, dt, rate=SDR_RATE):
     return abs(msps - rate / 1e6) <= 0.15 * rate / 1e6, msps
 
 
+def _rate_action(ok, decoding):
+    """Stream-rate watchdog verdict for one check window: 'keep' while
+    the dongle still decodes — a flaky-but-working stream (the generic
+    R820T delivered 0.68-1.95 Msps in bursts yet decoded 16 frames/s,
+    2026-10-19) beats a reconnect churn that drops a third of the
+    frames; 'reconnect' when the rate is wrong AND the demod has gone
+    quiet — that is the wedged state that never heals by itself."""
+    return "keep" if (ok or decoding) else "reconnect"
+
+
 def adsb_capture_thread(did):
     """rtl_tcp/rtl_sdr connection + envelope decoding for a dongle
     switched to the ADS-B role. Mirrors the POCSAG capture thread's
@@ -1011,13 +1021,23 @@ def adsb_capture_thread(did):
                 if rate_bytes >= _RATE_CHECK_BYTES:
                     ok, msps = _rate_check(rate_bytes,
                                            time.time() - rate_ts)
-                    if not ok:
+                    decoding = time.time() - st["last_frame"] <= 15.0
+                    if _rate_action(ok, decoding) == "reconnect":
                         state.log_console(
                             f"✈️ ADS-B dongle {did} streams {msps:.2f} Msps"
-                            f" (expected {SDR_RATE / 1e6:.2f}) — wedged RTL"
-                            f" or re-published rtl_tcp without its tune;"
-                            f" reconnecting...", "warn")
+                            f" (expected {SDR_RATE / 1e6:.2f}) and decodes"
+                            f" nothing — wedged RTL or re-published rtl_tcp"
+                            f" without its tune; reconnecting...", "warn")
                         break
+                    if not ok and not st.get("rate_flaky"):
+                        st["rate_flaky"] = True
+                        state.log_console(
+                            f"✈️ ADS-B dongle {did} streams {msps:.2f} Msps"
+                            f" (expected {SDR_RATE / 1e6:.2f}) but keeps"
+                            f" decoding — tolerating the flaky stream",
+                            "warn")
+                    elif ok:
+                        st["rate_flaky"] = False
                     rate_ts = time.time()
                     rate_bytes = 0
                 c = iq_to_complex(raw)
