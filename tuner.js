@@ -143,7 +143,6 @@ async function loadDongles() {
         }
         elements.start.disabled = active || available.length === 0;
         updateRecommendation();
-        document.getElementById('wave-factor').addEventListener('change', updateRecommendation);
     }
 
     function setFeedback(message, isError) {
@@ -266,6 +265,7 @@ async function loadDongles() {
     }
 
     elements.service.addEventListener('change', updateRecommendation);
+    document.getElementById('wave-factor').addEventListener('change', updateRecommendation);
     document.querySelectorAll('input[name="antenna"]').forEach(input =>
         input.addEventListener('change', updateRecommendation));
     elements.dongle.addEventListener('change', () => {
