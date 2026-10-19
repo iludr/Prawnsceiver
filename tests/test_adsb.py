@@ -288,4 +288,26 @@ assert len(out) == 1 and out[0]["hex"] == HX, out
 assert st["bad"] == 0, st
 print("16. field preamble (weak P2 + ringed gaps) still decodes: ok")
 
+# --- 17. bare frames update presence but are not logged ---
+# DF0/4/5 surveillance replies and DF11 all-calls carry no callsign,
+# altitude, position, direction or velocity: they keep the live table
+# (presence, counters) but stay out of the message log, the raw feed
+# and the registry's recent list.
+state.adsb_raw.clear()
+bare11 = parse_frame(hex_to_bits(DF11_HEX))
+bare11["hex"] = DF11_HEX
+adsb.handle_message(bare11, demod_st=None)
+assert bare11["icao"] in state.adsb_aircrafts, "presence must update"
+assert state.adsb_aircrafts[bare11["icao"]]["msgs"] == 1
+assert DF11_HEX not in state.adsb_raw, "bare frame must not hit the raw feed"
+assert not state.adsb_aircrafts_all[bare11["icao"]]["recent"], \
+    state.adsb_aircrafts_all[bare11["icao"]]
+cs = parse_frame(hex_to_bits(frames[0]))       # identification: callsign
+cs["hex"] = frames[0]
+adsb.handle_message(cs, demod_st=None)
+assert frames[0] in state.adsb_raw
+assert state.adsb_aircrafts_all[cs["icao"]]["recent"], "payload frame logged"
+assert state.adsb_aircrafts_all[cs["icao"]]["recent"][-1]["callsign"] == "KLM1023"
+print("17. bare frames (no payload) not logged, presence kept: ok")
+
 print("\nAll ADS-B tests passed.")

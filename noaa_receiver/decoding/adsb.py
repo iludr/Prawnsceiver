@@ -358,12 +358,25 @@ def handle_message(d, demod_st=None):
 
     Called from the capture thread only. known_only frames (DF0/4/5,
     address recovered from the AP syndrome) update the counters but
-    touch the tables only for addresses that already exist.
+    touch the tables only for addresses that already exist. Bare
+    frames — no callsign, altitude, position, direction or velocity —
+    keep the live table's presence and counters but are not written
+    to the message log, the raw frame feed or the registry's recent
+    list (operator request 2026-10-19).
     """
     now = time.time()
     icao = d["icao"]
     hexstr = d.get("hex")
     known_only = d.get("known_only")
+    # Bare frames (surveillance replies DF0/4/5, all-calls DF11, DF17
+    # subtype 0) carry none of the payload the station logs — no
+    # callsign, altitude, position, direction or velocity. They still
+    # merge into the live aircraft table (presence, counters) but are
+    # not logged: demod v3 decodes ~35 frames/s and most of them are
+    # bare all-calls from the same few aircraft (operator request,
+    # 2026-10-19).
+    bare = not any(d.get(k) is not None for k in
+                   ("callsign", "alt_ft", "cpr", "speed_kt", "vs_fpm"))
     pos = None
     with state.adsb_lock:
         ac = state.adsb_aircrafts.get(icao)
@@ -429,10 +442,11 @@ def handle_message(d, demod_st=None):
             ac["last_pos_seen"] = now
         ac["msgs"] += 1
         ac["last_seen"] = now
-        if hexstr:
+        if hexstr and not bare:
             state.adsb_raw.append(hexstr)
         # persistent registry: every aircraft ever received, newest data
         # merged over the old, plus the last ADSB_RECENT_MSGS frames
+        # (payload frames only — bare frames carry nothing to keep)
         if not known_only:
             reg = state.adsb_aircrafts_all.setdefault(
                 icao, {"icao": icao, "first_seen": now, "msgs": 0,
@@ -440,14 +454,16 @@ def handle_message(d, demod_st=None):
             for k, v in ac.items():
                 if k not in ("cpr", "recent"):
                     reg[k] = v
-            reg["recent"].append(_log_entry(d, pos, hexstr, now))
-            if len(reg["recent"]) > ADSB_RECENT_MSGS:
-                del reg["recent"][:len(reg["recent"]) - ADSB_RECENT_MSGS]
+            if not bare:
+                reg["recent"].append(_log_entry(d, pos, hexstr, now))
+                if len(reg["recent"]) > ADSB_RECENT_MSGS:
+                    del reg["recent"][:len(reg["recent"]) - ADSB_RECENT_MSGS]
     if demod_st is not None:
         demod_st["frames"] += 1
         demod_st["last_frame"] = now
-    log_message(_log_entry(d, pos, hexstr, now,
-                           demod_st.get("dongle") if demod_st else None))
+    if not bare:
+        log_message(_log_entry(d, pos, hexstr, now,
+                               demod_st.get("dongle") if demod_st else None))
     _maybe_save_aircrafts()
 
 
