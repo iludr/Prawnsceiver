@@ -1966,3 +1966,47 @@ restarts only on a genuinely new fix); the projection, the stale
 class and the popup ages never compare the browser clock to server
 timestamps. Timestamp displays still show server clock time as an
 absolute label.
+
+### 2026-10-20 ~17:20 UTC — 🛰️ "Decoder still not working": Meteor-M 2-4 LRPT is DARK, the station is healthy
+
+Operator report: the Meteor-M 2-4 pass Tue 20.10 14:55->15:06 (max
+64°) "was good I think, but the decoder still did not work".
+Investigation on the recording + live RF tests say the DECODE CHAIN
+is fine — the sky at 137.9125 MHz was empty.
+
+Evidence, all home-grown:
+
+- The pass IQ (Meteor-M_2-4_20261020_125442, 746 s, time-true at
+  2.4 Msps) holds NO signal anywhere in ±1.1 MHz at any point of the
+  pass: best 120 kHz window tops out at 1.9x floor (a decodable LRPT
+  plateau is 8-30x). The DC spike, tuner spurs and noise floor are
+  all present and vary normally — the tuner streamed live data, it
+  was not wedged.
+- SatDump on it: SNR 0.0 dB, Viterbi NOSYNC, 0 lines, 0-byte CADU —
+  correct behavior on an empty band. The "Baseband centering: signal
+  NOT FOUND" console line is TRUE, not a bug: the measurement gates
+  correctly refused to claim a detection. The +60 kHz fallback
+  rotation is the right centering for this dongle regardless.
+- Live tests on the v5 (:1234, confirmed by the prawntenna manager
+  as serial 48263793, published, single station client):
+  137.9125 MHz manual 22 s capture = same picture as the pass (quiet
+  band, no signals, normal floor); 89.7 MHz manual capture = local
+  FM broadcast at ~50,000x floor (rms 0.98, near clipping). Front
+  end, antenna and tuner are healthy. AIS decodes Danube ships on
+  the same dongle at 162 MHz minutes later.
+- The station's own ledger had already raised it: "⚠️ Meteor-M 2-4:
+  transmitter dark for 5 passes in a row (last image 25 h ago)" at
+  Oct 19 15:07 UTC, "6 passes" at Oct 20 02:40 UTC. Last M2-4 image:
+  Oct 18 13:37 UTC. Dark streak now 8 passes (Oct 19 13:16 through
+  Oct 20 14:36 UTC). Meteor-M 2-3 has NEVER been heard here (36
+  dark passes) — do not expect images from tonight's M2-3 passes
+  either (19:40 / 21:17 / 22:58 local).
+
+So the "good pass" was good geometry, not good signal. When
+Meteor-M 2-4's LRPT comes back, the chain decodes without changes
+(it did on Oct 17/18 — composite PNGs from 023340, 140000 and 133751).
+Next good chances: M2-4 03:09 (18°) and 04:48 local (74°) tonight.
+
+Diagnostic artifacts kept in manual/: Manual_137.9125MHz_20261020_170549
+(empty band proof) and Manual_89.7000MHz_20261020_170638 (front-end
+health proof); both archived to the share with the usual manual family.
