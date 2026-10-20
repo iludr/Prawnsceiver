@@ -2010,3 +2010,11 @@ Next good chances: M2-4 03:09 (18°) and 04:48 local (74°) tonight.
 Diagnostic artifacts kept in manual/: Manual_137.9125MHz_20261020_170549
 (empty band proof) and Manual_89.7000MHz_20261020_170638 (front-end
 health proof); both archived to the share with the usual manual family.
+
+Cleanup (operator request, same day): deleted the raw IQ of every
+pass recording that never decoded to an image — 22 files, 46.32 GB
+freed on the share (8x Meteor-M 2-3, 13x Meteor-M 2-4 incl. the two
+dual-dongle 20261019 captures, 1x NOAA_19; Oct 10-20). Criterion =
+the txstatus ledger's LIT definition: no composite PNG next to the
+WAV and no image in any product dir. WAVs, product dirs and decode
+markers untouched; manual captures kept. Share now at 61 GB / 13%.
