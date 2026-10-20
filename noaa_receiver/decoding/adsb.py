@@ -53,6 +53,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
+from math import asin, cos, radians, sin, sqrt
 
 import numpy as np
 
@@ -60,10 +61,10 @@ from .. import db
 from .. import state
 from ..calibration import SDR_DONGLE_GAIN, correction_info, tuning_correction
 from ..config import (ADSB_AIRCRAFTS_SAVE_SECS, ADSB_AIRCRAFT_TTL_SECS,
-                      ADSB_CENTER_HZ, ADSB_LOG_KEEP_HOURS,
-                      ADSB_REGISTRY_WINDOW_SECS, ADSB_RECENT_MSGS,
-                      FFT_SIZE, IQ_BLOCK, LAT, LON, SDR_GAIN, SDR_OFFSET_HZ,
-                      SDR_RATE)
+                      ADSB_CENTER_HZ, ADSB_COVERAGE_MAX_KM,
+                      ADSB_LOG_KEEP_HOURS, ADSB_REGISTRY_WINDOW_SECS,
+                      ADSB_RECENT_MSGS, FFT_SIZE, IQ_BLOCK, LAT, LON,
+                      SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE)
 
 # ---------- Mode S framing / CRC primitives ----------
 
@@ -564,31 +565,52 @@ def aircraft_tracks(icaos, hours=24):
     return tracks
 
 
-def coverage_hull(hours=24):
-    """Convex hull (lat/lon ring) of every position decoded in the
-    last `hours`, from the persistent message log — the 'area where
-    planes were heard' the ADS-B map draws as its coverage shape
-    (instead of one gray ghost marker per gone-quiet plane). Only
-    frames that actually decoded a position count; the hull is
-    computed in plain lat/lon space (Andrew's monotone chain), which
-    is plenty accurate at the few-hundred-km scale of our sky.
+def _haversine_km(lat1, lon1, lat2, lon2):
+    """Great-circle distance in km — the coverage gate's yardstick."""
+    p1, p2 = radians(lat1), radians(lat2)
+    dp = radians(lat2 - lat1)
+    dl = radians(lon2 - lon1)
+    a = sin(dp / 2) ** 2 + cos(p1) * cos(p2) * sin(dl / 2) ** 2
+    return 2 * 6371.0 * asin(sqrt(a))
+
+
+def coverage_hull():
+    """Convex hull (lat/lon ring) of the position of EVERY aircraft
+    in the persistent registry — the 'area where planes were heard'
+    the ADS-B map draws as its coverage shape (instead of one gray
+    ghost marker per gone-quiet plane).
+
+    Built from the adsb_aircrafts registry (every aircraft ever
+    received, restored at startup), NOT from the rolling adsb_messages
+    log: that one is trimmed to ADSB_LOG_KEEP_HOURS, so a hull built
+    on it breathed with the session — after a quiet night the shape
+    collapsed to whatever the last hours had heard (operator report
+    2026-10-20). The registry is the station's all-time memory; each
+    aircraft contributes its latest decoded position.
+
+    Positions are gated by physical plausibility: a ground station at
+    LAT/LON hears ADS-B out to the radio horizon (~400 km for a plane
+    at 40 kft), so anything beyond ADSB_COVERAGE_MAX_KM is a bad CPR
+    decode, not coverage. Measured live 2026-10-20: single
+    globally-decoded garbage pairs at 67.5N/9.6W and 31N/31.8E pinned
+    hull vertices and stretched the shape from the Norwegian Sea to
+    Egypt. The hull itself is Andrew's monotone chain in plain
+    lat/lon space, plenty accurate at the few-hundred-km scale.
     """
-    try:
-        hours = max(1, min(float(hours), 48))
-    except (TypeError, ValueError):
-        hours = 24.0
-    cutoff = time.time() - hours * 3600
     pts = []
-    for r in db.query("SELECT entry FROM adsb_messages WHERE ts >= ?",
-                      (cutoff,)):
+    for r in db.query("SELECT data FROM adsb_aircrafts"):
         try:
-            e = json.loads(r["entry"])
+            a = json.loads(r["data"])
         except ValueError:
             continue
-        if e.get("lat") is not None and e.get("lon") is not None:
-            pts.append((e["lat"], e["lon"]))
+        lat, lon = a.get("lat"), a.get("lon")
+        if lat is None or lon is None:
+            continue
+        if _haversine_km(LAT, LON, lat, lon) > ADSB_COVERAGE_MAX_KM:
+            continue
+        pts.append((lat, lon))
     if len(pts) < 3:
-        return {"hull": [], "points": len(pts), "hours": hours}
+        return {"hull": [], "points": len(pts)}
 
     def cross(o, a, b):
         return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
@@ -606,7 +628,7 @@ def coverage_hull(hours=24):
         upper.append(p)
     ring = lower[:-1] + upper[:-1]
     return {"hull": [[la, lo] for la, lo in ring],
-            "points": len(pts), "hours": hours}
+            "points": len(pts)}
 
 
 # ---------- persistent aircraft registry (every aircraft ever seen) ------

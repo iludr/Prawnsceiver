@@ -316,4 +316,33 @@ assert state.adsb_aircrafts_all[cs["icao"]]["recent"], "payload frame logged"
 assert state.adsb_aircrafts_all[cs["icao"]]["recent"][-1]["callsign"] == "KLM1023"
 print("17. bare frames (no payload) not logged, presence kept: ok")
 
+# --- 18. coverage hull: all-time registry basis + bogus-position gate ---
+# The hull must come from the adsb_aircrafts registry (every aircraft
+# ever), not the rolling adsb_messages log, and must reject positions
+# beyond ADSB_COVERAGE_MAX_KM of the station (bad global CPR decodes
+# measured live at 67.5N/9.6W and 31N/31.8E, 2026-10-20).
+import json  # noqa: E402
+import time  # noqa: E402
+from noaa_receiver import db  # noqa: E402
+
+now = time.time()
+registry = {
+    "3C1234": {"icao": "3C1234", "lat": 48.50, "lon": 11.60, "last_seen": now},
+    "4CA2B0": {"icao": "4CA2B0", "lat": 49.80, "lon": 13.60, "last_seen": now},
+    "3C6666": {"icao": "3C6666", "lat": 49.20, "lon": 12.60, "last_seen": now},
+    "4CA111": {"icao": "4CA111", "lat": None, "lon": None, "last_seen": now},
+    "DEAD01": {"icao": "DEAD01", "lat": 67.55, "lon": -9.56, "last_seen": now},
+    "DEAD02": {"icao": "DEAD02", "lat": 31.13, "lon": 31.81, "last_seen": now},
+}
+with db.write() as cur:
+    for a in registry.values():
+        cur.execute("INSERT OR REPLACE INTO adsb_aircrafts VALUES (?,?,?)",
+                    (a["icao"], json.dumps(a), now))
+hull = adsb.coverage_hull()
+assert hull["points"] == 3, hull            # only the 3 plausible positions
+assert len(hull["hull"]) == 3, hull        # triangle around the station
+for la, lo in hull["hull"]:
+    assert 48 < la < 50 and 11 < lo < 14, hull
+print("18. coverage hull: registry-based, bogus positions gated: ok")
+
 print("\nAll ADS-B tests passed.")

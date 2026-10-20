@@ -209,3 +209,7 @@ ADSB_AIRCRAFT_TTL_SECS = 600
 # adsb_aircrafts table (and the in-memory mirror restored from it at
 # startup) keeps every aircraft ever — older ones just leave the page.
 ADSB_REGISTRY_WINDOW_SECS = 24 * 3600
+# Coverage hull plausibility gate: a ground station hears ADS-B to the
+# radio horizon (~400 km for a plane at 40 kft), so a decoded position
+# farther than this from the station is a bad CPR decode, not coverage
+ADSB_COVERAGE_MAX_KM = 600

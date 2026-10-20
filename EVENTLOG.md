@@ -2018,3 +2018,34 @@ dual-dongle 20261019 captures, 1x NOAA_19; Oct 10-20). Criterion =
 the txstatus ledger's LIT definition: no composite PNG next to the
 WAV and no image in any product dir. WAVs, product dirs and decode
 markers untouched; manual captures kept. Share now at 61 GB / 13%.
+
+### 2026-10-20 ~20:10 local — ✈️ ADS-B map: twitch fixed for real, coverage hull re-based
+
+Operator report: planes still twitch around on the map, and the
+coverage hull is "broken" — it should show ALL aircraft in the
+registry, not just the current session.
+
+- TWITCH ROOT CAUSE (the clock-skew fix of 2026-10-19 removed the
+  skew, but the yo-yo survived): TWO WRITERS fight over each
+  marker's position. updateMap ran on every 'adsb' status push and
+  unconditionally snapped the marker back to the server row's
+  (stale) fix, while advanceMarkers projected it forward every 5 s —
+  snap back, glide, snap back, forever. Fix (adsb.js): only a
+  genuinely NEW fix (fixId change) writes the marker position
+  directly; pushes repeating the same fix leave it to the
+  dead-reckoning glide.
+- BROKEN HULL: the live hull spanned 31N/31.8E (Egypt) to
+  67.5N/9.6W (Norwegian Sea) — single garbage global-CPR decodes
+  pinned hull vertices across half a continent. coverage_hull now
+  gates every position by physical plausibility: a ground station
+  hears ADS-B to the radio horizon (~400 km at 40 kft), so anything
+  beyond ADSB_COVERAGE_MAX_KM (600) of LAT/LON is a bad decode, not
+  coverage (haversine gate).
+- SESSION-BOUND HULL: the hull was built from adsb_messages — the
+  ROLLING log trimmed to ADSB_LOG_KEEP_HOURS (24 h) — so the shape
+  breathed with the session. It now comes from adsb_aircrafts, the
+  every-aircraft-ever registry: each aircraft contributes its latest
+  position, all-time. /adsb_coverage.json takes no hours parameter
+  anymore; the popup/map stats say "entire registry".
+- tests/test_adsb.py section 18: registry-based hull with two live
+  garbage positions gated out; all 18 sections pass, test_ws ok.

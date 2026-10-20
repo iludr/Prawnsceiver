@@ -211,8 +211,8 @@ document.getElementById('reg-next').addEventListener('click',
 // ---------- live aircraft map (Leaflet + OpenStreetMap tiles) ----------
 // Aircraft are placed by their latest position and rotated by their
 // track; markers fade when silent for 10+ minutes. The area every
-// position was heard in (last 24 h) is drawn as the coverage hull
-// below — gone-quiet planes no longer get gray ghost markers.
+// aircraft was ever heard in is drawn as the coverage hull below —
+// gone-quiet planes no longer get gray ghost markers.
 
 let map = null, markers = {}, fitted = false;
 let regAircraft = [];
@@ -265,16 +265,16 @@ function planeIcon(a) {
 
 // ---------- coverage shape (the area where planes were heard) ----------
 // Instead of one gray ghost marker per plane that went quiet, the
-// map draws the convex hull of every position the station decoded in
-// the last 24 h — computed server-side from the persistent frame log
-// (/adsb_coverage.json), so the shape shows what our sky actually
-// covered. Refreshed every 5 min, live planes keep their markers.
+// map draws the convex hull of every aircraft position in the
+// station's all-time registry (adsb_aircrafts, /adsb_coverage.json),
+// so the shape shows what our sky has EVER covered, not just the
+// current session. Refreshed every 5 min, live planes keep markers.
 let coverageLayer = null, coverageInfo = { points: 0, hours: 24 };
 
 async function loadCoverage() {
     if (!map) return;
     try {
-        const c = await (await fetch('/adsb_coverage.json?hours=24')).json();
+        const c = await (await fetch('/adsb_coverage.json')).json();
         coverageInfo = c;
         if (coverageLayer) { map.removeLayer(coverageLayer); coverageLayer = null; }
         if (c.hull && c.hull.length >= 3) {
@@ -283,7 +283,7 @@ async function loadCoverage() {
                 fillColor: '#5a6478', fillOpacity: 0.18, dashArray: '6 6'
             }).addTo(map);
             coverageLayer.bindPopup('🦀 Coverage — convex hull of '
-                + c.points + ' decoded positions (last 24 h)');
+                + c.points + ' aircraft positions (entire registry)');
             if (!fitted) fitted = true, fitAircraft();
         }
         updateMapStats();
@@ -298,7 +298,7 @@ function updateMapStats() {
         + (mapStats.stale ? ' · ' + mapStats.stale + ' faded (not heard for 10+ min)' : '')
         + (mapStats.noPos ? ' · ' + mapStats.noPos + ' without position yet' : '')
         + (coverageInfo.points
-            ? ' · coverage: ' + coverageInfo.points + ' positions heard (24 h)' : '');
+            ? ' · coverage: ' + coverageInfo.points + ' aircraft positions (all-time registry)' : '');
 }
 
 function fitAircraft() {
@@ -333,7 +333,8 @@ function updateMap(aircraft) {
         const fixId = (a.last_pos_seen !== undefined && a.last_pos_seen !== null)
             ? a.last_pos_seen : (a.lat + ':' + a.lon);
         let f = lastFix[a.icao];
-        if (!f || f.fixId !== fixId) {
+        const newFix = !f || f.fixId !== fixId;
+        if (newFix) {
             // a new real fix — stamp its local arrival; the
             // dead-reckoning timer below projects from here
             f = lastFix[a.icao] = { fixId: fixId, ts: now,
@@ -349,7 +350,13 @@ function updateMap(aircraft) {
         if (!m) {
             m = markers[a.icao] = L.marker([a.lat, a.lon], { title: a.callsign || a.icao }).addTo(map);
             m.bindPopup(planePopup(a, age));
-        } else {
+        } else if (newFix) {
+            // ONLY a genuinely new fix writes the position directly.
+            // A status push that repeats the same fix must leave the
+            // marker where the 5 s dead-reckoning glide put it — the
+            // two writers fighting (snap back on every push, project
+            // forward every 5 s) is what made planes twitch around
+            // the map even after the 2026-10-19 clock-skew fix.
             m.setLatLng([a.lat, a.lon]);
         }
         m.setIcon(planeIcon(a));
