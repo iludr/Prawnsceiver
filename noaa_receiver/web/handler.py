@@ -11,7 +11,8 @@ from .. import db
 from .. import state
 from .. import tuner
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
-                   RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE, UTC_OFFSET, WEBDIR)
+                   METEOR_LRPT_HZ, RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE,
+                   UTC_OFFSET, WEBDIR)
 
 from ..decoding import adsb, ais, aprs, orbcomm, pocsag
 from ..sdr import scan
@@ -903,7 +904,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                     # During a pass the scheduler owns the frequency: parking
                     # here would record the idle band under the pass's name
                     if not state.is_pass_active:
-                        state.current_frequency = 137912500
+                        state.current_frequency = METEOR_LRPT_HZ
                         state.current_sat_name = "idle"
                 state.log_console("🛰 Manual tune off — satellite tracking resumed")
                 self._send_json({"success": True, "mode": "auto"}, code=200)

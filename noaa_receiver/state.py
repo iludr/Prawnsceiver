@@ -7,7 +7,7 @@ import threading
 from collections import deque
 from datetime import datetime
 
-from .config import WATERFALL_ROWS
+from .config import METEOR_LRPT_HZ, WATERFALL_ROWS
 
 # State
 waterfall_buffer = deque(maxlen=WATERFALL_ROWS)
@@ -90,7 +90,7 @@ manual_recording = {}
 # applies to; doppler_hz is 0 outside passes.
 doppler_hz = 0
 doppler_freq_hz = 0
-current_frequency = 137912500  # idle park: the Meteor LRPT band
+current_frequency = METEOR_LRPT_HZ  # idle park: the Meteor LRPT band
 current_sat_name = "idle"
 is_recording = False
 is_pass_active = False

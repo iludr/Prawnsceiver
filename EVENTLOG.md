@@ -2089,3 +2089,45 @@ finding verified, then fixed):
 - tests/test_adsb.py sections 19-21 pin all four fixes; sections 11-13
   updated for the gate. All 21 sections pass; test_ais, test_ws and
   test_db still pass.
+
+### 2026-10-22 ~01:41 local — 🛰️ Meteor-M LRPT retune completed: track 137.9000, idle park follows, carrier notch derived from the tune
+
+Review of the operator's LRPT retune (137.9125 -> 137.9000 MHz; the
+~-77 kHz satellite offset in pass recordings was transmitter error,
+not dongle error - SatNOGS lists 137.9000 as the alternate channel).
+The retune itself was sound; completing it found three loose ends:
+
+- IDLE PARK (state.py, web/handler.py, tracking/scheduler.py): the
+  dongle still parked at 137.9125 between passes - 12.5 kHz off the
+  band the retune calls the LRPT band. All three park sites now use
+  config.METEOR_LRPT_HZ, the single source of truth also used by
+  TRACKED_SATS and IQ_RECORD_FREQS.
+- CALIBRATION RE-KEY (calibration.py): the second dongle's entry
+  (192.168.3.65:1234) still had the dead 137912500 key (the correction
+  lookup is exact-match); re-keyed to 137900000.
+- CARRIER NOTCH (decode.py _measure_signal_offset): the notch for
+  the 137.905 MHz land-mobile carrier was hardcoded at -67.8 kHz -
+  derived from the RETIRED 137.9125 tune (dongle 137.9725). After the
+  retune (dongle 137.9600) the carrier lands at -55 kHz, and -67.8 kHz
+  is 137.8922 MHz absolute: INSIDE the 72 kHz LRPT band, so the notch
+  pointed at the satellite, not the interferer. The baseband position
+  is now derived: config.LOCAL_CARRIER_BASEBAND_HZ =
+  LOCAL_CARRIER_NOTCH_HZ - (METEOR_LRPT_HZ + SDR_OFFSET_HZ), so a
+  retune cannot silently misplace it again.
+- COMMENT FIXES (decode.py): the centroid cap comment said 24 dB but
+  the code caps excess at 16x the floor (~12 dB) - the code is right
+  (a true 24 dB cap would let the carrier dominate the centroid), the
+  comment was wrong. The _measure_signal_offset docstring said the
+  carrier sits "below" the downlink; it sits above (137.905 >
+  137.896-137.900).
+- VERIFIED with synthetic captures: at the new geometry the
+  measurement finds the plateau (-62.9 kHz); a dark pass holding only
+  the carrier is still rejected (None -> tuner-offset fallback, which
+  the retune made correct); with the carrier present the centroid
+  skews +236 Hz toward it, and with the notch at its derived position
+  the skew drops to +162 Hz (the narrow +/-200 Hz notch only dents the
+  carrier's ~2 kHz smoothed main lobe - the 16x centroid cap and the
+  drift gate carry the rejection).
+- tests/test_lrpt.py section 8 pins the new geometry (plateau
+  -65..-59 kHz + carrier at -55 kHz) and the notch derivation;
+  _pick_product_png renumbered to section 9.

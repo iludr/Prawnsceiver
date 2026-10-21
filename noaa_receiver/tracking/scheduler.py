@@ -5,7 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .. import state
-from ..config import LAT, LON, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_ISS, RECORD_LOCAL_DIR, TLE_REFRESH_HOURS, TRACKED_SATS, UTC_OFFSET
+from ..config import LAT, LON, METEOR_LRPT_HZ, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_ISS, RECORD_LOCAL_DIR, TLE_REFRESH_HOURS, TRACKED_SATS, UTC_OFFSET
 
 from ..decoding.decode import decode_recording, read_decode_marker, sat_short_name
 from ..web.history import log_pass
@@ -195,7 +195,7 @@ def scheduler_thread():
                             state.current_frequency = manual
                             state.current_sat_name = f"Manual {manual/1e6:.4f} MHz"
                         else:
-                            state.current_frequency = 137912500
+                            state.current_frequency = METEOR_LRPT_HZ
                             state.current_sat_name = "idle"
                         with state.signal_lock:
                             pass_peak = state.pass_signal_peak

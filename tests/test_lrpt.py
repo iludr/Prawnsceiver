@@ -22,7 +22,9 @@ import tempfile  # noqa: E402
 os.environ.setdefault("PRAWN_DB_FILE",
                      os.path.join(tempfile.mkdtemp(), "station.db"))
 from noaa_receiver.decoding.decode import _measure_signal_offset, _pick_product_png
-from noaa_receiver.config import SDR_RATE
+from noaa_receiver.config import (LOCAL_CARRIER_BASEBAND_HZ,
+                                   LOCAL_CARRIER_NOTCH_HZ, METEOR_LRPT_HZ,
+                                   SDR_OFFSET_HZ, SDR_RATE)
 
 FS = SDR_RATE
 DUR = 24.0  # seconds per synthetic recording
@@ -136,7 +138,24 @@ check("found", m is not None, f"got {m}")
 check("centered on the plateau", m is not None and abs(m - (-60_000)) < 5000,
       f"measured {m if m is None else f'{m:.0f}'} Hz")
 
-print("8. _pick_product_png: largest PNG wins, non-images ignored")
+print("8. NEW TUNE (137.9000): interferer at -55 kHz, inside the LRPT band")
+# The station tunes 137.9000 now (dongle at 137.9600 with the 60 kHz
+# offset), so the 137.905 MHz land-mobile carrier lands at -55 kHz,
+# inside the LRPT band (-64..-60 kHz center, ~72 kHz wide). The old
+# interferer geometry above (-67.3 kHz) matched the retired 137.9125
+# tune and the old hardcoded notch.
+check("notch derivation: baseband = carrier - (target + offset)",
+      LOCAL_CARRIER_BASEBAND_HZ == LOCAL_CARRIER_NOTCH_HZ - (METEOR_LRPT_HZ + SDR_OFFSET_HZ),
+      f"baseband {LOCAL_CARRIER_BASEBAND_HZ}")
+check("carrier lands at -55 kHz for the 137.9000 tune",
+      LOCAL_CARRIER_BASEBAND_HZ == -55_000, f"baseband {LOCAL_CARRIER_BASEBAND_HZ}")
+m = measure(plateau(72_000, -65_000, -59_000) + carrier(-55_000, amp=60, seed=3), 120_000)
+check("found", m is not None, f"got {m}")
+check("centered on the plateau, not the carrier",
+      m is not None and abs(m - (-62_000)) < 2000,
+      f"measured {m} Hz (carrier at -55k, plateau center -62k)")
+
+print("9. _pick_product_png: largest PNG wins, non-images ignored")
 d = tempfile.mkdtemp()
 for name, size in [("meteor.cadu", 50), ("dataset.json", 300),
                    ("msu_mr_ch1.png", 400), ("msu_mr_rgb_composite.png", 90_000),

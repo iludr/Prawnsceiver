@@ -62,19 +62,19 @@ UTC_OFFSET = 2  # Germany UTC+2
 # decommissioned Jun-Aug 2025 (NOAA-15 last, 2025-08-19) - APT and DSB
 # transmitters are off for good, so passes would be dead spectrum.
 # ISS: ARISS SSTV (Robot 36) on 437.550 MHz during active events
-# Meteor-M 2-3/2-4: Russian weather satellites, LRPT digital downlink
-# (137.9125 MHz family per SatNOGS; M2-3 was wrongly tracked at
-# 137.1 — ~800 kHz below its LRPT, so every M2-3 recording tuned dead
-# spectrum. A tune anywhere in 137.86-137.96 captures the LRPT band:
-# the recording spans +/-480 kHz and the decode measures the actual
-# signal position). Decoded from the raw IQ with SatDump (meteor_m2-x_lrpt,
-# see decode.py) - the FM-demod audio cannot. Both Meteor LRPT transmitters have been
-# dark in every pass received so far (verified 2026-10-10: no satellite
-# signal in any Meteor IQ recording, just local land-mobile carriers).
+# Meteor-M 2-3/2-4: Russian weather satellites, LRPT digital downlink.
+# SatNOGS lists 137.9125 MHz, but the actual downlink is ~137.896-137.900 MHz
+# (137.9000 alternate channel entry); the station previously tuned to 137.9125,
+# placing the true signal at ~-72-76 kHz in baseband (outside the expected
+# -60 kHz). A tune anywhere in 137.86-137.96 MHz captures the LRPT band:
+# the recording spans +/-480 kHz and the decode measures the actual signal
+# position. Decoded from the raw IQ with SatDump (meteor_m2-x_lrpt) -
+# the FM-demod audio cannot.
+METEOR_LRPT_HZ = 137_900_000   # actual downlink ~137.896-137.900 MHz
 TRACKED_SATS = {
     25544: ("ISS (Zarya)", 437550000),
-    57166: ("Meteor-M 2-3", 137912500),
-    59051: ("Meteor-M 2-4", 137912500),
+    57166: ("Meteor-M 2-3", METEOR_LRPT_HZ),
+    59051: ("Meteor-M 2-4", METEOR_LRPT_HZ),
 }
 
 
@@ -83,8 +83,19 @@ TRACKED_SATS = {
 # Meteor LRPT is a digital mode the FM-demod audio cannot carry — decoding
 # (SatDump) needs the baseband. SSTV passes stay audio-only.
 IQ_RECORD_FREQS = {
-    137912500,    # Meteor-M 2-3 / 2-4 LRPT
+    METEOR_LRPT_HZ,    # Meteor-M 2-3 / 2-4 LRPT
 }
+
+# Site-specific interferer: a persistent land-mobile carrier at ~137.905 MHz
+# (Region-1, 20-40x the noise floor) sits ~5-9 kHz above the LRPT downlink,
+# INSIDE the ~72 kHz LRPT band. decode._measure_signal_offset notches it out
+# of the baseband spectrum so it cannot skew the signal-position centroid.
+# The baseband position is DERIVED from the tune (the dongle sits
+# SDR_OFFSET_HZ above the target, so an absolute frequency f lands at
+# f - (target + SDR_OFFSET_HZ)) - a retune cannot silently misplace the
+# notch. With the 137.9000 tune the carrier sits at -55 kHz, inside the band.
+LOCAL_CARRIER_NOTCH_HZ = 137_905_000     # absolute carrier frequency
+LOCAL_CARRIER_BASEBAND_HZ = LOCAL_CARRIER_NOTCH_HZ - (METEOR_LRPT_HZ + SDR_OFFSET_HZ)
 
 # Manual raw-IQ recording (dashboard Record button, see radio.py):
 # the UNTOUCHED uint8 IQ stream of the current tune is captured for

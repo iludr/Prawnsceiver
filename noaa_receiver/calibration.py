@@ -79,15 +79,16 @@ SDR_DONGLE_CORRECTIONS = {
     # here (DSB, 6 kHz) - they mostly mark the dongle as MEASURED so
     # the dashboard stops saying "unmeasured dongle" and the ppm
     # fallback is honest.
-    # IMPORTANT: the ~17 kHz offset of the Meteor-M 2-4 LRPT plateau in
-    # pass recordings (satellite at ~-77 kHz instead of -60) is the
-    # TRANSMITTER (true downlink ~137.896 MHz, near the SatNOGS
-    # 137.9000 alternate channel entry) - NOT this dongle. The decode's
-    # own measurement handles any transmitter offset; this correction
-    # only covers the (tiny) dongle error.
+    # IMPORTANT: the true Meteor LRPT downlink is ~137.896-137.900 MHz
+    # (SatNOGS 137.9000 alternate channel), NOT 137.9125. The ~17 kHz offset
+    # in pass recordings (satellite at ~-77 kHz instead of -60) is the
+    # transmitter frequency error. The decode's own measurement handles
+    # any transmitter offset; this correction only covers the (tiny) dongle
+    # error. The station now tracks at 137.900 MHz, so the LRPT band entry
+    # reflects this.
     "192.168.3.245:1234": {
         "freqs": {
-            137912500: 300,    # LRPT band (2.2 ppm scaled from the 153.1125 fit)
+            137900000: 300,    # LRPT band at actual downlink freq (2.2 ppm scaled from the 153.1125 fit)
             437550000: 980,    # ISS (Zarya) (SSTV FM: kHz-scale tolerance)
         },
         "fm_band": 51,          # measured at 99.6 MHz
@@ -133,7 +134,7 @@ SDR_DONGLE_CORRECTIONS = {
     # dashboard stops showing 'unmeasured dongle'.
     "192.168.3.65:1234": {
         "freqs": {
-            137912500: 0,   # Meteor-M 2-3 / 2-4 LRPT
+            137900000: 0,   # Meteor-M 2-3 / 2-4 LRPT (actual downlink ~137.896-137.900 MHz)
             162000000: 0,   # AIS center (161.975 / 162.025 channels)
             437550000: 0,   # ISS (Zarya)
         },

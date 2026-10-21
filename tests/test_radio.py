@@ -30,7 +30,7 @@ import numpy as np
 from collections import deque
 from noaa_receiver.sdr import radio
 from noaa_receiver import state
-from noaa_receiver.config import AIS_CENTER_HZ, SDR_OFFSET_HZ, SDR_RATE, WATERFALL_ROWS
+from noaa_receiver.config import AIS_CENTER_HZ, METEOR_LRPT_HZ, SDR_OFFSET_HZ, SDR_RATE, WATERFALL_ROWS
 from noaa_receiver.calibration import tuning_correction
 
 tmp = tempfile.mkdtemp(prefix='prawn_')
@@ -138,7 +138,7 @@ def wavs(): return sorted(glob.glob(os.path.join(radio.RECORD_LOCAL_DIR, '*.wav'
 wait_for(lambda: entry['last_data'] > 0 and len(entry['waterfall']) > 3, what='IQ flowing')
 wait_for(lambda: entry['la']['total'] > 10, what='live audio')
 assert entry['connected'] and not entry['is_recording']
-expect_cmd(137912500)   # explicit tune on connect (state.current_frequency park)
+expect_cmd(METEOR_LRPT_HZ)   # explicit tune on connect (state.current_frequency park)
 want_rate = (2, SDR_RATE)
 wait_for(lambda: want_rate in commands, what='sample-rate command on connect')
 commands.remove(want_rate)
@@ -332,8 +332,8 @@ def failing_wave_open(path, mode='rb'):
     return real_wave_open(path, mode)
 wave.open = failing_wave_open
 sessions_before = srv.sessions
-set_sched(137912500, "Meteor-M 2-4", True)
-expect_cmd(137912500)
+set_sched(METEOR_LRPT_HZ, "Meteor-M 2-4", True)
+expect_cmd(METEOR_LRPT_HZ)
 time.sleep(1.5)
 print("   7 diag: recording=", entry['is_recording'], "connected=", entry['connected'],
       "sessions", sessions_before, "->", srv.sessions, "wav_path", entry['wav_path'])

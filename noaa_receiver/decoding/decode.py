@@ -9,7 +9,8 @@ import time
 from .. import db
 from .. import state
 
-from ..config import RECORD_LOCAL_DIR, SDR_OFFSET_HZ, SDR_RATE, TRACKED_SATS
+from ..config import (LOCAL_CARRIER_BASEBAND_HZ, RECORD_LOCAL_DIR,
+                      SDR_OFFSET_HZ, SDR_RATE, TRACKED_SATS)
 from ..sdr.dsp import frequency_shift, iq_to_complex, new_state
 
 # Recording names are '<sat>_<YYYYMMDD>_<HHMMSS>[-<n>][_<serial>].wav', written by
@@ -239,7 +240,7 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000, rate=SDR_RATE):
 
     But a plain window search is fooled by LOCAL transmitters: this
     site has a persistent ~11 kHz carrier around 137.905 MHz (Region-1
-    land mobile, ~7.5 kHz below the Meteor LRPT downlink) measuring
+    land mobile, ~7.5 kHz above the Meteor LRPT downlink) measuring
     20-40x the noise floor, which captured the measurement live
     (2026-10-10: -47.6 kHz "measured" from that carrier while a real
     LRPT signal would sit near -60 kHz; the demodulator then centered
@@ -306,6 +307,22 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000, rate=SDR_RATE):
     # MAX over the normalized slices, not the mean: only the slices
     # near culmination carry the downlink (see docstring).
     avg = np.max(norm, axis=0)
+    
+    # SITE-SPECIFIC FIX: this site has a persistent land-mobile carrier
+    # (config.LOCAL_CARRIER_NOTCH_HZ, ~137.905 MHz, 20-40x the noise floor)
+    # ~5-9 kHz above the LRPT downlink, INSIDE the ~72 kHz wide LRPT band.
+    # Its baseband position comes from the tune (config.LOCAL_CARRIER_BASEBAND_HZ
+    # = carrier - (target + SDR_OFFSET_HZ), -55 kHz for the 137.9000 tune), so
+    # a retune cannot silently misplace the notch. The carrier inflates the
+    # width-gate threshold (peak/64) and skews the centroid; zero a very
+    # narrow +/-200 Hz notch around it to dent it without damaging the
+    # LRPT plateau.
+    local_carrier_hz = LOCAL_CARRIER_BASEBAND_HZ
+    notch_bins = max(1, int(200 / bin_hz))  # +/-200 Hz notch
+    carrier_bin = n_fft // 2 + int(local_carrier_hz / bin_hz)
+    lo_notch = max(0, carrier_bin - notch_bins)
+    hi_notch = min(len(avg), carrier_bin + notch_bins + 1)
+    avg[lo_notch:hi_notch] = 0.0
     # Noise reference: the POSITIVE-frequency half. The satellite is
     # always on the negative side (offset tuning), so the positive half
     # is receiver noise (the +SDR_OFFSET_HZ DC spike is a few bins and
@@ -341,7 +358,7 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000, rate=SDR_RATE):
         return None
 
     def _centroid(psd):
-        # Excess power capped at 24 dB over the floor: a strong narrow
+        # Excess power capped at 16x the floor (~12 dB): a strong narrow
         # carrier out-powers a whole broadband plateau bin-for-bin and
         # pins the centroid (and the drift test) onto itself; the cap
         # keeps satellite plateaus and local spikes on one scale
