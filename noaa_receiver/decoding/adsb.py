@@ -363,7 +363,10 @@ def handle_message(d, demod_st=None):
     frames — no callsign, altitude, position, direction or velocity —
     keep the live table's presence and counters but are not written
     to the message log, the raw frame feed or the registry's recent
-    list (operator request 2026-10-19).
+    list (operator request 2026-10-19). Positions beyond
+    ADSB_COVERAGE_MAX_KM of the station are discarded as bad decodes
+    (garbage CPR pairs decode anywhere on the globe; the station
+    hears ADS-B only to the radio horizon).
     """
     now = time.time()
     icao = d["icao"]
@@ -408,8 +411,16 @@ def handle_message(d, demod_st=None):
             #    within 180 NM (45 NM surface) of the reference, so
             #    results farther out are discarded; phantoms inside
             #    that window are unavoidable single-message risks —
-            #    the next pair corrects them (measured: the book's
-            #    680 km example seeded a phantom, the pair fixed it)
+            #    the next pair corrects them when it decodes inside
+            #    the plausibility gate below (measured: a ~455 km
+            #    aircraft's pair fixed its seeded phantom; the book's
+            #    680 km example pair is beyond the gate)
+            # 4) plausibility gate on every accepted position: a
+            #    garbage global pair decodes anywhere on the globe
+            #    (measured live 2026-10-20: 67.5N/9.6W and 31N/31.8E),
+            #    but the station hears ADS-B only to the radio
+            #    horizon — beyond ADSB_COVERAGE_MAX_KM it is a bad
+            #    decode, not a fix (the coverage hull gates the same)
             other = cpr.get(1 - odd)
             if other is not None \
                     and now - other[2] <= CPR_MAX_PAIR_SECS \
@@ -432,6 +443,13 @@ def handle_message(d, demod_st=None):
                                                 LAT, LON) \
                         > (80.0 if surface else 333.0):
                     pos = None   # outside the local-decode validity window
+            if pos is not None and _haversine_km(LAT, LON, pos[0],
+                                                 pos[1]) \
+                    > ADSB_COVERAGE_MAX_KM:
+                # beyond the radio horizon: a bad decode (garbage CPR
+                # pair), not a fix. The CPR pair state is kept, so a
+                # later valid pair still decodes.
+                pos = None
             cpr[odd] = (d["cpr"][0], d["cpr"][1], now, surface)
         for k, v in d.items():
             if k in ("cpr", "df", "tc", "hex", "allcall", "known_only"):
@@ -635,26 +653,49 @@ def coverage_hull():
 
 _aircrafts_file_lock = threading.Lock()
 _aircrafts_save_at = 0.0
+_registry_loaded = False   # load_aircrafts() succeeded; guards the
+                           # DELETE in save_aircrafts() — it must
+                           # never wipe the table on a registry that
+                           # failed to load
 
 
 def load_aircrafts():
-    """Startup: restore the every-aircraft-ever registry."""
+    """Startup: restore the every-aircraft-ever registry.
+
+    One corrupt row must not abort the load (2026-10-21 review: it
+    reset the registry to empty, and the next save's DELETE then wiped
+    the whole table): rows load with per-row tolerance, and a row
+    that fails to parse is cleaned out of the table by the next save.
+    """
+    global _registry_loaded
+    _registry_loaded = False
     try:
         rows = db.query("SELECT data FROM adsb_aircrafts")
-        with state.adsb_lock:
-            state.adsb_aircrafts_all = {}
-            for r in rows:
-                a = json.loads(r["data"])
-                if isinstance(a, dict) and "icao" in a:
-                    state.adsb_aircrafts_all[a["icao"]] = a
-        state.log_console(f"✈️ ADS-B aircraft registry: "
-                          f"{len(state.adsb_aircrafts_all)} aircraft ever "
-                          f"received, restored from the database")
     except Exception as e:
         state.log_console(f"ADS-B aircraft registry could not be loaded: "
                           f"{e}", "warn")
         with state.adsb_lock:
             state.adsb_aircrafts_all = {}
+        return
+    loaded = {}
+    bad_rows = 0
+    for r in rows:
+        try:
+            a = json.loads(r["data"])
+        except ValueError:
+            bad_rows += 1
+            continue
+        if isinstance(a, dict) and "icao" in a:
+            loaded[a["icao"]] = a
+    with state.adsb_lock:
+        state.adsb_aircrafts_all = loaded
+    _registry_loaded = True
+    if bad_rows:
+        state.log_console(f"ADS-B aircraft registry: {bad_rows} corrupt "
+                          f"row(s) skipped", "warn")
+    state.log_console(f"✈️ ADS-B aircraft registry: "
+                      f"{len(state.adsb_aircrafts_all)} aircraft ever "
+                      f"received, restored from the database")
 
 
 def save_aircrafts():
@@ -672,7 +713,11 @@ def save_aircrafts():
                                  json.dumps(a, separators=(",", ":")),
                                  time.time()))
                 icaos = [a["icao"] for a in snapshot]
-                if icaos:
+                if icaos and _registry_loaded:
+                    # mirror memory to the table — but only on a
+                    # registry that actually loaded: on a failed load
+                    # this DELETE would wipe every aircraft ever
+                    # (2026-10-21 review)
                     cur.execute("DELETE FROM adsb_aircrafts WHERE icao"
                                 " NOT IN (%s)" % ",".join("?" * len(icaos)),
                                 icaos)
@@ -748,12 +793,17 @@ def adsb_status():
 # Failed (pattern-passing but CRC-rejected) candidates a single batch
 # may work through before giving up on the rest of it: each failure
 # costs up to 10 grid phases of slice+CRC (~0.15 ms). A failure skips
-# the whole would-be frame span — the data section of an undecodable
-# frame otherwise spawns dozens of failing ghost candidates (measured:
+# past the would-be frame's data section — an undecodable frame
+# otherwise spawns dozens of failing ghost candidates (measured:
 # 65k/s of candidates collapse to ~3700/s), so the cap is rarely
-# reached at all; when it is, the batch's tail is dropped.
+# reached at all; when it is, the batch's tail is dropped. The skip is
+# the SHORT span (156 samples): long enough to cover a short reply's
+# data section, short enough that a real frame starting right behind
+# the rejected candidate still decodes (the long span ate 57 us of
+# real frames after every noise candidate).
 _MAX_FAIL_CANDIDATES = 16
 _SAMPLES_LONG = int(np.ceil((8 + BITS_LONG) * SPS)) + 2
+_SAMPLES_SHORT = int(np.ceil((8 + BITS_SHORT) * SPS)) + 2
 _TAIL = _SAMPLES_LONG   # carry across blocks: a frame can straddle two
 
 
@@ -823,10 +873,10 @@ def decode_batch(mag, st):
     arbitrates over 10 quarter-sample grid phases) -> bit slicing ->
     CRC/DF dispatch (long frame first, short-reply CRC on the same
     112-bit slice as fallback). Frames do not overlap: an accepted
-    frame skips the scan past its end, a rejected candidate skips its
-    whole would-be span, and the absolute sample counter keeps the
-    block tail (a frame can straddle two batches) from being decoded
-    twice.
+    frame skips the scan past its end (the short span for a short
+    reply), a rejected candidate skips past its would-be data
+    section, and the absolute sample counter keeps the block tail (a
+    frame can straddle two batches) from being decoded twice.
     """
     mag = np.asarray(mag, dtype=np.float64)
     prev_tail = st["tail"]
@@ -902,14 +952,21 @@ def decode_batch(mag, st):
                 handle_message(d, st)
                 out.append(d)
                 hit = True
-                last_end = q_abs + _SAMPLES_LONG
+                # skip past the accepted frame's end — the SHORT span
+                # for a short reply (DF0/4/5/11, 64 us): the long span
+                # here ate every real frame starting within 57 us
+                # after an all-call (most of the frames are all-calls)
+                last_end = q_abs + (_SAMPLES_SHORT
+                                    if len(hexbits) == BITS_SHORT
+                                    else _SAMPLES_LONG)
                 break
         if not hit:
             st["bad"] += 1
-            # skip the whole would-be frame span: the data section of
-            # an undecodable frame spawns dozens of ghost candidates
-            # (measured: 65k candidates/s collapse to ~3.7k/s)
-            last_end = q_abs + _SAMPLES_LONG
+            # skip past the would-be frame's data section (see the
+            # _MAX_FAIL_CANDIDATES note): the short span covers a
+            # short reply's ghosts and keeps the kill window after a
+            # noise candidate at ~57 us instead of ~121 us
+            last_end = q_abs + _SAMPLES_SHORT
             fails += 1
             if fails >= _MAX_FAIL_CANDIDATES:
                 # Pathological noise: each failed candidate costs up to

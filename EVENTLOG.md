@@ -2049,3 +2049,43 @@ registry, not just the current session.
   anymore; the popup/map stats say "entire registry".
 - tests/test_adsb.py section 18: registry-based hull with two live
   garbage positions gated out; all 18 sections pass, test_ws ok.
+
+### 2026-10-22 ~01:05 local — 🦀 ADS-B chain review: short-frame skip, failure-skip window, registry wipe guard, live-table CPR gate
+
+Review of the whole ADS-B decoding chain after the October demod and
+registry work (adversarial probes on top of the test suite; every
+finding verified, then fixed):
+
+- SHORT-FRAME OVER-SKIP (adsb.py demod): the scan skip after an
+  accepted frame was always the LONG span (290 samples = 120.8 us),
+  but a short reply (DF11/DF0/4/5) is only 64 us — every real frame
+  starting within 57 us after an all-call was silently dropped, and
+  all-calls are most of the ~35 frames/s. Short frames now skip the
+  short span (156 samples). A lost even/odd squitter also broke CPR
+  pairs, so position freshness suffered more than the raw frame count
+  suggests.
+- FAILURE-SKIP WINDOW (adsb.py demod, from the v3 preamble commit): a
+  pattern-passing but CRC-rejected candidate skipped its whole
+  would-be LONG span, eating real frames up to 121 us behind it. The
+  failure skip is now the short span (~57 us window); ghosts from a
+  failed long frame cost ~2 extra trials, still bounded by the
+  16-fail cap.
+- REGISTRY WIPE GUARD (adsb.py): load_aircrafts aborted on ONE corrupt
+  row and reset the registry to empty; the next save's DELETE then
+  wiped the whole adsb_aircrafts table — the all-time registry the
+  coverage hull is built from. Rows now load with per-row tolerance
+  (a corrupt row is skipped and cleaned out by the next save), and
+  the DELETE only runs after a successful load.
+- LIVE-TABLE CPR GATE (adsb.py, operator decision 2026-10-21): every
+  accepted position is now gated at ADSB_COVERAGE_MAX_KM (600) —
+  garbage global CPR pairs (the live 67.5N/9.6W / 31N/31.8E decodes)
+  no longer enter the live table, registry, message log or tracks;
+  same gate as the coverage hull. Note: the book's worked-example
+  aircraft (52.257N 3.919E) sits ~680 km out, so its pair is gated
+  too — a correct decode, but beyond the radio horizon, i.e. never
+  receivable from this station. tests 11/12 re-pinned with receivable
+  pairs (nearby + ~455 km mid-range); the book's frames stay in tests
+  4/5 (CPR math) and 12 (the gate).
+- tests/test_adsb.py sections 19-21 pin all four fixes; sections 11-13
+  updated for the gate. All 21 sections pass; test_ais, test_ws and
+  test_db still pass.

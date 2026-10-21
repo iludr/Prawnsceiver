@@ -169,16 +169,56 @@ out = decode_batch(b4, st)
 assert len(out) == 1 and out[0]["hex"] == frames[1], out
 print("10. demod edge cases: straddle + no re-decode + noise + phase: ok")
 
+# --- helpers for the synthetic-aircraft sections (11, 12, 20) ---
+def encode_cpr(lat, lon, odd):
+    """lat/lon -> (latcpr, loncpr) airborne CPR (test encoder, the
+    inverse of decode_cpr_local's zone arithmetic)."""
+    dlat = 360.0 / (4 * 15 - (1 if odd else 0))
+    latcpr = int((lat / dlat - np.floor(lat / dlat)) * 131072)
+    nl = adsb._nl(lat)
+    dlon = 360.0 / max(nl - (1 if odd else 0), 1)
+    loncpr = int((lon / dlon - np.floor(lon / dlon)) * 131072)
+    return latcpr, loncpr
+
+
+def build_df17(icao, tc, alt_ft, latcpr, loncpr, odd):
+    """A valid-CRC DF17 airborne-position frame (hex) for a synthetic
+    aircraft — the full parse_frame -> handle_message path with a
+    position the live-table gate accepts."""
+    me = [0] * 56
+    for i in range(5):
+        me[i] = (tc >> (4 - i)) & 1
+    n = int(round((alt_ft + 1000) / 25.0))    # Q-bit altitude encoding
+    alt12 = ((n >> 4) << 5) | 0x10 | (n & 0xF)
+    for i in range(12):
+        me[8 + i] = (alt12 >> (11 - i)) & 1
+    me[21] = 1 if odd else 0
+    for i in range(17):
+        me[22 + i] = (latcpr >> (16 - i)) & 1
+        me[39 + i] = (loncpr >> (16 - i)) & 1
+    payload = ([1, 0, 0, 0, 1] + [1, 0, 1]          # DF17, CA=5
+               + [(icao >> i) & 1 for i in range(23, -1, -1)] + me)
+    pi = crc24(payload + [0] * 24)
+    return bits_to_hex(payload + [(pi >> i) & 1 for i in range(23, -1, -1)])
+
+
 # --- 11. live table updates: pair -> position, callsign merge ---
+# A synthetic pair at a receivable distance (~45 km) as real valid-CRC
+# frames through the full parse -> merge path. (The book's example
+# aircraft of the old version sits ~680 km out — beyond the 600 km
+# live-table gate of section 20; its frames stay in sections 4/5 for
+# the CPR math and in section 12 for the gate.)
 state.adsb_aircrafts.clear()
 state.adsb_aircrafts_all.clear()
-for hexstr in (ODD, EVEN):
-    d = parse_frame(hex_to_bits(hexstr))
-    d["hex"] = hexstr
+for odd in (False, True):
+    latcpr, loncpr = encode_cpr(48.80, 11.90, odd)
+    hx = build_df17(0x40621D, 11, 38000, latcpr, loncpr, odd)
+    d = parse_frame(hex_to_bits(hx))
+    d["hex"] = hx
     adsb.handle_message(d, None)
 ac = state.adsb_aircrafts["40621D"]
-assert ac["alt_ft"] == 38000 and abs(ac["lat"] - 52.257202) < 1e-5 \
-    and abs(ac["lon"] - 3.919373) < 1e-5, ac
+assert ac["alt_ft"] == 38000 and abs(ac["lat"] - 48.80) < 1e-3 \
+    and abs(ac["lon"] - 11.90) < 1e-3, ac
 assert len(state.adsb_aircrafts_all["40621D"]["recent"]) == 2
 print("11. aircraft table: pair decoded to position", (ac["lat"], ac["lon"]))
 
@@ -186,10 +226,13 @@ print("11. aircraft table: pair decoded to position", (ac["lat"], ac["lon"]))
 # The book's example aircraft (52.257N 3.919E) sits ~680 km away, past
 # the local-decode validity window: a single squitter can only seed a
 # zone phantom INSIDE the 180 NM window (a single message cannot do
-# better), and the opposite-parity squitter must then correct it via
-# the pair (which always wins over a seeded position — the corrected
-# position may then be arbitrarily far away).
+# better). Its pair decodes globally to the true fix — but 680 km is
+# beyond ADSB_COVERAGE_MAX_KM (600), so under the live-table
+# plausibility gate the far pair is a bad decode, not a fix: never the
+# far position, never anything beyond the gate. A pair that decodes
+# INSIDE the gate still wins over a seeded phantom.
 from noaa_receiver.config import LAT as REFLAT, LON as REFLON
+from noaa_receiver.config import ADSB_COVERAGE_MAX_KM
 state.adsb_aircrafts.clear()
 state.adsb_aircrafts_all.clear()
 d = parse_frame(hex_to_bits(ODD))
@@ -201,20 +244,27 @@ assert adsb._dist_km(ac["lat"], ac["lon"], REFLAT, REFLON) <= 333.0, ac
 d = parse_frame(hex_to_bits(EVEN))
 d["hex"] = EVEN
 adsb.handle_message(d, None)
-assert abs(ac["lat"] - 52.257202) < 1e-5 and abs(ac["lon"] - 3.919373) < 1e-5, ac
+assert abs(ac.get("lat", 0) - 52.257202) > 1.0, ac
+if ac.get("lat") is not None:
+    assert adsb._haversine_km(REFLAT, REFLON, ac["lat"], ac["lon"]) \
+        <= ADSB_COVERAGE_MAX_KM, ac
+
+# A pair that decodes INSIDE the gate still wins over a seed: an
+# aircraft at ~455 km (52.50N 15.50E) — past the 180 NM seed window,
+# so its first squitter seeds a zone phantom — is corrected by its
+# pair.
+state.adsb_aircrafts.clear()
+state.adsb_aircrafts_all.clear()
+for odd in (False, True):
+    latcpr, loncpr = encode_cpr(52.50, 15.50, odd)
+    adsb.handle_message({"icao": "0A00A1", "df": 17, "tc": 11,
+                         "alt_ft": 38000,
+                         "cpr": (latcpr, loncpr, odd, False)}, None)
+ac = state.adsb_aircrafts["0A00A1"]
+assert abs(ac["lat"] - 52.50) < 1e-3 and abs(ac["lon"] - 15.50) < 1e-3, ac
 
 # A synthetic aircraft right over Bavaria (48.50N 11.50E, ~78 km): its
 # FIRST position squitter must seed the correct fix directly
-def encode_cpr(lat, lon, odd):
-    """lat/lon -> (latcpr, loncpr) airborne CPR (test encoder, the
-    inverse of decode_cpr_local's zone arithmetic)."""
-    dlat = 360.0 / (4 * 15 - (1 if odd else 0))
-    latcpr = int((lat / dlat - np.floor(lat / dlat)) * 131072)
-    nl = adsb._nl(lat)
-    dlon = 360.0 / max(nl - (1 if odd else 0), 1)
-    loncpr = int((lon / dlon - np.floor(lon / dlon)) * 131072)
-    return latcpr, loncpr
-
 TEST_ICAO = "0A0001"
 latcpr, loncpr = encode_cpr(48.50, 11.50, False)
 state.adsb_aircrafts.clear()
@@ -224,17 +274,16 @@ adsb.handle_message({"icao": TEST_ICAO, "df": 17, "tc": 11, "alt_ft": 12500,
 ac = state.adsb_aircrafts[TEST_ICAO]
 assert ac.get("lat") is not None, "receiver-reference decode must fire"
 assert abs(ac["lat"] - 48.50) < 0.01 and abs(ac["lon"] - 11.50) < 0.01, ac
-print("12. receiver-reference first fix (48.50, 11.50) + pair-corrected"
-      " far seed: ok")
+print("12. receiver-reference first fix (48.50, 11.50), mid-range pair"
+      " corrects a seed, far pair gated: ok")
 
 # --- 13. path history from the persistent log (/adsb_tracks.json) ---
 tracks = adsb.aircraft_tracks([TEST_ICAO, "40621D"], 24)
 assert len(tracks[TEST_ICAO]) == 1, tracks
 assert abs(tracks[TEST_ICAO][0]["lat"] - 48.50) < 0.01
 assert tracks[TEST_ICAO][0]["alt_ft"] == 12500
-assert len(tracks["40621D"]) >= 2   # seeded phantom + pair-corrected fix
-                                     # (section 11 logged the same aircraft)
-assert abs(tracks["40621D"][-1]["lat"] - 52.257202) < 1e-5, tracks
+assert len(tracks["40621D"]) >= 2   # section 11 logged the pair's fixes
+assert any(abs(p["lat"] - 48.80) < 1e-3 for p in tracks["40621D"]), tracks
 assert adsb.aircraft_tracks([], 24) == {}
 print("13. path history from the message log:", len(tracks[TEST_ICAO]),
       "point for", TEST_ICAO)
@@ -344,5 +393,102 @@ assert len(hull["hull"]) == 3, hull        # triangle around the station
 for la, lo in hull["hull"]:
     assert 48 < la < 50 and 11 < lo < 14, hull
 print("18. coverage hull: registry-based, bogus positions gated: ok")
+
+# --- 19. frame skips: a real frame right behind a short reply decodes ---
+# The skip after an accepted short reply (DF11, 64 us) must be the
+# SHORT span (~156 samples), not the long one (~290): with the long
+# skip every frame starting within 57 us after an all-call was
+# silently dropped (all-calls are most of the ~35 frames/s).
+b = 0.05 + 0.02 * rng.rand(SDR_RATE)
+e11 = ppm_modulate(hex_to_bits(DF11_HEX))
+ecs = ppm_modulate(hex_to_bits(frames[0]))
+b[1000:1000 + len(e11)] += e11
+off2 = 1000 + int(64 * SDR_RATE / 1e6) + 60    # 60 samples behind the DF11
+b[off2:off2 + len(ecs)] += ecs
+st = new_demod_state()
+out = decode_batch(b, st)
+got = {d["hex"] for d in out}
+assert DF11_HEX in got and frames[0] in got, sorted(got)
+# a rejected (noise) candidate skips only the short span: a real
+# frame ~160 samples behind it still decodes (the old long skip ate
+# everything within 290 samples)
+b = 0.05 + 0.02 * rng.rand(SDR_RATE)
+b[500] += 0.9                    # interference burst: pattern-passing
+b[508] += 0.9                    # candidate (onset + dip + "P3"), but
+b[509] += 0.9                    # the slice fails CRC at every phase
+b[660:660 + len(ecs)] += ecs
+st = new_demod_state()
+out = decode_batch(b, st)
+assert frames[0] in {d["hex"] for d in out}, out
+assert st["bad"] >= 1, st
+print("19. frame skips: DF11 + following DF17 both decode; noise-"
+      "candidate window halved: ok")
+
+# --- 20. live-table plausibility gate: garbage CPR pairs are bad decodes ---
+# A garbage global pair decodes anywhere on the globe (measured live
+# 2026-10-20: 67.5N/9.6W and 31N/31.8E, ~2400 km out) — beyond
+# ADSB_COVERAGE_MAX_KM of the station it is a bad decode, not a fix,
+# and must not enter the live table (review 2026-10-21; the coverage
+# hull already gated it).
+from noaa_receiver.config import LAT, LON, ADSB_COVERAGE_MAX_KM  # noqa: E402
+state.adsb_aircrafts.clear()
+state.adsb_aircrafts_all.clear()
+GARBAGE = "0BAD01"
+for odd in (False, True):
+    latcpr, loncpr = encode_cpr(67.55, -9.56, odd)
+    adsb.handle_message({"icao": GARBAGE, "df": 17, "tc": 11,
+                         "alt_ft": 38000,
+                         "cpr": (latcpr, loncpr, odd, False)}, None)
+ac = state.adsb_aircrafts[GARBAGE]
+assert ac.get("lat") is None or abs(ac["lat"] - 67.55) > 1.0, ac
+if ac.get("lat") is not None:
+    d = adsb._haversine_km(LAT, LON, ac["lat"], ac["lon"])
+    assert d <= ADSB_COVERAGE_MAX_KM, (ac, d)
+assert ac["msgs"] == 2, ac       # presence + counters still merge
+# a plausible pair still lands
+state.adsb_aircrafts.clear()
+state.adsb_aircrafts_all.clear()
+NEAR = "0A0002"
+for odd in (False, True):
+    latcpr, loncpr = encode_cpr(48.50, 11.50, odd)
+    adsb.handle_message({"icao": NEAR, "df": 17, "tc": 11,
+                         "alt_ft": 12500,
+                         "cpr": (latcpr, loncpr, odd, False)}, None)
+ac = state.adsb_aircrafts[NEAR]
+assert abs(ac["lat"] - 48.50) < 0.01 and abs(ac["lon"] - 11.50) < 0.01, ac
+print("20. live-table CPR gate: garbage pair gated at"
+      f" {ADSB_COVERAGE_MAX_KM} km, plausible pair lands: ok")
+
+# --- 21. registry load tolerates a corrupt row; a failed load never
+# wipes the table (review 2026-10-21) ---
+now = time.time()
+with db.write() as cur:
+    cur.execute("INSERT OR REPLACE INTO adsb_aircrafts VALUES (?,?,?)",
+                ("3C1234", json.dumps({"icao": "3C1234", "lat": 48.5,
+                                      "lon": 11.6, "last_seen": now}), now))
+    cur.execute("INSERT OR REPLACE INTO adsb_aircrafts VALUES (?,?,?)",
+                ("BADCOR", "{not json", now))
+adsb.load_aircrafts()
+assert "3C1234" in state.adsb_aircrafts_all, \
+    "a corrupt sibling row must not abort the load"
+# a TOTAL load failure leaves the wipe guard off: the next save must
+# not delete every aircraft ever
+real_query = db.query
+def _db_down(*a, **k):
+    raise RuntimeError("db down")
+db.query = _db_down
+adsb.load_aircrafts()
+db.query = real_query
+assert state.adsb_aircrafts_all == {}
+state.adsb_aircrafts.clear()
+state.adsb_aircrafts_all.clear()
+d = parse_frame(hex_to_bits(frames[0]))
+d["hex"] = frames[0]
+adsb.handle_message(d, None)          # a new aircraft arrives
+adsb.save_aircrafts()
+rows = {r["icao"] for r in db.query("SELECT icao FROM adsb_aircrafts")}
+assert "3C1234" in rows, "a failed load must not wipe the registry table"
+assert "4840D6" in rows, rows
+print("21. registry load per-row tolerance + wipe guard: ok")
 
 print("\nAll ADS-B tests passed.")
