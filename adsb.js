@@ -105,7 +105,9 @@ function renderRegistryPage() {
                     + ' onchange="trackToggle(\'' + esc(a.icao) + '\', this.checked)"></td>'
                 : '')
             + '<td class="cs">' + esc(a.callsign || '') + '</td>'
-            + '<td class="icao">' + esc(a.icao) + '</td>'
+            + '<td class="icao">' + esc(a.icao)
+            + (a.military ? ' <span class="milbadge" title="ICAO address in a military block">🪖</span>' : '')
+            + '</td>'
             + cell(alt)
             + cell(spd)
             + cell(trk)
@@ -237,7 +239,8 @@ function planePopup(a, age) {
     const pos = (a.lat !== undefined && a.lat !== null)
         ? a.lat.toFixed(4) + ', ' + a.lon.toFixed(4) : '—';
     const seenAt = new Date(a.last_seen * 1000).toLocaleTimeString();
-    return '<b>' + esc(a.callsign || a.icao) + '</b> · ' + esc(a.icao) + '<br>'
+    return '<b>' + esc(a.callsign || a.icao) + '</b> · ' + esc(a.icao)
+        + (a.military ? ' · <span class="milbadge">🪖 military</span>' : '') + '<br>'
         + (a.alt_ft !== undefined && a.alt_ft !== null ? a.alt_ft + ' ft' : '—')
         + ' · ' + (a.speed_kt !== undefined && a.speed_kt !== null ? a.speed_kt + ' kt' : '—')
         + ' · ' + (a.track_deg !== undefined && a.track_deg !== null ? a.track_deg + '°' : '—')
@@ -246,7 +249,9 @@ function planePopup(a, age) {
 
 function planeIcon(a) {
     const rot = (a.track_deg !== undefined && a.track_deg !== null) ? a.track_deg : 0;
-    const color = a.onground ? '#f39c12' : '#4da6ff';
+    // military (ICAO 24-bit address in a military block) overrides the
+    // airborne/ground colors — the whole point is to spot them at a glance
+    const color = a.military ? '#e74c3c' : (a.onground ? '#f39c12' : '#4da6ff');
     const shape = '<svg width="22" height="22" viewBox="0 0 24 24">'
         + '<path d="M12 1 L14 9 L21 12 L14 14.5 L14 19 L12 23 L10 19 L10 14.5 L3 12 L10 9 Z"'
         + ' fill="' + color + '" stroke="#10131f" stroke-width="0.8"/></svg>';

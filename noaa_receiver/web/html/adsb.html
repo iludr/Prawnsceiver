@@ -44,6 +44,8 @@ tr:hover td { background: #16213e; }
 .planeIcon .lbl { position: absolute; top: 26px; left: 50%; transform: translateX(-50%); white-space: nowrap; font: 10px monospace; color: #e0e0e0; text-shadow: 0 1px 2px #000, 0 0 2px #000; pointer-events: none; }
 .planeIcon.stale, .planeIcon.stale .lbl { opacity: 0.55; }
 .planeIcon.stale .lbl { font-style: italic; }
+.milbadge { color: #e74c3c; font-weight: bold; }
+#maplegend { font-size: 0.85em; }
 #regwrap { margin: 16px 0 14px; }
 #regwrap h2 { font-size: 1.05em; color: #53d769; margin-bottom: 6px; font-weight: normal; }
 #regwrap h2 .cnt { color: #4da6ff; }
@@ -81,6 +83,7 @@ tr:hover td { background: #16213e; }
 <div id="mapwrap">
     <div id="mapinfo">
         <span id="mapstats">map: waiting for aircraft positions…</span>
+        <span id="maplegend" title="Marker colors: blue = airborne, orange = on the ground, red = military (ICAO 24-bit address in a military block — heuristic)">legend: <span style="color:#4da6ff">●</span> airborne <span style="color:#f39c12">●</span> on ground <span style="color:#e74c3c">●</span> military <span class="milbadge">🪖</span></span>
         <button id="fitbtn" title="Zoom/pan the map to all aircraft">&#8690; fit aircraft</button>
     </div>
     <div id="map"></div>

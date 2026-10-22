@@ -491,4 +491,42 @@ assert "3C1234" in rows, "a failed load must not wipe the registry table"
 assert "4840D6" in rows, rows
 print("21. registry load per-row tolerance + wipe guard: ok")
 
+# --- 22. military ICAO 24-bit block heuristic (adsb.is_military_icao) ---
+# military air arms mostly fly on transponder addresses from their
+# country's military sub-allocation of the ICAO block (the tar1090-db
+# "military" ranges, shipped as adsb.MILITARY_ICAO_RANGES)
+for h in ("AE1234", "43C029", "3F4ABC", "33FF10", "C2ABCD", "7CF900",
+          "ADF7C8", "AFFFFF", "43C000", "43CFFF", "33FF00", "33FFFF",
+          "C20000", "C3FFFF", "3F4000", "3FBFFF", "3AA000", "7CF800"):
+    assert adsb.is_military_icao(h), h
+for h in ("ADF7C7", "A12345", "4008AB", "3C6512", "484ABC", "B00000",
+          "43D000", "33FEFF", "C10000", "C40000", "3F3FFF", "3FC000",
+          "7CF7FF", "7CFB00"):
+    assert not adsb.is_military_icao(h), h
+assert adsb.is_military_icao("ae1234")          # lowercase hex
+assert not adsb.is_military_icao("")            # garbage in, False out
+assert not adsb.is_military_icao(None)
+assert not adsb.is_military_icao("ZZZZZZ")
+print("22. military ICAO block heuristic: ok")
+
+# --- 23. the military flag rides the status + registry snapshots ---
+state.adsb_aircrafts.clear()
+state.adsb_aircrafts_all.clear()
+now = time.time()
+state.adsb_aircrafts["AE1234"] = {"icao": "AE1234", "last_seen": now,
+                                  "first_seen": now, "msgs": 3}
+state.adsb_aircrafts["3C6512"] = {"icao": "3C6512", "last_seen": now,
+                                  "first_seen": now, "msgs": 5}
+state.adsb_aircrafts_all["43C029"] = {"icao": "43C029", "last_seen": now,
+                                      "first_seen": now, "msgs": 1,
+                                      "recent": []}
+s = adsb.adsb_status()
+flags = {a["icao"]: a["military"] for a in s["aircraft"]}
+assert flags == {"AE1234": True, "3C6512": False}, flags
+reg = adsb.aircrafts_registry()
+assert {a["icao"]: a["military"] for a in reg} == {"43C029": True}
+state.adsb_aircrafts.clear()
+state.adsb_aircrafts_all.clear()
+print("23. military flag in adsb_status + aircrafts_registry: ok")
+
 print("\nAll ADS-B tests passed.")

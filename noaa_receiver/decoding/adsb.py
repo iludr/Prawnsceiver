@@ -66,6 +66,63 @@ from ..config import (ADSB_AIRCRAFTS_SAVE_SECS, ADSB_AIRCRAFT_TTL_SECS,
                       ADSB_RECENT_MSGS, FFT_SIZE, IQ_BLOCK, LAT, LON,
                       SDR_GAIN, SDR_OFFSET_HZ, SDR_RATE)
 
+# ---------- military aircraft heuristic (ICAO 24-bit address blocks) ----------
+
+# Military air arms mostly fly on transponder addresses from their
+# country's MILITARY sub-allocation of the ICAO 24-bit block — the
+# heuristic the ADS-B community uses to flag military traffic on the
+# transponder ID alone. The ranges below are the volunteer-maintained
+# list tar1090-db ships (ranges.json, "military"), same source tar1090
+# itself uses. Inclusive [start, end] hex ranges.
+MILITARY_ICAO_RANGES = (
+    (0xADF7C8, 0xAFFFFF),   # US military (block tail incl. the AE**** USAF range)
+    (0x010070, 0x01008F),
+    (0x0A4000, 0x0A4FFF),
+    (0x33FF00, 0x33FFFF),   # NATO
+    (0x350000, 0x37FFFF),
+    (0x3AA000, 0x3AFFFF),   # France military
+    (0x3B7000, 0x3BFFFF),
+    (0x3EA000, 0x3EBFFF),
+    (0x3F4000, 0x3FBFFF),   # Germany military (Luftwaffe)
+    (0x400000, 0x40003F),   # UK military/special
+    (0x43C000, 0x43CFFF),   # UK military (RAF)
+    (0x444000, 0x446FFF),
+    (0x44F000, 0x44FFFF),
+    (0x457000, 0x457FFF),
+    (0x45F400, 0x45F4FF),
+    (0x468000, 0x4683FF),
+    (0x473C00, 0x473C0F),
+    (0x478100, 0x4781FF),
+    (0x480000, 0x480FFF),
+    (0x48D800, 0x48D87F),
+    (0x497C00, 0x497CFF),
+    (0x498420, 0x49842F),
+    (0x4B7000, 0x4B7FFF),
+    (0x4B8200, 0x4B82FF),
+    (0x70C070, 0x70C07F),
+    (0x710258, 0x71028F),
+    (0x710380, 0x71039F),
+    (0x738A00, 0x738AFF),
+    (0x7CF800, 0x7CFAFF),   # Australia military (RAAF)
+    (0x800200, 0x8002FF),
+    (0xC20000, 0xC3FFFF),   # Canada military (RCAF)
+    (0xE40000, 0xE41FFF),
+)
+
+
+def is_military_icao(icao):
+    """True when the ICAO 24-bit address (the Mode S transponder ID, 6
+    hex digits) falls in a military/government block
+    (MILITARY_ICAO_RANGES). A heuristic, not proof: some military
+    aircraft use civil-looking addresses and some civil operators sit
+    in these blocks — the dashboard marks it as a strong hint."""
+    try:
+        n = int(str(icao).strip(), 16)
+    except (TypeError, ValueError):
+        return False
+    return any(lo <= n <= hi for lo, hi in MILITARY_ICAO_RANGES)
+
+
 # ---------- Mode S framing / CRC primitives ----------
 
 BITS_LONG = 112                     # extended squitter / long replies
@@ -741,13 +798,17 @@ def aircrafts_registry():
     """Snapshot for /adsb_aircrafts.json: aircraft heard within
     ADSB_REGISTRY_WINDOW_SECS, newest activity first. The registry in
     memory (and the adsb_aircrafts table behind it) keeps every
-    aircraft ever received — older ones just drop off the page."""
+    aircraft ever received — older ones just drop off the page. Every
+    entry carries the military flag (ICAO 24-bit block heuristic)."""
     now = time.time()
     with state.adsb_lock:
-        return sorted((a for a in state.adsb_aircrafts_all.values()
-                        if now - a.get("last_seen", 0)
-                        <= ADSB_REGISTRY_WINDOW_SECS),
-                      key=lambda a: -a.get("last_seen", 0))
+        acs = sorted((a for a in state.adsb_aircrafts_all.values()
+                      if now - a.get("last_seen", 0)
+                      <= ADSB_REGISTRY_WINDOW_SECS),
+                     key=lambda a: -a.get("last_seen", 0))
+        for a in acs:
+            a["military"] = is_military_icao(a["icao"])
+        return acs
 
 
 def prune_aircrafts():
@@ -761,11 +822,15 @@ def prune_aircrafts():
 
 
 def adsb_status():
-    """Snapshot for /adsb.json: aircraft table, demod stats, raw frames."""
+    """Snapshot for /adsb.json: aircraft table, demod stats, raw frames.
+    Every aircraft carries the military flag (ICAO 24-bit block
+    heuristic) so the map can highlight military traffic."""
     prune_aircrafts()
     with state.adsb_lock:
         aircraft = sorted(state.adsb_aircrafts.values(),
                           key=lambda a: -a.get("last_seen", 0))
+        for a in aircraft:
+            a["military"] = is_military_icao(a["icao"])
         raw = list(state.adsb_raw)
         stats = dict(state.adsb_stats)
         enabled = state.adsb_enabled
