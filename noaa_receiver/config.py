@@ -224,3 +224,16 @@ ADSB_REGISTRY_WINDOW_SECS = 24 * 3600
 # radio horizon (~400 km for a plane at 40 kft), so a decoded position
 # farther than this from the station is a bad CPR decode, not coverage
 ADSB_COVERAGE_MAX_KM = 600
+
+# Battery status (noaa_receiver/power.py): the dashboard's power
+# indicator merges the receiver host's own batteries
+# (/sys/class/power_supply — the notebook case) with the PiSugar HAT
+# battery of the TCP dongle hosts — the Raspberry Pi running
+# prawntenna. Its pisugar-server exposes a standalone WebSocket API on
+# 8422 and a raw TCP command API on 8423 (docs.pisugar.com); both speak
+# the same line commands ("get battery" -> "battery: 85"). Every TCP
+# dongle host is probed in the background (power_refresh_thread).
+PISUGAR_WS_PORT = 8422
+PISUGAR_TCP_PORT = 8423
+PISUGAR_PROBE_TIMEOUT = 2.0   # per transport; a dead host fails fast
+POWER_REFRESH_SECS = 15       # background probe cadence (matches the WS push)

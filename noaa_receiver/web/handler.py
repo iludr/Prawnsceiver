@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
 from .. import db
+from .. import power
 from .. import state
 from .. import tuner
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
@@ -183,39 +184,13 @@ def _track_data():
 
 
 def _power_data():
-    """Host power state (notebooks) for /power.json and the WS 'power'
-    topic: every battery with capacity and status, plus whether an
-    external supply (AC adapter, USB-C dock, ...) is online. A machine
-    without batteries (desktop/container) returns an empty list and the
-    dashboard hides the display."""
-    supplies = []
-    ac = False
-    pbase = '/sys/class/power_supply'
-    if os.path.isdir(pbase):
-        for pname in sorted(os.listdir(pbase)):
-            pdir = os.path.join(pbase, pname)
-            def rd(f, _d=pdir):
-                try:
-                    with open(os.path.join(_d, f)) as fh:
-                        return fh.read().strip()
-                except OSError:
-                    return ''
-            ptype = rd('type')
-            if ptype in ('Mains', 'USB'):
-                online = rd('online') == '1'
-                ac = ac or online
-                supplies.append({'name': pname, 'type': ptype,
-                                 'online': online})
-            elif ptype == 'Battery':
-                status = rd('status')
-                ac = ac or status == 'Charging'
-                try:
-                    cap = int(rd('capacity'))
-                except ValueError:
-                    cap = None
-                supplies.append({'name': pname, 'type': 'Battery',
-                                 'capacity': cap, 'status': status})
-    return {'ac': ac, 'supplies': supplies}
+    """Power state for /power.json and the WS 'power' topic: the
+    receiver host's own batteries (/sys/class/power_supply — the
+    notebook case) plus the cached PiSugar batteries of the TCP dongle
+    hosts (probed in the background by power.power_refresh_thread —
+    see noaa_receiver/power.py). Machines without any battery return
+    empty lists and the dashboard hides the display."""
+    return power.power_data()
 
 
 def _console_lines():
@@ -486,7 +461,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # add-dongle picker and its refresh button
             self._send_json({'dongles': usb_dongles()}, code=200)
         elif self.path == '/power.json':
-            # Host power state (notebooks) - see _power_data()
+            # Host power state (own batteries + the dongle hosts'
+            # PiSugar batteries) - see _power_data()
             self._send_json(_power_data(), code=200)
         elif self.path.split('?')[0] == '/waterfall.ws':
             # WebSocket push of dBFS spectrum rows (see _waterfall_websocket)

@@ -9,6 +9,7 @@ from ..config import (LAT, LON, LOGDIR, PASS_MIN_ALT, PORT, RECORD_DIR,
                      RECORD_LOCAL_DIR)
 
 from ..archive import archive_thread
+from ..power import power_refresh_thread
 from .handler import NOAAHandler
 from ..tracking.plan import prime_transmitters
 from ..sdr.radio import sdr_thread
@@ -83,6 +84,11 @@ def main():
     # archive share once recordings are decoded and the share is up
     # (no-op on single-directory setups — see archive.py)
     threading.Thread(target=archive_thread, daemon=True).start()
+
+    # Battery status: probe the TCP dongle hosts' PiSugar power managers
+    # (WebSocket API on 8422, raw TCP on 8423) in the background — feeds
+    # /power.json and the WS 'power' topic (see power.py)
+    threading.Thread(target=power_refresh_thread, daemon=True).start()
 
     # Background: fetch SatNOGS transmitter metadata for the pass-list
     # receive plans (never on the request path — see plan.py)

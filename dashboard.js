@@ -3010,14 +3010,31 @@
             liSstv();
         }
 
-        // Notebook power state — shared by the /power.json fallback poll
-        // and the WS 'power' topic push; hidden on hosts without batteries
+        // Power state — shared by the /power.json fallback poll and the
+        // WS 'power' topic push; hidden on hosts without any battery.
+        // Besides the receiver host's own batteries (notebook) this shows
+        // the PiSugar battery of the TCP dongle hosts — the Raspberry Pi
+        // running prawntenna, probed on port 8422 by the receiver.
         function applyPower(data) {
-                const el = document.getElementById('power-status');
-                const bats = (data.supplies || []).filter(s => s.type === 'Battery');
-                if (!bats.length) { el.style.display = 'none'; return; }
+            const el = document.getElementById('power-status');
+            const bats = (data.supplies || []).filter(s => s.type === 'Battery');
+            const remote = data.remote || [];
+            if (!bats.length && !remote.length) { el.style.display = 'none'; return; }
+            const parts = [];
+            if (bats.length) {
                 const batTxt = bats.map(b => `🔋 ${b.name}: ${b.capacity !== null && b.capacity !== undefined ? b.capacity + '%' : '?'} (${b.status})`).join(' · ');
-                el.textContent = (data.ac ? '⚡ AC power' : '🔌 on battery') + ' · ' + batTxt;
+                parts.push((data.ac ? '⚡ AC power' : '🔌 on battery') + ' · ' + batTxt);
+            }
+            const tips = [];
+            for (const r of remote) {
+                const cap = (r.capacity !== null && r.capacity !== undefined) ? r.capacity + '%' : '?';
+                parts.push(`🪫 ${r.name} @ ${r.host}: ${cap} (${String(r.status || '').toLowerCase()})`);
+                tips.push(`${r.name} @ ${r.host}: ${cap}`
+                    + (r.voltage !== null && r.voltage !== undefined ? ` · ${Number(r.voltage).toFixed(2)} V` : '')
+                    + (r.charging ? ' · charging' : (r.power_plugged ? ' · input plugged' : ' · on battery')));
+            }
+            el.textContent = parts.join(' · ');
+            el.title = tips.join('\n');
             el.style.display = '';
         }
 
