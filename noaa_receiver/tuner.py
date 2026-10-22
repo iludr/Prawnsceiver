@@ -53,6 +53,14 @@ _latest = {}
 _watchdog = None
 
 
+def has_active_session(did):
+    """True while a Prawntuner session owns this dongle (keyed by dongle
+    id in _sessions). Used by the satellite-pass auto-join (radio.py) to
+    leave a dongle that is mid-measurement alone."""
+    with _lock:
+        return did in _sessions
+
+
 def antenna_length_cm(frequency_hz, antenna, wave_factor=0.25):
     """Element/leg length in cm = wave_factor * wavelength * 0.95 VC.
     Wavelength_cm = 30000 / f_MHz (speed of light = 3e10 cm/s).

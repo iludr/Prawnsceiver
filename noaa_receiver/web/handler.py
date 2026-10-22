@@ -27,7 +27,7 @@ from ..tracking.satnogs import satellite_info
 from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_adsb,
                         set_dongle_ais, set_dongle_aprs,
                         set_dongle_aprs_iss, set_dongle_aprs_lasar,
-                        set_dongle_orbcomm,
+                        set_dongle_auto_sat, set_dongle_orbcomm,
                         set_dongle_pocsag, set_dongle_paused,
                         usb_dongles)
 
@@ -58,6 +58,7 @@ def _dongle_list():
                 "aprs_lasar": bool(e.get("aprs_lasar")),
                 "pocsag": bool(e.get("pocsag")),
                 "adsb": bool(e.get("adsb")),
+                "auto_sat": bool(e.get("auto_sat")),
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
                 "connected": bool(e.get("connected")),
@@ -890,6 +891,22 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 return
             set_dongle_paused(dev, on)
             self._send_json({'success': True, 'paused': bool(entry.get('paused'))}, code=200)
+        elif self.path.split('?')[0] == '/auto_sat_dongle':
+            # Toggle one dongle's auto-join satellite passes (the checkbox
+            # under the role dropdown on the dongle card):
+            # /auto_sat_dongle?d=<id>&on=1 — while the dongle listens in a
+            # dedicated role (AIS/ADS-B/...), it leaves that role when a
+            # pass starts and returns to it after set. The flag persists
+            # in the dongles table.
+            query = self._query()
+            dev = (query.get('d') or [''])[0].strip()
+            on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
+            entry = state.sdrs.get(dev)
+            if entry is None:
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
+                return
+            set_dongle_auto_sat(dev, on)
+            self._send_json({'success': True, 'auto_sat': bool(entry.get('auto_sat'))}, code=200)
         elif self.path.split('?')[0] == '/tune':
             # Manual tune (dongle reception test, e.g. FM broadcast radio):
             # /tune?f=89.7 parks the dongle on a frequency and pauses the

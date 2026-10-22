@@ -67,6 +67,7 @@ check("passes imported", len(rows) == 1 and rows[0]["sat_name"] == "Meteor-M 2-3
 check("frequency stored in Hz", rows[0]["frequency_hz"] == 137912500, rows[0])
 check("dongles imported", db.query("SELECT COUNT(*) c FROM dongles")[0]["c"] == 2)
 check("dongle roles", db.query_one("SELECT ais FROM dongles WHERE port=1235")["ais"] == 1)
+check("dongles auto_sat column", "auto_sat" in [r[1] for r in db.connect().execute("PRAGMA table_info(dongles)")])
 check("TLEs imported", db.query_one("SELECT name FROM tle_cache WHERE catnr=57166")["name"] == "Meteor-M 2-3")
 check("ships imported", db.query_one("SELECT data FROM ships WHERE mmsi=123456789") is not None)
 check("ais log imported", db.query("SELECT COUNT(*) c FROM ais_messages")[0]["c"] == 2)

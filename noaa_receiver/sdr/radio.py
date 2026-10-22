@@ -28,6 +28,7 @@ import struct
 import subprocess
 import threading
 import time
+import urllib.request
 import wave
 import zipfile
 from collections import deque
@@ -66,6 +67,11 @@ CAPTURE_BATCH = 64
 
 # Retry interval for a WAV that could not be opened/written (disk full etc.)
 WAV_RETRY_SECS = 10.0
+
+# The prawntenna manager's HTTP API port (its API.md: "All examples
+# assume the manager runs on http://HOST:8080/"). Only used to republish
+# a dongle whose rtl_tcp died — see _manager_republish.
+MANAGER_API_PORT = 8080
 
 _fft_window = None
 
@@ -177,6 +183,55 @@ def _rtl_tcp_connect(host, port, gain_db):
         _rtl_tcp_set(sock, RTL_TCP_SET_GAIN_MODE, 1)
         _rtl_tcp_set(sock, RTL_TCP_SET_GAIN, int(round(gain_db * 10)))
     return sock, tuner_type, gain_count
+
+
+def _manager_republish(host, port, api_port=None):
+    """Republish a remote dongle whose rtl_tcp died, via the prawntenna
+    manager (see its API.md).
+
+    The manager's watchdog kills a wedged/stalled rtl_tcp and frees its
+    port, but it never restarts it — its documented client flow is "if
+    /dongles.json shows the dongle as not published, call /publish again".
+    Without this the capture thread's retry loop hammers a dead port
+    forever and the receiver stays deaf until someone republishes by
+    hand (observed live 2026-10-22: both dongles' rtl_tcp stalled at
+    09:48, the manager freed the ports, and the receiver logged handshake
+    errors for 14 min until an operator called /publish).
+
+    Best effort, never raises: setups without a manager (a bare rtl_tcp
+    server) fail the /dongles.json fetch and the retry loop behaves
+    exactly as before. A plain /publish?d=ID&port=P restores the dongle's
+    remembered spawn options (API.md).
+    """
+    api_port = api_port or MANAGER_API_PORT
+    base = f"http://{host}:{api_port}"
+    try:
+        with urllib.request.urlopen(base + "/dongles.json", timeout=5) as r:
+            dongles = (json.loads(r.read().decode()) or {}).get("dongles") or []
+    except Exception:
+        return          # no manager (or unreachable) — keep retrying as before
+    for dg in dongles:
+        if dg.get("port") == port and dg.get("published"):
+            return          # already served — the next retry connects
+    for dg in dongles:
+        if dg.get("remembered_port") == port and not dg.get("published"):
+            try:
+                with urllib.request.urlopen(
+                        f"{base}/publish?d={dg.get('id')}&port={port}",
+                        timeout=10) as r:
+                    res = json.loads(r.read().decode()) or {}
+                if res.get("success"):
+                    state.log_console(f"🔄 Republished dongle {dg.get('id')} "
+                                      f"on {host}:{port} via the prawntenna "
+                                      f"manager — its rtl_tcp had died")
+                else:
+                    state.log_console(f"Prawntenna could not republish "
+                                      f"{dg.get('id')} on port {port}: "
+                                      f"{res.get('message')}", "warn")
+            except Exception as e:
+                state.log_console(f"Prawntenna republish call failed "
+                                  f"({host}:{port}): {e}", "warn")
+            return
 
 class _IQReader:
     """Block reader for the rtl_tcp IQ stream.
@@ -356,8 +411,9 @@ def _persist_dongles():
                 else:
                     host, port = e['host'], int(e['port'])
                 cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
-                            " aprs, aprs_iss, aprs_lasar, pocsag, adsb, added_ts)"
-                            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            " aprs, aprs_iss, aprs_lasar, pocsag, adsb,"
+                            " auto_sat, added_ts)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                             (host, port,
                              1 if e.get('ais') else 0,
                              1 if e.get('orbcomm') else 0,
@@ -365,7 +421,8 @@ def _persist_dongles():
                              1 if e.get('aprs_iss') else 0,
                              1 if e.get('aprs_lasar') else 0,
                              1 if e.get('pocsag') else 0,
-                             1 if e.get('adsb') else 0, time.time()))
+                             1 if e.get('adsb') else 0,
+                             1 if e.get('auto_sat') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -385,7 +442,7 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
         'ais': did == AIS_DONGLE, 'orbcomm': False, 'aprs': False,
         'aprs_iss': False, 'aprs_lasar': False,
-        'pocsag': False, 'adsb': False,
+        'pocsag': False, 'adsb': False, 'auto_sat': False,
         'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
         # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
@@ -507,6 +564,19 @@ _ROLE_DEFS = {
 }
 
 
+def _role_band(entry, role):
+    """Human-readable band description for a role — APRS names its live
+    channel from the entry's sub-mode presets (ISS / LASARsat
+    digipeater or the 144.800 MHz simplex channel)."""
+    band = _ROLE_DEFS[role][1]
+    if role == 'aprs':
+        band = band.format('436.925 MHz (LASARsat digipeater)'
+                           if entry.get('aprs_lasar')
+                           else '145.825 MHz (ISS digipeater)'
+                           if entry.get('aprs_iss') else '144.800 MHz')
+    return band
+
+
 def _set_dongle_role(did, role, on):
     """Switch one dongle between satellite tracking and a dedicated
     decode role (AIS / Orbcomm / APRS / POCSAG — the dashboard's role
@@ -521,8 +591,11 @@ def _set_dongle_role(did, role, on):
     card survive the switch. On=1 also ends every other role on the
     dongle and drops a dangling manual recording (a decode capture
     neither records nor demodulates FM — the flag would sit there and
-    resume the moment the dongle is switched back). Unknown id: False;
-    a no-op request still succeeds.
+    resume the moment the dongle is switched back). A manual role
+    change also cancels a pending auto-join restore (see
+    set_dongle_auto_sat): the operator's choice always wins over the
+    pass-end restore. Unknown id: False; a no-op request still
+    succeeds.
     """
     entry = state.sdrs.get(did)
     if entry is None:
@@ -530,12 +603,8 @@ def _set_dongle_role(did, role, on):
     on = bool(on)
     if bool(entry.get(role)) == on:
         return True
-    emoji, band = _ROLE_DEFS[role]
-    if role == 'aprs':      # APRS names its live channel (sub-mode preset)
-        band = band.format('436.925 MHz (LASARsat digipeater)'
-                           if entry.get('aprs_lasar')
-                           else '145.825 MHz (ISS digipeater)'
-                           if entry.get('aprs_iss') else '144.800 MHz')
+    emoji = _ROLE_DEFS[role][0]
+    band = _role_band(entry, role)
     with state.status_lock:
         entry[role] = on
         if on:
@@ -543,6 +612,12 @@ def _set_dongle_role(did, role, on):
                 if other != role:
                     entry[other] = False
             state.manual_recording.pop(did, None)
+        # a manual role choice always wins over a pending auto-join
+        # restore: the operator just picked this dongle's role by hand,
+        # so the pass-end restore must not stomp it
+        entry.pop('auto_saved_role', None)
+        entry.pop('auto_saved_aprs_iss', None)
+        entry.pop('auto_saved_aprs_lasar', None)
     if on:
         state.log_console(f"{emoji} Dongle {did} switched to {band} — satellite reception on it paused")
     else:
@@ -647,22 +722,142 @@ def set_dongle_aprs_lasar(did, on):
     _persist_dongles()
     return True
 
+# The dedicated decode role flags (dashboard role dropdown) — one
+# dongle, one role
+_ROLE_FLAGS = ('ais', 'orbcomm', 'aprs', 'pocsag', 'adsb')
+
+
+def _dongle_role(entry):
+    """The dedicated decode role a dongle is currently in ('ais',
+    'orbcomm', 'aprs', 'pocsag', 'adsb'), or None when it tracks the
+    satellites (a manual frequency override is not a role)."""
+    for role in _ROLE_FLAGS:
+        if entry.get(role):
+            return role
+    return None
+
+
+def set_dongle_auto_sat(did, on):
+    """Toggle one dongle's auto-join (the checkbox under the role
+    dropdown on its dashboard card): while the dongle listens in a
+    dedicated decode role (AIS / Orbcomm / APRS / POCSAG / ADS-B), it
+    leaves that role when a satellite pass starts — tuning to the pass
+    and recording like any tracker — and returns to the role after
+    set. The flag persists in the dongles table; the suspended role is
+    in-memory pass state only. Unknown id: False; a no-op request
+    still succeeds.
+
+    Enabling the checkbox during a running pass joins it immediately.
+    Disabling cancels a pending role restore: the dongle stays in
+    whatever role it is in right now (a manual choice always wins)."""
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return False
+    on = bool(on)
+    if bool(entry.get('auto_sat')) == on:
+        return True
+    with state.status_lock:
+        entry['auto_sat'] = on
+        if not on:
+            entry.pop('auto_saved_role', None)
+            entry.pop('auto_saved_aprs_iss', None)
+            entry.pop('auto_saved_aprs_lasar', None)
+        active = state.is_pass_active
+    if on:
+        state.log_console(f"🛰 Dongle {did}: auto-join satellite passes ON — its decode role is suspended during passes")
+        if active:
+            _auto_sat_join(did)
+    else:
+        state.log_console(f"🛰 Dongle {did}: auto-join satellite passes OFF")
+    _persist_dongles()
+    return True
+
+
+def _auto_sat_join(did):
+    """Suspend one dongle's decode role for the running pass (the
+    scheduler's PASS START hook; also used when the checkbox is
+    enabled mid-pass). The role flags clear, so the supervisor hands
+    the dongle to its satellite capture thread, which retunes to the
+    pass and records. Returns the suspended role name, or None when
+    there is nothing to do (no auto-join, paused, a Prawntuner session
+    owns the dongle, already on the satellites, already joined this
+    pass)."""
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return None
+    from .. import tuner   # lazy: tuner imports this module
+    if tuner.has_active_session(did):
+        # a Prawntuner session owns the dongle (it may have put it in
+        # this very role) — yanking it mid-measurement would break the
+        # session; the operator stops the session first
+        return None
+    with state.status_lock:
+        if not entry.get('auto_sat') or entry.get('paused'):
+            return None
+        role = _dongle_role(entry)
+        if role is None or entry.get('auto_saved_role'):
+            return None
+        entry['auto_saved_role'] = role
+        entry['auto_saved_aprs_iss'] = bool(entry.get('aprs_iss'))
+        entry['auto_saved_aprs_lasar'] = bool(entry.get('aprs_lasar'))
+        for flag in _ROLE_FLAGS:
+            entry[flag] = False
+    state.log_console(f"🛰 Dongle {did} auto-joined the pass — {_role_band(entry, role)} resumes after set")
+    _stop_capture(entry)
+    return role
+
+
+def auto_sat_join_all():
+    """PASS START hook: every dongle with auto-join enabled leaves its
+    decode role for the pass. Idempotent — dongles already joined this
+    pass (auto_saved_role set) are skipped, so the direct switch
+    between overlapping passes does not re-suspend anything."""
+    for did in list(state.sdrs):
+        _auto_sat_join(did)
+
+
+def auto_sat_leave_all():
+    """PASS END hook: return every dongle suspended by the auto-join to
+    the role it was in (APRS keeps its ISS/LASARsat channel preset).
+    Dongles whose role was changed by hand mid-pass carry no saved
+    role anymore — the manual choice stands and nothing is restored."""
+    for did in list(state.sdrs):
+        entry = state.sdrs.get(did)
+        if entry is None:
+            continue
+        with state.status_lock:
+            role = entry.pop('auto_saved_role', None)
+            iss = entry.pop('auto_saved_aprs_iss', False)
+            lasar = entry.pop('auto_saved_aprs_lasar', False)
+            if role is None:
+                continue
+            entry[role] = True
+            if role == 'aprs':
+                entry['aprs_iss'] = iss
+                entry['aprs_lasar'] = lasar
+        emoji = _ROLE_DEFS[role][0]
+        state.log_console(f"{emoji} Dongle {did} back to {_role_band(entry, role)} — the pass is over")
+        _stop_capture(entry)
+
+
 def load_dongles():
     """Register the startup dongle set: the persisted dongles table when
     it has rows, else calibration.DEFAULT_DONGLES (persisted right away,
     so later dashboard additions update the database)."""
     entries = [(r['host'], r['port'], bool(r['ais']), bool(r['orbcomm']),
                 bool(r['aprs']), bool(r['aprs_iss']), bool(r['aprs_lasar']),
-                bool(r['pocsag']), bool(r['adsb']))
+                bool(r['pocsag']), bool(r['adsb']), bool(r['auto_sat']))
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
-                                 " aprs_iss, aprs_lasar, pocsag, adsb"
+                                 " aprs_iss, aprs_lasar, pocsag, adsb,"
+                                 " auto_sat"
                                  " FROM dongles ORDER BY port, host")]
     from_db = bool(entries)   # persisted rows are the source of truth
     if not entries:
-        entries = [(h, p, False, False, False, False, False, False, False)
+        entries = [(h, p, False, False, False, False, False, False, False,
+                    False)
                    for h, p in DEFAULT_DONGLES]
     for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_lasar, \
-            was_pocsag, was_adsb in entries:
+            was_pocsag, was_adsb, was_auto_sat in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -679,6 +874,9 @@ def load_dongles():
                 for flag in ('ais', 'orbcomm', 'aprs', 'aprs_iss',
                              'aprs_lasar', 'pocsag', 'adsb'):
                     state.sdrs[did][flag] = False
+                # the auto-join checkbox is a setting, not a role: it
+                # restores independently of the role chain below
+                state.sdrs[did]['auto_sat'] = was_auto_sat
         if was_ais:
             # the AIS switch is persisted too - a restart must not silently
             # put a dongle the operator dedicated to ship traffic back on
@@ -1104,6 +1302,7 @@ def sdr_capture_thread(did):
             finalize_manual_rec()
             return
         run_started = time.time()
+        run_failed = False
         sock = None
         try:
             with state.status_lock:
@@ -1163,6 +1362,7 @@ def sdr_capture_thread(did):
                 raw = reader.read_batch(CAPTURE_BATCH)
                 if raw is None:
                     state.log_console(f"IQ stream ended (dongle {did}), reconnecting...", "warn")
+                    run_failed = True
                     break
                 if entry['iq'] is not None:
                     try:
@@ -1414,6 +1614,7 @@ def sdr_capture_thread(did):
                             wav_retry_at = now_ts + WAV_RETRY_SECS
 
         except Exception as e:
+            run_failed = True
             if not entry.get('closed') and not entry.get('ais') \
                     and not entry.get('orbcomm') and not entry.get('paused') \
                     and not entry.get('pocsag') and not entry.get('adsb'):   # a removed/role-switched/paused dongle's socket is
@@ -1433,10 +1634,15 @@ def sdr_capture_thread(did):
             # a dongle removed mid-backoff also needs its WAV closed here
             close_wav()
             return
+        # A failed run on a remote dongle: ask the prawntenna manager to
+        # republish it if its rtl_tcp is gone (see _manager_republish) —
+        # the manager kills a wedged rtl_tcp but never restarts it, so
+        # without this the retry loop below hammers a dead port forever.
+        if run_failed and entry.get('usb_idx') is None:
+            _manager_republish(entry['host'], entry['port'])
         # Backoff when the rtl_tcp server stays unreachable (daemon down,
         # host off, network drop): 5 s doubling up to 15 s, reset after a
-        # stable run. The prawntenna manager (see its API.md) kills a
-        # wedged rtl_tcp and republishes the same port within ~30 s, so
+        # stable run. A republished rtl_tcp is up within seconds, so
         # retrying more slowly than that only adds dead air.
         if time.time() - run_started >= 30:
             restart_backoff = 5.0

@@ -185,6 +185,14 @@ def connect():
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN adsb INTEGER DEFAULT 0")
                 _conn.commit()
+            if "auto_sat" not in cols:
+                # Auto-join satellite passes: a dongle in a dedicated
+                # decode role leaves it during a pass and returns after
+                # set (the checkbox on its dashboard card; see
+                # radio.set_dongle_auto_sat)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN auto_sat INTEGER DEFAULT 0")
+                _conn.commit()
             # One-time repair: the pre-explicit-column positional
             # INSERTs wrote the orbcomm flag into added_ts and the
             # timestamp into orbcomm (the column arrived by ALTER

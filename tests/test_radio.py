@@ -458,5 +458,112 @@ except ValueError:
     pass
 assert radio.remove_dongle(usb_did) and usb_did not in state.sdrs
 print("12 USB dongle registry: id, source fields, persistence, idempotency, validation OK")
+
+# 13. auto-join satellite passes (the dongle-card checkbox): a dongle in
+# a dedicated decode role with auto_sat leaves that role when a pass
+# starts and returns to it after set. Driven here exactly like the
+# scheduler drives it: auto_sat_join_all() on PASS START,
+# auto_sat_leave_all() on PASS END.
+did, created = radio.add_dongle(HOST, PORT)
+assert created and state.primary_dongle == DID
+entry = state.sdrs[DID]
+assert radio.set_dongle_auto_sat('nope:1', True) is False      # unknown dongle
+assert radio.set_dongle_auto_sat(DID, True) is True
+assert db.query_one("SELECT auto_sat FROM dongles")["auto_sat"] == 1, "auto-join must persist"
+assert radio.set_dongle_auto_sat(DID, True) is True            # idempotent
+# a dongle on the satellites has nothing to suspend
+radio.auto_sat_join_all()
+with state.status_lock:
+    assert not entry.get('auto_saved_role'), "a dongle on the satellites must not be suspended"
+# put it in the AIS role and start the AIS thread (no supervisor in
+# this test — threads are started by hand, like 9b)
+assert radio.set_dongle_ais(DID, True) is True
+t_ais = threading.Thread(target=_ais.ais_capture_thread, args=(DID,), daemon=True); t_ais.start()
+wait_for(lambda: state.ais_enabled and state.ais_dongle == DID, what='AIS thread up')
+# PASS START: the role is suspended, the AIS thread exits, the satellite
+# capture thread takes over, retunes to the pass and records
+set_sched(437550000, "ISS (Zarya)", True)
+radio.auto_sat_join_all()
+with state.status_lock:
+    assert not entry['ais'] and entry['auto_saved_role'] == 'ais'
+wait_for(lambda: not t_ais.is_alive(), secs=5, what='AIS thread exits on auto-join')
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+expect_cmd(437550000)
+wait_for(lambda: entry['is_recording'] and 'ISS_(Zarya)_' in os.path.basename(entry['wav_path'] or ''), what='auto-joined dongle records the pass')
+# idempotent: a direct switch to an overlapping pass must not re-suspend
+radio.auto_sat_join_all()
+with state.status_lock:
+    assert entry['auto_saved_role'] == 'ais' and not entry['ais']
+# PASS END: the role is restored, the satellite thread exits, the AIS
+# thread takes over again
+set_sched(137620000, "idle", False)
+radio.auto_sat_leave_all()
+with state.status_lock:
+    assert entry['ais'] and not entry.get('auto_saved_role')
+wait_for(lambda: not t.is_alive(), secs=5, what='satellite thread exits on role restore')
+wait_for(lambda: not entry['is_recording'], what='pass WAV closed on role restore')
+t_ais = threading.Thread(target=_ais.ais_capture_thread, args=(DID,), daemon=True); t_ais.start()
+wait_for(lambda: state.ais_enabled and state.ais_dongle == DID, what='AIS thread back after the pass')
+expect_cmd(AIS_CENTER_HZ)
+# a manual role choice mid-pass wins over the pending restore (the
+# auto-joined dongle shows "Satellites" in the role dropdown, so the
+# operator's manual pick is a DIFFERENT dedicated role)
+set_sched(137100000, "Meteor-M 2-3", True)
+radio.auto_sat_join_all()
+with state.status_lock:
+    assert entry['auto_saved_role'] == 'ais' and not entry['ais']
+wait_for(lambda: not t_ais.is_alive(), secs=5, what='AIS thread exits on the second auto-join')
+assert radio.set_dongle_adsb(DID, True) is True               # operator picks a role by hand mid-pass
+with state.status_lock:
+    assert entry['adsb'] and not entry.get('auto_saved_role'), "a manual role change must cancel the pending restore"
+set_sched(137620000, "idle", False)
+radio.auto_sat_leave_all()
+with state.status_lock:
+    assert entry['adsb'] and not entry['ais'], "no restore after a manual mid-pass role change"
+assert radio.set_dongle_adsb(DID, False) is True
+# unchecking the checkbox cancels a pending restore too
+assert radio.set_dongle_ais(DID, True) is True
+set_sched(137100000, "Meteor-M 2-3", True)
+radio.auto_sat_join_all()
+with state.status_lock:
+    assert entry['auto_saved_role'] == 'ais'
+assert radio.set_dongle_auto_sat(DID, False) is True
+with state.status_lock:
+    assert not entry.get('auto_saved_role') and not entry['auto_sat']
+radio.auto_sat_leave_all()
+with state.status_lock:
+    assert not entry['ais'], "unchecking must cancel the pending restore"
+# enabling the checkbox mid-pass joins the running pass immediately
+assert radio.set_dongle_ais(DID, True) is True
+set_sched(137100000, "Meteor-M 2-3", True)
+assert radio.set_dongle_auto_sat(DID, True) is True
+with state.status_lock:
+    assert entry['auto_saved_role'] == 'ais' and not entry['ais'], "enabling mid-pass must join immediately"
+set_sched(137620000, "idle", False)
+radio.auto_sat_leave_all()
+with state.status_lock:
+    assert entry['ais'] and not entry.get('auto_saved_role')
+# a paused dongle is not auto-joined
+assert radio.set_dongle_paused(DID, True) is True
+radio.auto_sat_join_all()
+with state.status_lock:
+    assert entry['ais'] and not entry.get('auto_saved_role'), "a paused dongle must not auto-join"
+assert radio.set_dongle_paused(DID, False) is True
+# APRS keeps its channel preset across the suspend/restore
+assert radio.set_dongle_aprs(DID, True) is True
+assert radio.set_dongle_aprs_iss(DID, True) is True
+radio.auto_sat_join_all()
+with state.status_lock:
+    assert entry['auto_saved_role'] == 'aprs' and not entry['aprs']
+radio.auto_sat_leave_all()
+with state.status_lock:
+    assert entry['aprs'] and entry['aprs_iss'] and not entry.get('auto_saved_role')
+assert radio.set_dongle_aprs(DID, False) is True
+# persistence roundtrip: the flag survives a reload from the dongles table
+radio.load_dongles()
+with state.status_lock:
+    assert state.sdrs[DID]['auto_sat'] is True, "auto-join must restore from the dongles table"
+assert radio.remove_dongle(DID) is True
+print("13 auto-join satellite passes: suspend/restore, manual override, pause, APRS preset, persistence OK")
 print("ALL RADIO TESTS PASSED")
 os._exit(0)

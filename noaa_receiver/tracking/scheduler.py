@@ -8,6 +8,7 @@ from .. import state
 from ..config import LAT, LON, METEOR_LRPT_HZ, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_ISS, RECORD_LOCAL_DIR, TLE_REFRESH_HOURS, TRACKED_SATS, UTC_OFFSET
 
 from ..decoding.decode import decode_recording, read_decode_marker, sat_short_name
+from ..sdr import radio
 from ..web.history import log_pass
 from .passes import HAS_SKYFIELD, load, load_tles_from_cache, predict_passes, refresh_tles, wgs84
 from .satnogs import satellite_info
@@ -152,6 +153,8 @@ def scheduler_thread():
                 
                 finished_pass = None
                 pass_peak = 0.0
+                pass_started = False
+                pass_ended = False
                 with state.status_lock:
                     if triggered and not _same_pass(state.current_pass, triggered):
                         if state.current_pass is not None:
@@ -183,6 +186,7 @@ def scheduler_thread():
                         state.log_console(f"🔴 PASS START: {triggered['sat_name']} {round(tune/1e6,4)} MHz, max {triggered['max_alt']:.0f}° at {local_rise.strftime('%H:%M')}")
                         if fb_note:
                             state.log_console(f"🛰 {fb_note}")
+                        pass_started = True
                     elif not triggered and state.current_pass is not None:
                         finished_pass = state.current_pass
                         local_set = finished_pass["set_utc"] + timedelta(hours=UTC_OFFSET)
@@ -200,6 +204,16 @@ def scheduler_thread():
                         with state.signal_lock:
                             pass_peak = state.pass_signal_peak
                             state.pass_signal_peak = 0.0
+                        pass_ended = True
+
+                # Auto-join (the checkbox on the dongle card): dongles in a
+                # dedicated decode role with auto-join enabled leave that
+                # role for the pass and return to it after set. Called
+                # OUTSIDE status_lock — the join/leave take it themselves.
+                if pass_started:
+                    radio.auto_sat_join_all()
+                elif pass_ended:
+                    radio.auto_sat_leave_all()
 
                 # Doppler correction for the active pass: range-rate from the
                 # same TLEs, applied in software by the capture threads

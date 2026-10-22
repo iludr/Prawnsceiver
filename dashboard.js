@@ -1337,6 +1337,12 @@
             // the ISS digipeater checkbox only exists in APRS mode
             c.aprsIssRow.style.display = role === 'aprs' ? 'flex' : 'none';
             c.aprsLasarRow.style.display = role === 'aprs' ? 'flex' : 'none';
+            // the auto-join checkbox matters in the dedicated roles —
+            // and stays visible while the dongle is auto-joined
+            // mid-pass (role flags cleared, auto_sat still set), so it
+            // can be switched off again
+            const dedicated = role === 'ais' || role === 'orbcomm' || role === 'aprs' || role === 'pocsag' || role === 'adsb';
+            c.autoSatRow.style.display = (dedicated || d.auto_sat) ? 'flex' : 'none';
             if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
             c.roleLast = role;
             if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag' || role === 'adsb') && liveAudioOn === d.id) toggleLiveAudio(d.id);
@@ -1773,6 +1779,37 @@
                 };
                 run(0);
             });
+            // Auto-join satellite passes checkbox (shown by
+            // applyDongleRole in the dedicated roles): while this dongle
+            // listens for AIS/ADS-B/..., it leaves that role when a
+            // satellite pass starts — tuning to the pass and recording
+            // like any tracker — and returns to the role after set.
+            // The checkbox state itself mirrors d.auto_sat from
+            // dongles.json
+            const autoSatRow = document.createElement('label');
+            autoSatRow.style.cssText = 'display:none;align-items:center;width:100%;margin-top:4px;padding:3px 10px;background:#0f2233;color:#a8b8d8;border:1px solid #1a3a5c;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.82em;box-sizing:border-box;';
+            autoSatRow.title = 'Join satellite passes automatically: while this dongle listens in a dedicated role (AIS/ADS-B/...), it leaves that role when a pass starts and returns to it after set — no effect while it tracks the satellites';
+            const autoSatBox = document.createElement('input');
+            autoSatBox.type = 'checkbox';
+            autoSatBox.style.cssText = 'accent-color:#53d769;margin-right:6px;';
+            const autoSatTxt = document.createElement('span');
+            autoSatTxt.textContent = '🛰 Auto-join satellite passes';
+            autoSatRow.appendChild(autoSatBox); autoSatRow.appendChild(autoSatTxt);
+            autoSatBox.onchange = () => {
+                const on = autoSatBox.checked;
+                fetch('/auto_sat_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(on ? '🛰 Auto-join ON — this dongle leaves its decode role during passes and returns after set'
+                                     : '🛰 Auto-join OFF — this dongle stays in its role');
+                        } else {
+                            autoSatBox.checked = !on;
+                            toast('Auto-join switch failed: ' + (data.error || 'unknown error'), true);
+                        }
+                    })
+                    .catch(() => { autoSatBox.checked = !on; toast('Auto-join switch failed: receiver unreachable', true); });
+            };
             // ISS digipeater checkbox (APRS mode only, shown by
             // applyDongleRole): retunes the APRS channel from the
             // 144.800 MHz DL simplex channel to the ISS (Zarya)
@@ -1852,12 +1889,12 @@
                     })
                     .catch(() => toast('Pause failed: receiver unreachable', true));
             };
-            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(roleSel); card.appendChild(aprsIssRow); card.appendChild(aprsLasarRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
+            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(roleSel); card.appendChild(autoSatRow); card.appendChild(aprsIssRow); card.appendChild(aprsLasarRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
             col.appendChild(card);
             c = dongleCards[d.id] = {
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
-                hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, aprsIssRow, aprsIssBox, aprsLasarRow, aprsLasarBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
+                hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, autoSatRow, autoSatBox, aprsIssRow, aprsIssBox, aprsLasarRow, aprsLasarBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secMode, secBw, secScan, modeRow, modeSel, modeHint,
             };
@@ -1901,6 +1938,10 @@
             // changes, e.g. a second browser tab)
             if (c.issLast !== !!d.aprs_iss) { c.issLast = !!d.aprs_iss; c.aprsIssBox.checked = c.issLast; }
             if (c.lasarLast !== !!d.aprs_lasar) { c.lasarLast = !!d.aprs_lasar; c.aprsLasarBox.checked = c.lasarLast; }
+            // Auto-join checkbox mirrors the server flag (the click
+            // already flipped it locally; this only follows external
+            // changes, e.g. a second browser tab)
+            if (c.autoSatLast !== !!d.auto_sat) { c.autoSatLast = !!d.auto_sat; c.autoSatBox.checked = c.autoSatLast; }
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
             // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise
