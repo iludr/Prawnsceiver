@@ -204,7 +204,7 @@
         // SDR#-style right sidebar: Zoom / Contrast / Range / Offset
         // sliders, persisted per dongle id in localStorage, + a reset view
         // button. Zoom mirrors the Ctrl+wheel zoom (both recenter); the dB
-        // controls drive mapDbRow/drawSpectrum and take effect on the whole
+        // controls drive the row paint (dbToLevel) and drawSpectrum and take effect on the whole
         // retained history via replayWaterfall.
         function buildWfControls(b, meta) {
             let saved = {};
@@ -247,22 +247,22 @@
                 v => zVal(v).toFixed(1) + '\u00d7', v => {
                     b.zoom = zVal(v); b.zoomOffKHz = 0;   // recenter on zoom
                     updateZoomBadge(b); updateFreqLabels(lastSharedMHz);
-                    replayWaterfall(b);
+                    scheduleReplay(b);
                     if (wfOverlayOn) drawWfOverlay();
                 });
             b.syncZoomSlider = () => { zctl.inp.value = zRaw(b.zoom || 1); zctl.upd(); };
             mk('Contrast', 0.3, 3, 0.05, b.dbContrast, v => v.toFixed(2),
-                v => { b.dbContrast = v; save(); replayWaterfall(b); });
+                v => { b.dbContrast = v; save(); scheduleReplay(b); });
             mk('Range', 10, 120, 5, b.dbRange, v => v.toFixed(0) + ' dB',
-                v => { b.dbRange = v; save(); replayWaterfall(b); });
+                v => { b.dbRange = v; save(); scheduleReplay(b); });
             mk('Offset', -140, 0, 1, b.dbOffset, v => v.toFixed(0) + ' dB',
-                v => { b.dbOffset = v; save(); replayWaterfall(b); });
+                v => { b.dbOffset = v; save(); scheduleReplay(b); });
             const tVal = v => Math.min(WF_TIME_MAX, Math.max(WF_TIME_MIN,
                 Math.round(WF_TIME_MIN * Math.pow(2, v / 100 * Math.log2(WF_TIME_MAX / WF_TIME_MIN)))));
             const tRaw = t => Math.round(Math.log2(t / WF_TIME_MIN) / Math.log2(WF_TIME_MAX / WF_TIME_MIN) * 100);
             mk('Time', 0, 100, 1, tRaw(b.tRangeSec || WF_TIME_DEFAULT),
                 v => { const t = tVal(v); return t < 60 ? t + ' s' : (t / 60).toFixed(1) + ' min'; },
-                v => { b.tRangeSec = tVal(v); save(); replayWaterfall(b); });
+                v => { b.tRangeSec = tVal(v); save(); scheduleReplay(b); });
             const rst = document.createElement('button');
             rst.textContent = 'Reset view';
             rst.onclick = () => {
@@ -272,7 +272,7 @@
                 save();
                 updateZoomBadge(b); updateFreqLabels(lastSharedMHz);
                 el.replaceWith(buildWfControls(b, meta));
-                replayWaterfall(b);
+                scheduleReplay(b);
                 if (wfOverlayOn) drawWfOverlay();
             };
             el.appendChild(rst);
@@ -298,13 +298,22 @@
             // Name, source and tuned frequency live on the control card —
             // the head carries only the dongle number + connection LED
             title.textContent = `Dongle ${meta.index}${meta.primary ? ' ★' : ''}`;
+            // Options-card toggle: hides just this dongle's control card
+            // so its waterfall spans the full width (the ▾ button hides
+            // the whole block). State persists per dongle; narrow screens
+            // start collapsed — see dongleCardCollapsed.
+            const cardBtn = document.createElement('button');
+            cardBtn.className = 'wf-collapse-btn wf-card-btn';
+            cardBtn.textContent = '⚙';
+            cardBtn.title = 'Hide/show this dongle\'s options card — the waterfall goes full width';
+            cardBtn.onclick = () => toggleDongleCardCollapse(meta.id);
+            cardBtn.style.marginLeft = 'auto';
             const collapseBtn = document.createElement('button');
             collapseBtn.className = 'wf-collapse-btn';
             collapseBtn.textContent = '▾';
             collapseBtn.title = 'Collapse/expand this dongle (waterfall + card)';
             collapseBtn.onclick = () => toggleDongleCollapse(meta.id);
-            collapseBtn.style.marginLeft = 'auto';
-            head.appendChild(led); head.appendChild(title); head.appendChild(collapseBtn);
+            head.appendChild(led); head.appendChild(title); head.appendChild(cardBtn); head.appendChild(collapseBtn);
             // Row: time gutter | waterfall+spectrum column. The overlays
             // (features, hover, highlight) sit inside the column only, so
             // the hover/click frequency mapping stays relative to the
@@ -439,7 +448,7 @@
                 specCtx: specCanvas.getContext('2d'),
                 timeCtx, dbScaleCtx, overlay, hover, title, led, selHl, selLbl,
                 wfBufCtx: wfBuf.getContext('2d'), timeBufCtx: timeBuf.getContext('2d'),
-                block, collapseBtn, cardHolder, freqLabels,
+                block, collapseBtn, cardBtn, cardHolder, freqLabels,
                 serial: meta.id, centerMHz: null,
                 zoom: 1, zoomOffKHz: 0, recHl: hl, zoomBadge, satLine, satLineLbl,
                 // dB spectrum state: ring of recent int16 dB*10 rows,
@@ -450,19 +459,25 @@
                 tRangeSec: WF_TIME_DEFAULT, pxCarry: 0,
                 accSum: null, accN: 0, rowTs: [],
             };
+            // Reusable 1-px-high RGBA row the paint loop writes into
+            // (one putImageData per pixel row); the alpha channel is
+            // preset once — the loop only writes RGB
+            b.rowImg = b.wfCtx.createImageData(WF_WIDTH, 1);
+            for (let x = 3; x < WF_WIDTH * 4; x += 4) b.rowImg.data[x] = 255;
             controls.replaceWith(buildWfControls(b, meta));
             drawDbScale(b);   // initial paint before the first row arrives
             wireWfInteractions(b, wrap, wfCanvas, meta);
             zoomBadge.onclick = ev => {
                 ev.stopPropagation();
                 b.zoom = 1; b.zoomOffKHz = 0;
-                replayWaterfall(b);
+                scheduleReplay(b);
                 updateZoomBadge(b);
                 if (b.syncZoomSlider) b.syncZoomSlider();
                 updateFreqLabels(lastSharedMHz);
                 if (wfOverlayOn) drawWfOverlay();
             };
             applyDongleCollapse(meta.id);
+            applyDongleCardCollapse(meta.id);
             if (wfOverlayOn) { overlay.style.display = 'block'; drawWfOverlay(); }
             return b;
         }
@@ -486,6 +501,33 @@
             try { localStorage.setItem('dongle-collapsed-' + serial, dongleCollapsed(serial) ? '0' : '1'); }
             catch (e) {}
             applyDongleCollapse(serial);
+            if (wfOverlayOn) drawWfOverlay();
+        }
+
+        // ---------- Per-dongle options-card collapse ----------
+        // Independent of the block collapse above: hiding the control
+        // card lets its waterfall span the full width. State persists
+        // per dongle serial; narrow screens start collapsed so the
+        // waterfall keeps the full width on mobile devices (the same
+        // default initPanels applies to the System Status panel).
+        function dongleCardCollapsed(serial) {
+            let v = null;
+            try { v = localStorage.getItem('dongle-card-collapsed-' + serial); } catch (e) {}
+            return v === '1' || (v === null && window.innerWidth < 860);
+        }
+        function applyDongleCardCollapse(serial) {
+            const b = wfBlocks[serial];
+            if (!b) return;
+            const collapsed = dongleCardCollapsed(serial);
+            b.cardHolder.style.display = collapsed ? 'none' : '';
+            b.cardBtn.classList.toggle('collapsed', collapsed);
+        }
+        function toggleDongleCardCollapse(serial) {
+            try {
+                localStorage.setItem('dongle-card-collapsed-' + serial,
+                    dongleCardCollapsed(serial) ? '0' : '1');
+            } catch (e) {}
+            applyDongleCardCollapse(serial);
             if (wfOverlayOn) drawWfOverlay();
         }
 
@@ -623,7 +665,7 @@
                 newOff = Math.min(maxOff, Math.max(-maxOff, newOff));
                 b.zoom = newZoom;
                 b.zoomOffKHz = newOff;
-                replayWaterfall(b);
+                scheduleReplay(b);
                 updateZoomBadge(b);
                 if (b.syncZoomSlider) b.syncZoomSlider();
                 updateFreqLabels(lastSharedMHz);
@@ -748,6 +790,20 @@
             return [Math.round(r), Math.round(g), Math.round(b)];
         }
 
+        // The palette as a 256-entry RGBA lookup table, evaluated once.
+        // The per-row paint below writes straight into an ImageData row
+        // through this LUT — the old loop called magnitudeToColor per
+        // pixel and painted 512 individual fillRects, each with a
+        // freshly parsed rgb() string: 30k+ string parses and fill calls
+        // per second per dongle, the main reason the waterfall was
+        // sluggish, worst on mobile CPUs.
+        const WF_PALETTE = new Uint8ClampedArray(256 * 4);
+        for (let i = 0; i < 256; i++) {
+            const [r, g, bl] = magnitudeToColor(i);
+            WF_PALETTE[i * 4] = r; WF_PALETTE[i * 4 + 1] = g;
+            WF_PALETTE[i * 4 + 2] = bl; WF_PALETTE[i * 4 + 3] = 255;
+        }
+
         // dB -> 0..255 palette level with the SDR#-style controls:
         // Offset = the dB level at palette bottom... see the sliders in the
         // block's right sidebar. db10 = dB*10 (int16 off the wire).
@@ -756,11 +812,6 @@
             t = t < 0 ? 0 : (t > 1 ? 1 : t);
             if (b.dbContrast !== 1) t = Math.pow(t, b.dbContrast);
             return t * 255;
-        }
-        function mapDbRow(b, dbRow) {
-            const out = new Uint8ClampedArray(512);
-            for (let i = 0; i < 512; i++) out[i] = dbToLevel(b, dbRow[i]);
-            return out;
         }
         // Fallback (polling) rows are per-row normalized 0..255 with no
         // absolute level. Converting them to a FIXED pseudo-dB scale
@@ -792,22 +843,30 @@
                 return s < 0 ? 0 : (s >= 512 ? 511 : s);
             };
         }
-        function drawWaterfall(b, mappedRow, dbRow) {
-            if (!mappedRow) return;
+        // Paint ONE pixel row at the waterfall top: scroll the canvas
+        // down via the offscreen buffer, then write the new row as a
+        // single ImageData strip (dB -> palette level -> LUT). srcBin is
+        // the zoom mapping, computed once per frame by the caller. The
+        // spectrum pane is NOT redrawn here — callers draw it once per
+        // frame with the newest row.
+        function drawWaterfall(b, dbRow, srcBin) {
             // scroll one row down via the offscreen buffer: still all
-            // GPU-side (no getImageData/putImageData readback), but
-            // never self-referential — drawing a canvas onto itself
-            // rasterizes with stale-tile seams on some GPU stacks
-            // (fixed flickering lines that the backing store never
-            // shows)
+            // GPU-side (no getImageData/putImageData readback of the
+            // scrolled area), but never self-referential — drawing a
+            // canvas onto itself rasterizes with stale-tile seams on
+            // some GPU stacks (fixed flickering lines that the backing
+            // store never shows)
             b.wfBufCtx.drawImage(b.wfCtx.canvas, 0, 0);
             b.wfCtx.drawImage(b.wfBufCtx.canvas, 0, 1);
-            const srcBin = wfSrcBin(b);
+            const d = b.rowImg.data, pal = WF_PALETTE;
             for (let x = 0; x < WF_WIDTH; x++) {
-                const [r, g, b2] = magnitudeToColor(mappedRow[srcBin(x)]);
-                b.wfCtx.fillStyle = `rgb(${r},${g},${b2})`;
-                b.wfCtx.fillRect(x, 0, 1, 1);
+                // dbToLevel returns 0..255, so the round-half-up index
+                // can never exceed the 256-entry LUT
+                const li = (dbToLevel(b, dbRow[srcBin(x)]) + 0.5) | 0;
+                const o = x * 4, p = li * 4;
+                d[o] = pal[p]; d[o + 1] = pal[p + 1]; d[o + 2] = pal[p + 2];
             }
+            b.wfCtx.putImageData(b.rowImg, 0, 0);
             // Time gutter: scroll in lockstep; timestamp by wall clock (the
             // row rate varies with the capture rate / feed rate)
             if (b.timeCtx) {
@@ -822,7 +881,6 @@
                     b.timeCtx.fillText(new Date().toTimeString().slice(0, 8), 2, 1);
                 }
             }
-            drawSpectrum(b, dbRow, mappedRow, srcBin);
         }
         // dB scale gutter left of the spectrum pane (mirrors the time
         // gutter left of the waterfall): the dB numbers moved out of the
@@ -859,7 +917,7 @@
         // SDR#-style spectrum pane: dBFS Y axis scaled by the same
         // offset/range view as the waterfall palette, grid + trace + the
         // green tuning line at the tracked center
-        function drawSpectrum(b, dbRow, mappedRow, srcBin) {
+        function drawSpectrum(b, dbRow, srcBin) {
             const ctx = b.specCtx;
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, WF_WIDTH, SPEC_HEIGHT);
@@ -949,12 +1007,21 @@
                     const mean = new Int16Array(512);
                     for (let i = 0; i < 512; i++) mean[i] = Math.round(b.accSum[i] / b.accN);
                     b.accSum.fill(0); b.accN = 0;
-                    const mapped = mapDbRow(b, mean);
-                    for (let k = 0; k < n; k++) drawWaterfall(b, mapped, mean);
+                    // one zoom mapping + one spectrum redraw per frame,
+                    // not per pixel row (n rows share this mean)
+                    const srcBin = wfSrcBin(b);
+                    for (let k = 0; k < n; k++) drawWaterfall(b, mean, srcBin);
+                    drawSpectrum(b, mean, srcBin);
                 });
             }
         }
         let wfSocket = null, wfWsBackoff = 5000;
+        const wfDecoder = new TextDecoder();
+        // Narrow screens get half the row rate (see connectWaterfallWS);
+        // the resize listener below re-negotiates when the breakpoint
+        // is crossed while the socket is live
+        let wfNarrow = window.innerWidth < 860;
+        function wfWsRate() { return wfNarrow ? 30 : 60; }
         function wfWsLive() { return wfSocket && wfSocket.readyState === 1; }
         function connectWaterfallWS() {
             try {
@@ -969,7 +1036,10 @@
                 ws.onopen = () => {
                     wfWsBackoff = 5000;   // reset after a good run
                     try {
-                        ws.send('rate=60');
+                        // 30 rows/s on narrow screens: the paint load
+                        // halves with the rate and the default 5 s time
+                        // range still fills at 2 px/row
+                        ws.send('rate=' + wfWsRate());
                         ws.send('sub=dongles,status,passes,track,ais,orbcomm,aprs,power,recordings');
                     } catch (e) {}
                 };
@@ -981,11 +1051,11 @@
                     if (u[0] === 2) {
                         // JSON topic push: [type=2][u16be topic_len][topic][json]
                         if (u.length < 3 + nlen) return;
-                        const topic = new TextDecoder().decode(u.subarray(3, 3 + nlen));
+                        const topic = wfDecoder.decode(u.subarray(3, 3 + nlen));
                         const apply = WS_TOPICS[topic];
                         if (!apply) return;
                         try {
-                            apply(JSON.parse(new TextDecoder().decode(u.subarray(3 + nlen))));
+                            apply(JSON.parse(wfDecoder.decode(u.subarray(3 + nlen))));
                         } catch (e) { console.error('WS topic ' + topic + ' failed:', e); }
                         return;
                     }
@@ -996,7 +1066,7 @@
                         // the rows exactly like the signal itself. Baked
                         // pixels do not survive a zoom/contrast replay.
                         if (u.length < 3 + nlen + 2) return;
-                        const did = new TextDecoder().decode(u.subarray(3, 3 + nlen));
+                        const did = wfDecoder.decode(u.subarray(3, 3 + nlen));
                         const b = wfBlocks[did];
                         if (!b) return;
                         const mk = new Int16Array(ev.data.slice(3 + nlen))[0] / 10;
@@ -1014,7 +1084,7 @@
                     }
                     if (u[0] !== 1) return;
                     if (u.length < 3 + nlen + 1024) return;
-                    const did = new TextDecoder().decode(u.subarray(3, 3 + nlen));
+                    const did = wfDecoder.decode(u.subarray(3, 3 + nlen));
                     const b = wfBlocks[did];
                     if (!b) return;
                     // slice(): the payload offset is byte-aligned, Int16Array
@@ -1057,7 +1127,8 @@
             const rows = b.dbRing.slice(-want);
             const pxPerRow = WF_HEIGHT / Math.max(1, rows.length);
             const sum = new Float64Array(512);
-            let n = 0, carry = 0;
+            const srcBin = wfSrcBin(b);
+            let n = 0, carry = 0, lastMean = null;
             for (const e of rows) {
                 for (let i = 0; i < 512; i++) sum[i] += e.db[i];
                 n++;
@@ -1067,11 +1138,26 @@
                     carry -= k;
                     const mean = new Int16Array(512);
                     for (let i = 0; i < 512; i++) mean[i] = Math.round(sum[i] / n);
-                    const mapped = mapDbRow(b, mean);
-                    for (let j = 0; j < k; j++) drawWaterfall(b, mapped, mean);
+                    lastMean = mean;
+                    for (let j = 0; j < k; j++) drawWaterfall(b, mean, srcBin);
                     sum.fill(0); n = 0;
                 }
             }
+            // the spectrum shows the newest replayed row — drawn once,
+            // not per pixel row
+            if (lastMean) drawSpectrum(b, lastMean, srcBin);
+        }
+
+        // Replays are batched onto the next animation frame: the slider
+        // and zoom handlers fire per input event, and a full-history
+        // replay per event made dragging them janky (a replay redraws up
+        // to a full canvas of pixel rows)
+        function scheduleReplay(b) {
+            if (b.replayPending) return;
+            b.replayPending = requestAnimationFrame(() => {
+                b.replayPending = 0;
+                replayWaterfall(b);
+            });
         }
 
         function updateFreqLabels(freqMHz) {
@@ -1209,7 +1295,18 @@
             }
         }
 
-        window.addEventListener('resize', () => { if (wfOverlayOn) drawWfOverlay(); });
+        window.addEventListener('resize', () => {
+            if (wfOverlayOn) drawWfOverlay();
+            // crossing the mobile breakpoint re-negotiates the WebSocket
+            // row rate (30 rows/s narrow, 60 wide — see connectWaterfallWS)
+            const narrow = window.innerWidth < 860;
+            if (narrow !== wfNarrow) {
+                wfNarrow = narrow;
+                if (wfWsLive()) {
+                    try { wfSocket.send('rate=' + wfWsRate()); } catch (e) {}
+                }
+            }
+        });
 
         async function fetchWaterfall() {
             try {

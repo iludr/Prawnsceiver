@@ -2131,3 +2131,51 @@ The retune itself was sound; completing it found three loose ends:
 - tests/test_lrpt.py section 8 pins the new geometry (plateau
   -65..-59 kHz + carrier at -55 kHz) and the notch derivation;
   _pick_product_png renumbered to section 9.
+
+### 2026-10-23 ~19:20 local — 📶 Waterfall pipeline rework + collapsible dongle options card (dashboard.js)
+
+The waterfall was sluggish, worst on mobile. The per-row paint loop
+drew 512 individual fillRects per pixel row, each with a freshly
+built `rgb(r,g,b)` string (parsed as CSS on every assignment) plus a
+`magnitudeToColor` array allocation — at 60 rows/s per dongle that is
+30k+ string parses, allocations and draw calls per second per dongle,
+before any GPU work. Dragging the Contrast/Range/Offset/Time sliders
+compounded it: every input event replayed the whole retained history
+synchronously.
+
+- ROW PAINT (dashboard.js): the palette is now a 256-entry RGBA LUT
+  evaluated once (`WF_PALETTE` from `magnitudeToColor`); a row is
+  written into a reusable 1-px `ImageData` and committed with ONE
+  `putImageData`. `mapDbRow` is gone. Micro-benchmark of the paint
+  loop: 0.194 ms/row -> 0.003 ms/row (~62x; JS-side only — the old
+  path's 512 draw calls + CSS color parses per row are on top of
+  that in a real browser).
+- SPECTRUM HOIST: `drawSpectrum` no longer runs per pixel row (n rows
+  per frame share one mean); it is drawn once per frame with the
+  newest row, in the live rAF and at the end of `replayWaterfall`.
+  The zoom mapping (`wfSrcBin`) is also computed once per frame.
+- REPLAY BATCHING: slider/zoom handlers now go through
+  `scheduleReplay` (one `replayWaterfall` per animation frame), so
+  dragging a control no longer replays the history per input event.
+- MOBILE ROW RATE: narrow screens (<860 px, the CSS breakpoint) now
+  request `rate=30` instead of `rate=60` from /waterfall.ws (the
+  server clamps 5..234); 30 rows/s still fills the default 5 s time
+  range at 2 px/row. Crossing the breakpoint re-sends `rate=` on the
+  live socket (resize listener).
+- COLLAPSIBLE OPTIONS CARD: each dongle block head has a new ⚙ toggle
+  next to the ▾ block collapse. It hides just the dongle's control
+  card so its waterfall spans the full width; state persists per
+  dongle (`dongle-card-collapsed-<id>`, same pattern as the block
+  collapse). Narrow screens start collapsed — same default
+  `initPanels` applies to the System Status panel.
+- Minor: one shared `TextDecoder` for the WS frames (was one
+  allocation per frame).
+
+Verified: `node --check`; new jsdom smoke `dashboard-wf-perf-smoke.js`
+(28/28: pixel-exact palette check of a pushed dB row through the new
+paint path, rate=60/30 negotiation + resize re-negotiation, card
+toggle/persistence/narrow-default, block collapse intact); existing
+smokes re-run green (auto-join, power, ADS-B; they needed a one-line
+`window.TextDecoder` stub — jsdom lacks it, browsers have it).
+Static-file change only — no receiver restart needed.
+
