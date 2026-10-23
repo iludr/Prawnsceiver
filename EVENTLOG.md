@@ -2179,3 +2179,100 @@ smokes re-run green (auto-join, power, ADS-B; they needed a one-line
 `window.TextDecoder` stub — jsdom lacks it, browsers have it).
 Static-file change only — no receiver restart needed.
 
+### 2026-10-23 ~23:20 local — 🌊 Pass waterfall diagrams + 🛰️ ISS raw IQ kept
+
+Operator request: every recorded pass gets a waterfall diagram, even
+when nothing is decoded; and the raw IQ of ISS passes is kept (in case
+the SSTV decode has issues).
+
+- NEW `noaa_receiver/analysis/waterfall.py`: `pass_waterfall(wav_path)`
+  renders `<base>.waterfall.png` — a grayscale spectrogram (Hann FFT
+  rows in dBFS*10, 60 dB window below the row max, newest row at top,
+  720-row cap — same geometry and dBFS convention as the live waterfall
+  feed and the manual recording's waterfall.png). It reads the raw IQ
+  sibling when the pass recorded one (full capture band: the downlink
+  stays visible even when the decoder cannot make sense of it), else
+  the WAV audio (demod band — SSTV tone structure or silence).
+  Memory-safe: memmap/seek row reads, capped row count, ~1.5 MB read
+  per pass regardless of recording length. Idempotent; never touches a
+  real decode image.
+- Generation points: (1) scheduler pass end — EVERY recorded pass
+  leaves a waterfall; the pass-history `png` prefers a real decode
+  image and falls back to the waterfall, but the transmitter ledger
+  (`txstatus.note_pass_result`) still gets the DECODE image only — a
+  waterfall is not a heard transmitter; (2) `decode_recording` failure
+  (SSTV found nothing, no decoder, no raw IQ) and every SatDump failure
+  exit (timeout, error, no products) — covers the history page's Retry
+  button and background decodes that finish dark.
+- ISS raw IQ: `config.IQ_RECORD_FREQS` now includes `ISS_SSTV_HZ`
+  (437.550 MHz, new constant, also used by TRACKED_SATS) — ISS passes
+  record the untouched u8 baseband next to the WAV (~3 GB per full pass
+  at 2.4 Msps; single-dir station has 56 GB free). The IQ is KEPT:
+  `decode._keep_raw_iq` guards the SatDump success path (ISS never
+  deletes), and the SSTV path decodes from the WAV and never touches
+  the IQ. plan.py shows the ISS receive plan as "audio + raw IQ (kept
+  for decode retries)".
+- Plumbing: `history._scan_recordings` exposes `waterfall` (kept
+  distinct from `decoded`/`png` — a waterfall is not a decode);
+  `archive._FAMILY_SUFFIXES` moves it with the family; the /delete
+  endpoint removes it and its thumbnail; /decode answers carry
+  `waterfall` so the page shows it without a refresh. history.js:
+  slideshow appends the waterfall (🌊 label), pass cards read
+  "❌ not decoded — 🌊 waterfall", decode results show the image inline.
+- Tests: new `tests/test_waterfall.py` (config/IQ_RECORD_FREQS,
+  _keep_raw_iq, IQ-sourced waterfall with a carrier burst at the right
+  bin + mid-pass-only timing, WAV fallback with an SSTV-like tone,
+  too-short -> None, decode failure leaves waterfall + marker +
+  short-circuit, archiver moves the waterfall, get_recordings field) —
+  all OK. Re-ran green: test_radio (ISS pass now also writes .iq.u8),
+  test_txstatus, test_history, test_archive, test_lrpt, test_db,
+  test_manager. `node --check history.js` OK.
+- DEPLOYED 2026-10-23 ~23:22 local: `systemctl --user restart
+  prawnceiver` (idle, no pass active; Restart=always brought it back in
+  ~5 s). Verified live: /status.json healthy, /passes.json shows every
+  ISS pass with `iq_recording: true` and the plan "… + raw IQ (kept
+  for decode retries)". Next ISS pass 02:35 local (11.9°) — expect
+  "📡 IQ recording started" next to the WAV, the IQ KEPT after the
+  SSTV decode, and a 🌊 waterfall in the pass history (the SSTV decode
+  outside an ARISS event will fail -> waterfall from the IQ). Later
+  passes 04:09 (56°), 05:46 (57°), 07:23 (64°), 09:00 (41°) — the
+  archiver moves each ~3 GB IQ family to /mnt/nfs/prawnceiver.
+
+### 2026-10-23 ~23:25 local — 🛰️ ISS raw-IQ keep: audited + made visible
+
+Follow-up to the request "when ISS flies, keep the raw IQ": the
+guarantee was already live; this pass audited every IQ-removal path
+and made the keep visible in the console.
+
+- AUDIT (every os.remove/rmtree/move of an IQ file in the package):
+  the ONLY automatic deletion is the SatDump-success cleanup in
+  decode.py, already guarded by _keep_raw_iq (ISS never). /delete is
+  the operator's explicit whole-family removal; the archiver MOVES the
+  IQ to /mnt/nfs/prawnceiver (kept on the share). No pruning/cleanup
+  thread exists (checked app.py's thread list + server_noaa.py).
+- NEW: scheduler pass end now logs "🛰 Raw IQ kept (ISS pass, decode
+  fallback): <file> (<MB> MB)" for every ISS pass whose recording has
+  an IQ — the SSTV decode never touches the baseband, so the keep was
+  previously invisible.
+- NEW regression test (test_waterfall.py 6b): an ISS recording with an
+  .iq.u8 sibling survives decode_recording — IQ still on disk, waterfall
+  rendered from it. Full suite re-run green.
+- Restarted prawnceiver (idle, no pass active) — verified: healthy,
+  all 5 upcoming ISS passes show iq_recording=true. Next: 02:35 local
+  (11.9°), then 04:09 / 05:46 / 07:23 / 09:00. After each: expect
+  "📡 IQ recording started", the SSTV decode on the WAV, the
+  "Raw IQ kept" line, and a 🌊 waterfall; the archiver ships the
+  ~3 GB IQ to the NFS share.
+
+### 2026-10-23 ~23:30 local — 🌊 Waterfall backfill for all existing recordings
+
+One-time backfill (scratchpad script, not committed): every existing
+recording got its <base>.waterfall.png — 105 created (18 rendered
+from the raw IQ sibling, 87 from the WAV audio), 181 skipped as
+0-byte WAVs (empty fragments of the 2026-10-17 era — nothing to
+render). All land on the NFS archive next to their WAV; /recordings.json
+shows 105/286 recordings with a waterfall (the 15 decoded ones keep
+their decode image AND now have the waterfall). Spot-checked: the
+strongest IQ waterfall (Meteor-M 2-4 11:51 pass) shows the LRPT
+plateau at the expected -60 kHz offset. From now on the scheduler
+pass-end generation covers every new pass.

@@ -47,6 +47,33 @@ def _png_path(wav_path):
     base, _ = os.path.splitext(wav_path)
     return base + '.png'
 
+
+def _keep_raw_iq(wav_path):
+    """ISS pass recordings keep their raw IQ, always (operator request
+    2026-10-23): the SSTV decode runs on the WAV audio, and the baseband
+    is the fallback when that decode has issues — it must survive every
+    decode path. Meteor IQ is deleted after a successful SatDump decode
+    (the u8 baseband is 4x the WAV with no further use there)."""
+    sat = satellite_from_filename(wav_path)
+    return sat is not None and sat.startswith('ISS')
+
+
+def _pass_waterfall(wav_path):
+    """Best-effort pass waterfall (analysis.waterfall.pass_waterfall) for
+    a recording whose decode produced no image — a waterfall diagram for
+    every recorded pass, even when nothing is decoded. Returns the PNG
+    path or None."""
+    try:
+        from ..analysis.waterfall import pass_waterfall
+        wf = pass_waterfall(wav_path)
+        if wf:
+            state.log_console(f"🌊 Pass waterfall written: {os.path.basename(wf)}")
+        return wf
+    except Exception as e:
+        state.log_console(f"Pass waterfall failed for "
+                          f"{os.path.basename(wav_path)}: {e}", "warn")
+        return None
+
 # ---------- decode-attempt markers ----------
 # The dashboard auto-decodes every undecoded recording on every history-page
 # load, and a decode that can never succeed (dark transmitter, ISS outside
@@ -494,6 +521,7 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None,
     _seed_satdump_tles()
     baseband, fmt = iq_path, 'cu8'
     tmp = None
+    wav_path = iq_path[:-len('.iq.u8')] + '.wav'
     try:
         if shift_hz:
             state.log_console(f"Centering baseband for {label}: rotating {shift_hz} Hz")
@@ -532,9 +560,11 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None,
                            env=env)
     except subprocess.TimeoutExpired:
         state.log_console(f"SatDump decode timed out ({label})", "warn")
+        _pass_waterfall(wav_path)   # nothing decoded - leave a waterfall
         return
     except Exception as e:
         state.log_console(f"SatDump decode error ({label}): {e}", "error")
+        _pass_waterfall(wav_path)   # nothing decoded - leave a waterfall
         return
     finally:
         if tmp is not None:
@@ -548,7 +578,6 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None,
     # job, but the truth is known only here (products or not). A
     # 'no products' marker keeps later auto-decodes from re-running a
     # permanently dark transmitter; Retry still can, with force.
-    wav_path = iq_path[:-len('.iq.u8')] + '.wav'
     image = _pick_product_png(out_dir)
     if image is not None:
         # Copy the composite into the flat <recording>.png slot: the
@@ -562,20 +591,28 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None,
         # use — the composite, the product images and the WAV carry the
         # outcome (operator request 2026-10-17). Deleted on SUCCESS only:
         # a recording whose transmitter stayed dark keeps its IQ so the
-        # decode can be retried by hand.
-        try:
-            iq_mb = os.path.getsize(iq_path) / (1024 * 1024)
-            os.remove(iq_path)
-            state.log_console(f"🧹 Raw IQ deleted after successful decode: "
-                              f"{os.path.basename(iq_path)} ({iq_mb:.0f} MB) — images kept")
-        except OSError:
-            pass
+        # decode can be retried by hand. ISS IQ is NEVER deleted — the
+        # SSTV decode runs on the WAV audio and the baseband is the
+        # fallback for decode issues (operator request 2026-10-23, see
+        # _keep_raw_iq).
+        if _keep_raw_iq(wav_path):
+            state.log_console(f"🛰 Raw IQ kept (ISS pass, decode fallback): "
+                              f"{os.path.basename(iq_path)}")
+        else:
+            try:
+                iq_mb = os.path.getsize(iq_path) / (1024 * 1024)
+                os.remove(iq_path)
+                state.log_console(f"🧹 Raw IQ deleted after successful decode: "
+                                  f"{os.path.basename(iq_path)} ({iq_mb:.0f} MB) — images kept")
+            except OSError:
+                pass
     elif products:
         state.log_console(f"🛰 SatDump decode done ({label}): {len(products)} product file(s) in {os.path.basename(out_dir)}/ (no image)")
         _write_decode_marker(wav_path, True, f"SatDump: {len(products)} product file(s) (no image)")
     else:
         state.log_console(f"SatDump produced no products ({label}) - signal too weak or transmitter off", "warn")
         _write_decode_marker(wav_path, False, "SatDump produced no products - signal too weak or transmitter off")
+        _pass_waterfall(wav_path)   # nothing decoded - leave a waterfall
 
 def _decode_iq(wav_path, pipeline, suffix, force=False):
     """SatDump decode of the raw IQ sibling of a recording. Returns
@@ -679,6 +716,10 @@ def decode_recording(wav_path, force=False):
         else:
             result = (False, None, f'{sat} has no decoder in this station')
         _write_decode_marker(wav_path, result[0], result[2] or 'decoded')
+        if not result[0]:
+            # Nothing decoded - leave the pass waterfall behind so the
+            # history shows what the receiver saw (see _pass_waterfall)
+            _pass_waterfall(wav_path)
         return result
     finally:
         # NOTE: a background SatDump run keeps its OWN entry (registered

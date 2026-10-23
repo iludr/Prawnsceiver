@@ -34,6 +34,10 @@ function decodedImages(rec) {
         if (p.path.toLowerCase().endsWith('.png'))
             imgs.push({ thumb: '/thumbs/' + encPath(p.path), full: '/products/' + encPath(p.path), label: p.path });
     });
+    // The pass waterfall diagram (spectrogram of the raw IQ or the WAV
+    // audio) — every recorded pass leaves one, even when nothing decoded
+    if (rec.waterfall)
+        imgs.push({ thumb: '/thumbs/' + encPath(rec.waterfall), full: '/images/' + encPath(rec.waterfall), label: '🌊 ' + rec.waterfall });
     return imgs;
 }
 
@@ -179,7 +183,8 @@ function render() {
                 + ' &nbsp;|&nbsp; ' + esc(h.frequency_mhz) + ' MHz</div>'
                 + '<div class="card-meta">max ' + esc(h.max_alt) + '° &nbsp;|&nbsp; '
                 + esc(h.duration_min) + ' min &nbsp;|&nbsp; peak: ' + esc(h.signal_peak || '—')
-                + ' &nbsp;|&nbsp; ' + (h.decoded ? '🖼️ decoded' : '❌ not decoded')
+                + ' &nbsp;|&nbsp; ' + (h.decoded ? '🖼️ decoded'
+                    : (rec && rec.waterfall ? '❌ not decoded — 🌊 waterfall' : '❌ not decoded'))
                 + qualityBadge(h.quality !== null && h.quality !== undefined ? h.quality : (rec ? rec.quality : null)) + '</div>'
                 + satLine;
             if (rec) {
@@ -234,6 +239,12 @@ function render() {
     }
 }
 
+// The pass waterfall image next to a decode result (the server returns
+// its filename as data.waterfall when the pass left one)
+function waterfallImg(wf) {
+    return ' <img class="decoded-img" src="/thumbs/' + esc(wf) + '?t=' + Date.now() + '" alt="Pass waterfall" loading="lazy" title="Pass waterfall — what the receiver saw (click to view the original)" onclick="openSingleLightbox(\'' + esc(wf) + '\')" style="cursor:zoom-in;">';
+}
+
 async function decodeRecording(filename, force) {
     const resultDiv = document.getElementById('result-' + safeId(filename));
     if (resultDiv) resultDiv.innerHTML = '<span style="color:#f39c12;">⏳ Decoding...</span>';
@@ -241,9 +252,9 @@ async function decodeRecording(filename, force) {
         const res = await fetch('/decode/' + filename + (force ? '?force=1' : ''));
         const data = await res.json();
         if (data.success && resultDiv) {
-            resultDiv.innerHTML = '<span style="color:#53d769;">✅ Decoded!</span>' + qualityBadge(data.quality) + '<img class="decoded-img" src="/thumbs/' + esc(data.png) + '?t=' + Date.now() + '" alt="Decoded image" loading="lazy" title="Click to view the original image" onclick="openSingleLightbox(\'' + esc(data.png) + '\')" style="cursor:zoom-in;">';
+            resultDiv.innerHTML = '<span style="color:#53d769;">✅ Decoded!</span>' + qualityBadge(data.quality) + '<img class="decoded-img" src="/thumbs/' + esc(data.png) + '?t=' + Date.now() + '" alt="Decoded image" loading="lazy" title="Click to view the original image" onclick="openSingleLightbox(\'' + esc(data.png) + '\')" style="cursor:zoom-in;">' + (data.waterfall ? waterfallImg(data.waterfall) : '');
         } else if (resultDiv) {
-            resultDiv.innerHTML = '<span style="color:#e74c3c;">❌ ' + esc(data.error || 'Decode failed') + '</span>';
+            resultDiv.innerHTML = '<span style="color:#e74c3c;">❌ ' + esc(data.error || 'Decode failed') + '</span>' + (data.waterfall ? waterfallImg(data.waterfall) : '');
         }
     } catch(e) {
         if (resultDiv) resultDiv.innerHTML = '<span style="color:#e74c3c;">❌ Error: ' + esc(e) + '</span>';

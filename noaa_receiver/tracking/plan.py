@@ -10,7 +10,7 @@ import threading
 import time
 
 from . import satnogs
-from ..config import RECORD_ISS, TRACKED_SATS
+from ..config import IQ_RECORD_FREQS, ISS_SSTV_HZ, RECORD_ISS, TRACKED_SATS
 
 # catnr -> matching transmitter dict (or None: fetched, no match / DB down).
 # Absent = not fetched yet — the pass list omits the tx details until then.
@@ -34,9 +34,11 @@ def receive_plan(catnr, sat_name):
             return ('SSTV',
                     'SSTV Robot 36 (only during ARISS events) — tracked, NOT recorded (RECORD_ISS off)',
                     None, False)
+        iq = ISS_SSTV_HZ in IQ_RECORD_FREQS
         return ('SSTV',
-                'SSTV Robot 36 (only during ARISS events) — audio recording, sstv decoder',
-                None, False)
+                'SSTV Robot 36 (only during ARISS events) — audio recording, sstv decoder'
+                + (' + raw IQ (kept for decode retries)' if iq else ''),
+                None, iq)
     return (None, 'no receive plan for this satellite', None, False)
 
 

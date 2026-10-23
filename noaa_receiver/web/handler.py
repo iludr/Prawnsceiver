@@ -1235,6 +1235,11 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             quality = quality_map().get(filename)
             if quality is not None:
                 set_recording_quality(filename, quality)
+            # The pass waterfall (<base>.waterfall.png) when the pass left
+            # one — the page shows it next to the result without a refresh
+            wf_name = filename.replace('.wav', '.waterfall.png')
+            waterfall = wf_name if os.path.exists(recording_path(wf_name)) \
+                else None
             if decoded:
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
@@ -1242,7 +1247,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({
                     "success": True,
                     "png": filename.replace('.wav', '.png'),
-                    "quality": quality
+                    "quality": quality,
+                    "waterfall": waterfall,
                 }).encode())
             else:
                 state.log_console(f"Decode failed for {filename}: {err}", "error")
@@ -1252,7 +1258,8 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({
                     "success": False,
                     "error": err,
-                    "quality": quality
+                    "quality": quality,
+                    "waterfall": waterfall,
                 }).encode())
         elif self.path.startswith('/delete/'):
             filename = self.path[8:]
@@ -1294,6 +1301,15 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                     if os.path.exists(thumb):
                         os.remove(thumb)
                         deleted.append(os.path.basename(thumb))
+                    # The pass waterfall diagram (and its thumbnail)
+                    wf_png = base + '.waterfall.png'
+                    if os.path.exists(wf_png):
+                        os.remove(wf_png)
+                        deleted.append(os.path.basename(wf_png))
+                        wf_thumb = wf_png[:-4] + THUMB_SUFFIX
+                        if os.path.exists(wf_thumb):
+                            os.remove(wf_thumb)
+                            deleted.append(os.path.basename(wf_thumb))
                     # Raw IQ capture and the SatDump product directories
                     # belong to the recording too - deleting takes the full set
                     iq_path = base + '.iq.u8'

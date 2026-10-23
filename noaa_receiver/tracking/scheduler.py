@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from .. import state
 from ..config import LAT, LON, METEOR_LRPT_HZ, PASS_MARGIN_SECS, PASS_PREDICT_HOURS, RECORD_ISS, RECORD_LOCAL_DIR, TLE_REFRESH_HOURS, TRACKED_SATS, UTC_OFFSET
 
-from ..decoding.decode import decode_recording, read_decode_marker, sat_short_name
+from ..decoding.decode import (decode_recording, read_decode_marker,
+                               sat_short_name, satellite_from_filename)
 from ..sdr import radio
 from ..web.history import log_pass
 from .passes import HAS_SKYFIELD, load, load_tles_from_cache, predict_passes, refresh_tles, wgs84
@@ -298,10 +299,46 @@ def scheduler_thread():
                         satnogs = satellite_info(finished_pass["catnr"])[0]
                     except Exception:
                         pass
+                    # Waterfall diagram of the pass recording — EVERY pass
+                    # leaves one, even when nothing was decoded (operator
+                    # request 2026-10-23): the history shows what the
+                    # receiver actually saw. Rendered from the raw IQ when
+                    # the pass recorded one, else from the WAV audio. The
+                    # pass entry prefers a real decode image; the waterfall
+                    # is the fallback. It must NOT feed the transmitter
+                    # ledger below — a waterfall is not a heard transmitter.
+                    pass_png = png_file
+                    if wav_name is not None:
+                        try:
+                            from ..analysis.waterfall import pass_waterfall
+                            wf = pass_waterfall(os.path.join(RECORD_LOCAL_DIR,
+                                                             wav_name))
+                            if wf:
+                                state.log_console(f"🌊 Pass waterfall: {os.path.basename(wf)}")
+                                if pass_png is None:
+                                    pass_png = os.path.basename(wf)
+                        except Exception as e:
+                            state.log_console(f"Pass waterfall failed for {wav_name}: {e}", "warn")
+                    # ISS passes KEEP their raw IQ (operator request
+                    # 2026-10-23): the SSTV decode runs on the WAV audio
+                    # and never touches the baseband, so the keep is
+                    # otherwise invisible — say so in the console. The
+                    # IQ is the fallback when that decode has issues.
+                    rec_sat = satellite_from_filename(wav_name) \
+                        if wav_name is not None else None
+                    if rec_sat is not None and rec_sat.startswith("ISS"):
+                        iq_path = os.path.join(
+                            RECORD_LOCAL_DIR,
+                            wav_name[:-len('.wav')] + '.iq.u8')
+                        if os.path.exists(iq_path):
+                            state.log_console(
+                                f"🛰 Raw IQ kept (ISS pass, decode fallback): "
+                                f"{os.path.basename(iq_path)} "
+                                f"({os.path.getsize(iq_path) / (1024 * 1024):.0f} MB)")
                     log_pass(finished_pass["sat_name"], finished_pass["frequency"],
                              finished_pass["max_alt"], finished_pass["duration_min"],
                              finished_pass["rise_utc"], finished_pass["set_utc"],
-                             pass_peak, decoded, png_file, wav_name, quality, satnogs)
+                             pass_peak, decoded, pass_png, wav_name, quality, satnogs)
                     # Home-grown transmitter ledger: this pass's lit/dark
                     # result rolls into the per-satellite activity stats,
                     # and a state change raises the console alert

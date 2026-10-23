@@ -50,8 +50,8 @@ ARCHIVE_INTERVAL_SECS = 60.0
 
 # Flat family members next to the WAV (product directories are globbed
 # separately - every <base>_*/ directory belongs to the recording).
-_FAMILY_SUFFIXES = ('.wav', '.png', '.iq.u8', '.json', '.analysis.json',
-                    THUMB_SUFFIX)
+_FAMILY_SUFFIXES = ('.wav', '.png', '.waterfall.png', '.iq.u8', '.json',
+                    '.analysis.json', THUMB_SUFFIX)
 
 
 def archive_mounted():

@@ -71,8 +71,9 @@ UTC_OFFSET = 2  # Germany UTC+2
 # position. Decoded from the raw IQ with SatDump (meteor_m2-x_lrpt) -
 # the FM-demod audio cannot.
 METEOR_LRPT_HZ = 137_900_000   # actual downlink ~137.896-137.900 MHz
+ISS_SSTV_HZ = 437_550_000      # ARISS SSTV (Robot 36) downlink
 TRACKED_SATS = {
-    25544: ("ISS (Zarya)", 437550000),
+    25544: ("ISS (Zarya)", ISS_SSTV_HZ),
     57166: ("Meteor-M 2-3", METEOR_LRPT_HZ),
     59051: ("Meteor-M 2-4", METEOR_LRPT_HZ),
 }
@@ -80,10 +81,17 @@ TRACKED_SATS = {
 
 # Passes on these frequencies also record the RAW IQ stream (u8 complex,
 # 2.4 MHz -> ~4.8 MB/s per dongle) next to the demod audio WAV:
-# Meteor LRPT is a digital mode the FM-demod audio cannot carry — decoding
-# (SatDump) needs the baseband. SSTV passes stay audio-only.
+# - Meteor LRPT is a digital mode the FM-demod audio cannot carry —
+#   decoding (SatDump) needs the baseband. The IQ is deleted after a
+#   successful decode (see decoding/decode.py).
+# - ISS SSTV decodes from the audio WAV, but its raw IQ is recorded AND
+#   KEPT — never deleted after a decode (decoding/decode._keep_raw_iq):
+#   the baseband is the fallback when the SSTV decode has issues, and it
+#   feeds the pass waterfall diagram (operator request 2026-10-23).
+#   Costs ~3 GB per full pass at 2.4 Msps.
 IQ_RECORD_FREQS = {
     METEOR_LRPT_HZ,    # Meteor-M 2-3 / 2-4 LRPT
+    ISS_SSTV_HZ,       # ISS (Zarya) ARISS SSTV — kept for decode retries
 }
 
 # Site-specific interferer: a persistent land-mobile carrier at ~137.905 MHz

@@ -159,6 +159,12 @@ def _scan_recordings(root, qualities, active_wav):
                            "size_mb": round(os.path.getsize(path.replace('.wav', '.iq.u8'))
                                             / (1024*1024), 1)}
                           if os.path.exists(path.replace('.wav', '.iq.u8')) else None,
+                    # Pass waterfall diagram (spectrogram of the raw IQ or
+                    # the WAV audio), generated for every recorded pass —
+                    # shown in the UI next to the decode image
+                    "waterfall": (f.replace('.wav', '.waterfall.png')
+                                  if os.path.exists(path.replace('.wav', '.waterfall.png'))
+                                  else None),
                     # Every generated decode product (SatDump product
                     # directories next to the recording, e.g. <base>_lrpt/,
                     # including their image subdirectories - see
