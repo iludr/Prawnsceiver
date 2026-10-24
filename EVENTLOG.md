@@ -2276,3 +2276,28 @@ their decode image AND now have the waterfall). Spot-checked: the
 strongest IQ waterfall (Meteor-M 2-4 11:51 pass) shows the LRPT
 plateau at the expected -60 kHz offset. From now on the scheduler
 pass-end generation covers every new pass.
+
+### 2026-10-24 ~00:30 local — 📡 433.92 MHz recording analysed: Nexus/Rubicson weather sensors
+
+The operator's manual 38.7 s capture at 433.9208 MHz (QFH antenna,
+`Manual_433.9208MHz_20261023_234155.iq.u8`, now on the NFS archive)
+was analysed with the new `tools/iq433/` toolkit (catalog / decode /
+envelope / structure / full; scripts kept in the project per operator
+request, documented in AGENTS.md). Four OOK transmitters found — no
+broadband EMI, all narrowband digital telemetry:
+
+- 433.930957 MHz: single 108 ms PWM packet (ON 488/1467 µs, gap 975 µs),
+  payload `4C 80 58 47 5D C8` with a valid sum checksum (8.8 °C / 71 %RH
+  plausible). Exact protocol not pinned down (LaCrosse-TX-like timing;
+  F007TH/OSv1/LaCrosse-TX framing ruled out).
+- 433.9295 MHz: Nexus-family temp/humidity sensor, id 0x03, ch3,
+  19.8 °C, 57 %RH — 36-bit PPM rows (~470 µs pulse, ~1/2 ms gaps),
+  ~10 repeats every 74 ms.
+- 433.9008 MHz: Nexus-family temperature-only sensor, id 0x26, ch1,
+  19.0 °C, battery LOW — repeats every ~98 ms.
+- 433.9389 MHz: Rubicson/Solight/EMOS-family temperature sensor, id 0xA2,
+  ch1, 7.6 °C (CRC-8 0x31/0x6c matches) — ~12 repeats every 74 ms.
+
+So: the "short bursts" around 433.92 MHz are nearby wireless weather
+sensors (the classic cheap 433 MHz thermo-hygrometers). rtl_433 decodes
+this family automatically.
