@@ -2320,3 +2320,8 @@ as a summary of the two tracks (Meteor preferred) for status.json,
 carries `mode_passes` and `mode_freqs`. Tests: tests/test_radio.py
 sections 1–14 (14 new: mode gating, peak attribution, mid-pass mode
 switch); jsdom smoke satmode-smoke.js 9/9.
+
+Deploy: 2026-10-25 ~16:55 UTC — `systemctl --user restart prawnceiver`
+loaded the mode split into the running station (the service had been up
+since 2026-10-23, so /sat_mode 404'd until then). Dongle :1234 tracks
+Meteor, :1235 tracks ISS.
