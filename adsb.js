@@ -25,6 +25,23 @@ function fmtDateTime(ts) {
 
 function cell(v, cls, dash) { return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + (v === null || v === undefined ? '<span class="na">' + (dash || '—') + '</span>' : v) + '</td>'; }
 
+// Status dot of an aircraft: airborne (blue) vs on ground (orange) —
+// the last surface/airborne position message decides; an aircraft
+// without one yet shows a dash.
+function stCell(a) {
+    if (a.onground === true) return '<td><span style="color:#f39c12">●</span> on ground</td>';
+    if (a.onground === false) return '<td><span style="color:#4da6ff">●</span> airborne</td>';
+    return cell(null);
+}
+
+// Military flag in its own column (operator request 2026-10-25: the
+// icon sat inline in the ICAO cell, easy to miss).
+function milCell(a) {
+    return a.military
+        ? '<td><span class="milbadge" title="ICAO address in a military block">🪖</span></td>'
+        : '<td><span class="na">—</span></td>';
+}
+
 // ---------- persistent aircraft registry (restored from the database) ------
 // One row per plane heard in the last 24 h (the station keeps every
 // aircraft ever in the adsb_aircrafts table) with everything merged
@@ -38,7 +55,10 @@ const selectedAircraft = new Set(); // ICAOs whose path is drawn
 const trackLayers = {};          // ICAO -> Leaflet polyline
 const TRACK_COLORS = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff', '#c77dff',
                       '#ff9770', '#70d6ff', '#b5e48c', '#f7a072', '#9bd1e5'];
-const REG_HEAD_PLAIN = '<th>callsign</th><th>ICAO</th><th>alt</th>'
+const REG_HEAD_PLAIN = '<th>callsign</th>'
+    + '<th title="airborne / on ground (from the last position message)">st</th>'
+    + '<th title="military — ICAO address in a military block (heuristic)">🪖</th>'
+    + '<th>ICAO</th><th>alt</th>'
     + '<th>speed</th><th>track</th><th>v/s</th><th>position</th>'
     + '<th>first seen</th><th>last seen</th><th>total msgs</th>'
     + '<th>message history</th>';
@@ -105,8 +125,9 @@ function renderRegistryPage() {
                     + ' onchange="trackToggle(\'' + esc(a.icao) + '\', this.checked)"></td>'
                 : '')
             + '<td class="cs">' + esc(a.callsign || '') + '</td>'
+            + stCell(a)
+            + milCell(a)
             + '<td class="icao">' + esc(a.icao)
-            + (a.military ? ' <span class="milbadge" title="ICAO address in a military block">🪖</span>' : '')
             + '</td>'
             + cell(alt)
             + cell(spd)
