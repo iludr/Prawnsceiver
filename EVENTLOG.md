@@ -2332,3 +2332,13 @@ The dongle card gained a tuner-gain toggle (AGC on/off,
 /gain_dongle?d=<id>&on=0|1): on = the tuner's own automatic gain
 control, off = the calibrated fixed gain (SDR_DONGLE_GAIN). The running
 capture restarts on the switch; the flag persists in the dongles table.
+
+## 2026-10-25 — Data-collection tuning
+
+Config changes (operator request): decoded-frame log retention 24 h ->
+72 h for all five decoders, ADSB registry window 24 h -> 7 days,
+ADSB_RECENT_MSGS 10 -> 20, PASS_MARGIN_SECS 60 -> 90 (more signal before
+rise / after set in every pass recording). ADS-B dongle :1235 identified
+(it streams the 1090 MHz role); satellite dongle :1234. Prawntenna
+buffer spawn options -b 15 -n 1000 applied on both dongles earlier in
+the day: no regression, kept.

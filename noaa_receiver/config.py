@@ -121,7 +121,7 @@ RECORD_ISS = True
 # Pass scheduling
 PASS_MIN_ALT = 10.0  # Only care about passes above 10°
 PASS_PREDICT_HOURS = 24  # Predict 24h ahead
-PASS_MARGIN_SECS = 60  # Start recording 60s before rise, stop 60s after set
+PASS_MARGIN_SECS = 90  # Start recording 90s before rise, stop 90s after set
 TLE_REFRESH_HOURS = 3  # Refresh TLE data every 3h
 TLE_CACHE_FILE = os.path.join(LOGDIR, "tle_cache.json")  # last good TLEs, used when Celestrak is unreachable
 # Celestrak rejects requests with generic bot user-agents (HTTP 403)
@@ -151,7 +151,7 @@ AIS_SHIP_TTL_SECS = 3600
 # always keeps the last AIS_LOG_KEEP_HOURS of decoded frames (trimmed
 # in ais.py, atomically)
 AIS_LOG_FILE = os.path.join(LOGDIR, "ais_log.jsonl")
-AIS_LOG_KEEP_HOURS = 24
+AIS_LOG_KEEP_HOURS = 72
 
 # APRS (amateur packet radio; see noaa_receiver/decoding/aprs.py): the
 # single European simplex channel - Bell 202 AFSK (1200/2200 Hz) at
@@ -169,7 +169,7 @@ ISS_APRS_FREQ_HZ = 145825000
 # chain (see decoding/aprs.py).
 LASAR_FREQ_HZ = 436925000
 # Rolling decoded-frame log (aprs_messages table), trimmed by ts
-APRS_LOG_KEEP_HOURS = 24
+APRS_LOG_KEEP_HOURS = 72
 
 # POCSAG paging (see noaa_receiver/decoding/pocsag.py): a dongle
 # in the POCSAG role tunes here - one 2.4 MHz capture covers the
@@ -178,7 +178,7 @@ APRS_LOG_KEEP_HOURS = 24
 # channel found is decoded in parallel.
 PAGING_CENTER_HZ = 466_000_000
 # Rolling decoded-page log (pocsag_messages table), trimmed by ts
-POCSAG_LOG_KEEP_HOURS = 24
+POCSAG_LOG_KEEP_HOURS = 72
 # Persistent registry of EVERY APRS station ever received
 # (aprs_stations table, like the AIS ships registry), each with
 # its latest data plus the last APRS_RECENT_MSGS decoded frames.
@@ -205,7 +205,7 @@ ORBCOMM_SYMRATE = 4800
 # has ended, or the cluster was noise)
 ORBCOMM_CHANNEL_TIMEOUT_SECS = 10
 # Rolling decoded-packet log (orbcomm_messages table), trimmed by ts
-ORBCOMM_LOG_KEEP_HOURS = 24
+ORBCOMM_LOG_KEEP_HOURS = 72
 
 # ADS-B (aircraft squitters; see noaa_receiver/decoding/adsb.py): a
 # dongle in the ADS-B role tunes to 1090 MHz and decodes Mode S
@@ -214,12 +214,12 @@ ORBCOMM_LOG_KEEP_HOURS = 24
 # AIS/POCSAG, switched from the dashboard.
 ADSB_CENTER_HZ = 1_090_000_000
 # Rolling decoded-message log (adsb_messages table), trimmed by ts
-ADSB_LOG_KEEP_HOURS = 24
+ADSB_LOG_KEEP_HOURS = 72
 # Persistent registry of every aircraft ever received (adsb_aircrafts
 # table, like the AIS ships registry), each with its latest data plus
 # the last ADSB_RECENT_MSGS decoded frames. Rewritten at most every
 # ADSB_AIRCRAFTS_SAVE_SECS.
-ADSB_RECENT_MSGS = 10
+ADSB_RECENT_MSGS = 20
 ADSB_AIRCRAFTS_SAVE_SECS = 60
 # Aircraft stay on the live table this long after their last squitter
 # (planes move fast; 10 min covers a whole overhead pass)
@@ -227,7 +227,9 @@ ADSB_AIRCRAFT_TTL_SECS = 600
 # The registry page lists aircraft heard within this window. The
 # adsb_aircrafts table (and the in-memory mirror restored from it at
 # startup) keeps every aircraft ever — older ones just leave the page.
-ADSB_REGISTRY_WINDOW_SECS = 24 * 3600
+# 7 days (operator request 2026-10-25: more history to browse; the data
+# is kept forever regardless, this is only the page window).
+ADSB_REGISTRY_WINDOW_SECS = 7 * 24 * 3600
 # Coverage hull plausibility gate: a ground station hears ADS-B to the
 # radio horizon (~400 km for a plane at 40 kft), so a decoded position
 # farther than this from the station is a bad CPR decode, not coverage

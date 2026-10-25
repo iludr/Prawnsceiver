@@ -288,13 +288,13 @@ assert adsb.aircraft_tracks([], 24) == {}
 print("13. path history from the message log:", len(tracks[TEST_ICAO]),
       "point for", TEST_ICAO)
 
-# --- 14. registry window: only aircraft heard in the last 24 h ---
+# --- 14. registry window: only aircraft heard in the last 7 days ---
 # (the adsb_aircrafts table keeps every aircraft ever; the page shows
 # the ADSB_REGISTRY_WINDOW_SECS tail of it)
 import time  # noqa: E402
 state.adsb_aircrafts_all.clear()
 state.adsb_aircrafts_all["0A00F1"] = {"icao": "0A00F1", "msgs": 3,
-                                     "last_seen": time.time() - 25 * 3600}
+                                     "last_seen": time.time() - 8 * 24 * 3600}
 state.adsb_aircrafts_all["0A00F2"] = {"icao": "0A00F2", "msgs": 5,
                                      "last_seen": time.time() - 3600}
 state.adsb_aircrafts_all["0A00F3"] = {"icao": "0A00F3", "msgs": 1,
