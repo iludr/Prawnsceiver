@@ -1339,7 +1339,7 @@
                     // 144.8 MHz (145.825 with the ISS checkbox set) —
                     // none follow the shared satellite tune
                     b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_lasar ? 436.925 : (d.aprs_iss ? 145.825 : 144.8)) : (d.pocsag ? 466.0 : (d.adsb ? 1090.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
-                        ? d.manual_frequency_mhz : lastSharedMHz)))));
+                        ? d.manual_frequency_mhz : (satModeFreqs[d.sat_mode || 'meteor'] || lastSharedMHz))))));
                     updateDongleCard(d);
                 }
                 // the overlay follows per-dongle geometry (recorded
@@ -1369,6 +1369,10 @@
         const dongleCards = {};      // serial -> card handles
         const MAX_CARD_POINTS = 300; // ~5 min of signal history at 1 Hz
         let lastSharedMHz = null;    // shared tune frequency (from status.json)
+        // Per-mode park/tune frequencies (from status.json mode_freqs): a
+        // dongle's effective tune follows ITS sat mode's track, not the
+        // shared (summary) one — the two modes can sit on different bands
+        const satModeFreqs = {};     // 'meteor'/'iss' -> MHz
         // Satellite downlink marker target: the ACTIVE pass's frequency, or
         // the next upcoming one when idle (from status.json)
         let satTrackInfo = null;
@@ -1389,7 +1393,9 @@
             if (c.lastD.aprs) return c.lastD.aprs_lasar ? 436.925 : (c.lastD.aprs_iss ? 145.825 : 144.8);     // APRS dongle is parked on the APRS channel (LASAR/ISS checkboxes: 436.925/145.825)
             if (c.lastD.manual_frequency_mhz !== null && c.lastD.manual_frequency_mhz !== undefined)
                 return c.lastD.manual_frequency_mhz;
-            return lastSharedMHz;
+            // satellite tracker: its own sat mode's track (Meteor/ISS),
+            // falling back to the shared summary frequency
+            return satModeFreqs[c.lastD.sat_mode || 'meteor'] || lastSharedMHz;
         }
 
         // A dedicated role (AIS / Orbcomm / APRS / POCSAG) re-shapes a
@@ -1407,7 +1413,9 @@
             if (d.pocsag) return 'pocsag';
             if (d.adsb) return 'adsb';
             if (d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined) return 'manual';
-            return 'sat';
+            // the single satellite-tracking mode split into two (2026-10-25):
+            // a tracker follows either the Meteor or the ISS track
+            return d.sat_mode === 'iss' ? 'sat_iss' : 'sat_meteor';
         }
         function applyDongleRole(c, d) {
             const role = dongleRole(d);
@@ -1429,8 +1437,9 @@
             // dongle is on satellites or in Manual — pass capture and
             // live audio are the point there; the decode roles hide both
             // (APRS keeps its listenable FM audio)
-            c.recBtn.style.display = (role === 'sat' || role === 'manual') ? '' : 'none';
-            c.listenBtn.style.display = (role === 'sat' || role === 'manual' || role === 'aprs') ? '' : 'none';
+            const onSat = role === 'sat_meteor' || role === 'sat_iss';
+            c.recBtn.style.display = (onSat || role === 'manual') ? '' : 'none';
+            c.listenBtn.style.display = (onSat || role === 'manual' || role === 'aprs') ? '' : 'none';
             // the ISS digipeater checkbox only exists in APRS mode
             c.aprsIssRow.style.display = role === 'aprs' ? 'flex' : 'none';
             c.aprsLasarRow.style.display = role === 'aprs' ? 'flex' : 'none';
@@ -1807,7 +1816,8 @@
             roleSel.style.cssText = 'width:100%;margin-top:4px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;padding:3px 6px;font-family:monospace;font-size:0.85em;cursor:pointer;';
             roleSel.title = 'What this dongle listens for';
             const ROLE_OPTS = [
-                ['sat',     '🛰 Satellites — auto tracking'],
+                ['sat_meteor', '🛰 Satellites — Meteor tracking'],
+                ['sat_iss',    '🛰 Satellites — ISS tracking'],
                 ['manual',  '📻 Manual — free tuning'],
                 ['ais',     '🚢 AIS — ship traffic'],
                 ['orbcomm', '🛰 Orbcomm — satellite IoT'],
@@ -1826,6 +1836,8 @@
                 adsb: 'adsb_dongle',
             };
             const ROLE_TOAST = {
+                sat_meteor: '🛰 Meteor tracking — this dongle follows the Meteor-M LRPT passes (137.9 MHz)',
+                sat_iss: '🛰 ISS tracking — this dongle follows the ISS passes (437.55 MHz)',
                 manual: '📻 Manual mode — tune this dongle freely (frequency + bandwidth)',
                 ais: '🚢 Switching this dongle to AIS — ship traffic on 161.975/162.025 MHz',
                 orbcomm: '🛰 Switching this dongle to Orbcomm — satellite IoT downlink on 137.0-138.0 MHz',
@@ -1858,15 +1870,20 @@
                     const f = curDongleMHz(d.id);
                     if (f === null) { toast('Role switch failed: no frequency to park on', true); roleSel.value = cur; return; }
                     urls.push('tune_dongle?d=' + id + '&f=' + f.toFixed(4));
-                } else if (want === 'sat'
-                        && ld.manual_frequency_mhz !== null && ld.manual_frequency_mhz !== undefined) {
-                    urls.push('tune_dongle?d=' + id + '&f=auto');
+                } else if (want.indexOf('sat_') === 0) {
+                    // Meteor/ISS tracking: detach a parked manual override,
+                    // then set the dongle's tracking mode (idempotent —
+                    // switching between the two modes is this one call)
+                    if (ld.manual_frequency_mhz !== null && ld.manual_frequency_mhz !== undefined) {
+                        urls.push('tune_dongle?d=' + id + '&f=auto');
+                    }
+                    urls.push('sat_mode?d=' + id + '&mode=' + want.slice(4));
                 }
                 if (DED.indexOf(want) >= 0) urls.push(ROLE_ENDPOINT[want] + '?d=' + id + '&on=1');
                 const fail = (msg) => { toast('Role switch failed: ' + msg, true); roleSel.value = cur; };
                 const run = (i) => {
                     if (i >= urls.length) {
-                        toast(want === 'sat' ? '🛰 Dongle rejoined satellite tracking' : ROLE_TOAST[want]);
+                        toast(ROLE_TOAST[want] || '🛰 Dongle rejoined satellite tracking');
                         return;
                     }
                     fetch(urls[i])
@@ -2331,6 +2348,10 @@
                 // Update frequency display
                 updateFreqLabels(data.frequency_mhz);
                 lastSharedMHz = data.frequency_mhz;
+                // per-mode park/tune frequencies for the dongle cards
+                if (data.mode_freqs) {
+                    for (const m in data.mode_freqs) satModeFreqs[m] = data.mode_freqs[m];
+                }
                 // Waterfall recording-band highlight (the primary block is
                 // built dynamically, so guard for it not existing yet)
                 const hl = document.getElementById('wf-highlight');

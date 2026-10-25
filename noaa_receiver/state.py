@@ -7,7 +7,7 @@ import threading
 from collections import deque
 from datetime import datetime
 
-from .config import METEOR_LRPT_HZ, WATERFALL_ROWS
+from .config import ISS_SSTV_HZ, METEOR_LRPT_HZ, WATERFALL_ROWS
 
 # State
 waterfall_buffer = deque(maxlen=WATERFALL_ROWS)
@@ -84,10 +84,31 @@ manual_dongle_mode = {}
 # to WAV outside passes too. Named after the tune ("Manual_<freq>_MHz"), so
 # the file is never attributed to a satellite pass. Cleared per dongle.
 manual_recording = {}
-# Live Doppler correction for the active pass's satellite: computed by the
-# scheduler (range-rate via skyfield), applied in software by the capture
-# threads. doppler_freq_hz is the satellite's nominal frequency the value
-# applies to; doppler_hz is 0 outside passes.
+# Two satellite tracking modes (2026-10-25: they replace the single
+# auto-tracking mode). Every dongle carries a sat_mode ('meteor' or 'iss')
+# and follows ONLY the passes of that satellite family: the scheduler runs
+# one independent track per mode (own pass window, frequency, Doppler and
+# signal peak below), so a Meteor dongle and an ISS dongle can receive
+# two overlapping passes at once.
+SAT_MODES = ('meteor', 'iss')
+# Per-mode tracking state, keyed by SAT_MODES entry. mode_pass holds the
+# running pass dict (None when idle); mode_freq is the mode's tune (park
+# frequency while idle); mode_pass_peak is the recording signal peak the
+# pass log gets at set.
+mode_pass = {m: None for m in SAT_MODES}
+mode_freq = {'meteor': METEOR_LRPT_HZ, 'iss': ISS_SSTV_HZ}
+mode_sat_name = {m: 'idle' for m in SAT_MODES}
+mode_pass_peak = {m: 0.0 for m in SAT_MODES}
+# Live Doppler correction per mode (scheduler-computed, applied by the
+# capture threads of the dongles tracking that mode).
+mode_doppler_hz = {m: 0 for m in SAT_MODES}
+mode_doppler_freq_hz = {m: 0 for m in SAT_MODES}
+
+# Legacy single-track view, maintained by the scheduler as a SUMMARY of
+# the per-mode tracks (the Meteor track when active, else the ISS track,
+# else idle; a manual station tune always wins). status.json, /track.json
+# and the manual-tune endpoints read these; the capture threads read the
+# per-mode fields above instead.
 doppler_hz = 0
 doppler_freq_hz = 0
 current_frequency = METEOR_LRPT_HZ  # idle park: the Meteor LRPT band
@@ -105,6 +126,8 @@ recordings_paused = False
 scans = {}
 current_wav = None
 current_wav_path = None
+# Legacy single-track signal peak: mirrored by the scheduler from the
+# summary track's mode_pass_peak (per-mode peaks live above).
 # Bases (recording filename without extension) with a decode running
 # right now - synchronous decodes (SSTV) and background SatDump runs
 # register here (see decoding/decode.py). The recording archiver

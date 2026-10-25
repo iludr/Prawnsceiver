@@ -193,6 +193,13 @@ def connect():
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN auto_sat INTEGER DEFAULT 0")
                 _conn.commit()
+            if "sat_mode" not in cols:
+                # Satellite tracking mode: which pass family this dongle
+                # follows ('meteor' or 'iss' — the two modes replace the
+                # single auto-tracking mode; see radio.set_dongle_sat_mode)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN sat_mode TEXT DEFAULT 'meteor'")
+                _conn.commit()
             # One-time repair: the pre-explicit-column positional
             # INSERTs wrote the orbcomm flag into added_ts and the
             # timestamp into orbcomm (the column arrived by ALTER

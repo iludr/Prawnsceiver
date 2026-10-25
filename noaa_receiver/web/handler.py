@@ -30,7 +30,7 @@ from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_adsb,
                         set_dongle_aprs_iss, set_dongle_aprs_lasar,
                         set_dongle_auto_sat, set_dongle_orbcomm,
                         set_dongle_pocsag, set_dongle_paused,
-                        usb_dongles)
+                        set_dongle_sat_mode, usb_dongles)
 
 def _dongle_list():
     """Dongle descriptors for status/dongles.json: primary first, then stable
@@ -60,6 +60,7 @@ def _dongle_list():
                 "pocsag": bool(e.get("pocsag")),
                 "adsb": bool(e.get("adsb")),
                 "auto_sat": bool(e.get("auto_sat")),
+                "sat_mode": e.get("sat_mode") or "meteor",
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
                 "connected": bool(e.get("connected")),
@@ -113,7 +114,27 @@ def get_status():
     }
     with state.signal_lock:
         status["signal_strength"] = round(state.signal_strength, 2)
-    
+
+    # The two tracking modes (meteor / iss): each mode's running pass for
+    # the dashboard's per-mode display, and each mode's park frequency so
+    # the dongle cards can show their dongle's effective tune even while
+    # no pass of that mode is up.
+    mode_passes = {}
+    mode_freqs = {}
+    with state.status_lock:
+        for m in state.SAT_MODES:
+            mode_freqs[m] = round(state.mode_freq[m] / 1e6, 4)
+            mp = state.mode_pass[m]
+            mode_passes[m] = {
+                "sat_name": mp["sat_name"],
+                "catnr": mp["catnr"],
+                "frequency_mhz": round(state.mode_freq[m] / 1e6, 4),
+                "max_alt": mp["max_alt"],
+                "set_local": (mp["set_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%H:%M"),
+            } if mp is not None else None
+    status["mode_passes"] = mode_passes
+    status["mode_freqs"] = mode_freqs
+
     if cur_pass:
         status["current_pass"] = {
             "sat_name": cur_pass["sat_name"],
@@ -883,6 +904,24 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 return
             set_dongle_auto_sat(dev, on)
             self._send_json({'success': True, 'auto_sat': bool(entry.get('auto_sat'))}, code=200)
+        elif self.path.split('?')[0] == '/sat_mode':
+            # Set one dongle's satellite tracking mode (the role dropdown's
+            # Meteor/ISS options on the dongle card):
+            # /sat_mode?d=<id>&mode=meteor|iss — which pass family this
+            # dongle follows (the two modes replaced the single
+            # auto-tracking mode). The mode persists in the dongles table.
+            query = self._query()
+            dev = (query.get('d') or [''])[0].strip()
+            mode = (query.get('mode') or [''])[0].strip().lower()
+            if mode not in state.SAT_MODES:
+                self._send_json({'success': False,
+                                 'error': "mode must be one of: " + ", ".join(state.SAT_MODES)}, code=400)
+                return
+            if dev not in state.sdrs:
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
+                return
+            set_dongle_sat_mode(dev, mode)
+            self._send_json({'success': True, 'sat_mode': mode}, code=200)
         elif self.path.split('?')[0] == '/tune':
             # Manual tune (dongle reception test, e.g. FM broadcast radio):
             # /tune?f=89.7 parks the dongle on a frequency and pauses the

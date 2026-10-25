@@ -2301,3 +2301,22 @@ broadband EMI, all narrowband digital telemetry:
 So: the "short bursts" around 433.92 MHz are nearby wireless weather
 sensors (the classic cheap 433 MHz thermo-hygrometers). rtl_433 decodes
 this family automatically.
+
+## 2026-10-25 — Satellite tracking split: Meteor mode + ISS mode
+
+The single satellite auto-tracking mode was replaced by two per-dongle
+tracking modes: **Meteor tracking** (Meteor-M LRPT passes, 137.9 MHz) and
+**ISS tracking** (ISS passes, 437.55 MHz). The scheduler now runs two
+independent tracks, each with its own running pass, tune frequency,
+Doppler correction and signal peak (`state.mode_*`), so a Meteor dongle
+and an ISS dongle can record two overlapping passes at once. The role
+dropdown's "Satellites — auto tracking" entry became "Meteor tracking" /
+"ISS tracking" (`/sat_mode?d=<id>&mode=meteor|iss`, persisted in the
+dongles table as `sat_mode`); the auto-join checkbox now suspends a
+dedicated role only for the dongle's own mode's passes. The legacy
+single-track globals (current_pass/current_frequency/…) are maintained
+as a summary of the two tracks (Meteor preferred) for status.json,
+/track.json and the manual-tune endpoints; status.json additionally
+carries `mode_passes` and `mode_freqs`. Tests: tests/test_radio.py
+sections 1–14 (14 new: mode gating, peak attribution, mid-pass mode
+switch); jsdom smoke satmode-smoke.js 9/9.

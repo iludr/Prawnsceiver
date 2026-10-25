@@ -412,8 +412,8 @@ def _persist_dongles():
                     host, port = e['host'], int(e['port'])
                 cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
                             " aprs, aprs_iss, aprs_lasar, pocsag, adsb,"
-                            " auto_sat, added_ts)"
-                            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            " auto_sat, sat_mode, added_ts)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                             (host, port,
                              1 if e.get('ais') else 0,
                              1 if e.get('orbcomm') else 0,
@@ -422,7 +422,8 @@ def _persist_dongles():
                              1 if e.get('aprs_lasar') else 0,
                              1 if e.get('pocsag') else 0,
                              1 if e.get('adsb') else 0,
-                             1 if e.get('auto_sat') else 0, time.time()))
+                             1 if e.get('auto_sat') else 0,
+                             e.get('sat_mode') or 'meteor', time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -443,6 +444,7 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         'ais': did == AIS_DONGLE, 'orbcomm': False, 'aprs': False,
         'aprs_iss': False, 'aprs_lasar': False,
         'pocsag': False, 'adsb': False, 'auto_sat': False,
+        'sat_mode': 'meteor',
         'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
         # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
@@ -741,11 +743,11 @@ def set_dongle_auto_sat(did, on):
     """Toggle one dongle's auto-join (the checkbox under the role
     dropdown on its dashboard card): while the dongle listens in a
     dedicated decode role (AIS / Orbcomm / APRS / POCSAG / ADS-B), it
-    leaves that role when a satellite pass starts — tuning to the pass
-    and recording like any tracker — and returns to the role after
-    set. The flag persists in the dongles table; the suspended role is
-    in-memory pass state only. Unknown id: False; a no-op request
-    still succeeds.
+    leaves that role when a pass of ITS sat mode starts (set_dongle_sat_mode:
+    'meteor' or 'iss') — tuning to the pass and recording like any
+    tracker — and returns to the role after set. The flag persists in
+    the dongles table; the suspended role is in-memory pass state only.
+    Unknown id: False; a no-op request still succeeds.
 
     Enabling the checkbox during a running pass joins it immediately.
     Disabling cancels a pending role restore: the dongle stays in
@@ -762,26 +764,70 @@ def set_dongle_auto_sat(did, on):
             entry.pop('auto_saved_role', None)
             entry.pop('auto_saved_aprs_iss', None)
             entry.pop('auto_saved_aprs_lasar', None)
-        active = state.is_pass_active
+        mode = entry.get('sat_mode') or 'meteor'
+        active = state.mode_pass[mode] is not None
     if on:
-        state.log_console(f"🛰 Dongle {did}: auto-join satellite passes ON — its decode role is suspended during passes")
+        state.log_console(f"🛰 Dongle {did}: auto-join satellite passes ON — its decode role is suspended during {entry.get('sat_mode', 'meteor').upper()} passes")
         if active:
-            _auto_sat_join(did)
+            _auto_sat_join(did, entry.get('sat_mode') or 'meteor')
     else:
         state.log_console(f"🛰 Dongle {did}: auto-join satellite passes OFF")
     _persist_dongles()
     return True
 
 
-def _auto_sat_join(did):
-    """Suspend one dongle's decode role for the running pass (the
-    scheduler's PASS START hook; also used when the checkbox is
-    enabled mid-pass). The role flags clear, so the supervisor hands
-    the dongle to its satellite capture thread, which retunes to the
-    pass and records. Returns the suspended role name, or None when
-    there is nothing to do (no auto-join, paused, a Prawntuner session
-    owns the dongle, already on the satellites, already joined this
-    pass)."""
+def set_dongle_sat_mode(did, mode):
+    """Set which satellite family this dongle tracks: 'meteor' (Meteor-M
+    LRPT passes) or 'iss' (ISS passes). The two modes replaced the single
+    auto-tracking mode (2026-10-25): every dongle — on the satellites or
+    parked in a dedicated decode role with auto-join — follows ONLY its
+    mode's passes, and the scheduler runs the two tracks independently.
+    Persists in the dongles table. A running capture thread retunes live
+    from the mode snapshot (idle park or pass band of the new mode); a
+    dongle auto-joined into the OLD mode's pass gets its role restored
+    immediately — the operator's choice wins over the pending pass-end
+    restore. Unknown id or mode: False; a no-op request still succeeds."""
+    entry = state.sdrs.get(did)
+    if entry is None or mode not in state.SAT_MODES:
+        return False
+    if entry.get('sat_mode') == mode:
+        return True
+    with state.status_lock:
+        entry['sat_mode'] = mode
+        # a mode change mid-join ends the join: restore the saved role
+        # at once (the dongle must not sit on the other family's pass)
+        role = entry.pop('auto_saved_role', None)
+        if role is not None:
+            iss = entry.pop('auto_saved_aprs_iss', False)
+            lasar = entry.pop('auto_saved_aprs_lasar', False)
+            entry[role] = True
+            if role == 'aprs':
+                entry['aprs_iss'] = iss
+                entry['aprs_lasar'] = lasar
+    if role is not None:
+        emoji = _ROLE_DEFS[role][0]
+        state.log_console(f"{emoji} Dongle {did} back to {_role_band(entry, role)} — sat mode changed")
+    state.log_console(f"🛰 Dongle {did}: tracking mode -> {mode.upper()}"
+                      f" ({'Meteor-M LRPT 137.9 MHz' if mode == 'meteor' else 'ISS 437.55 MHz'})")
+    # the new mode's pass may be live right now: a dedicated-role dongle
+    # with auto-join joins it immediately (same as set_dongle_auto_sat)
+    with state.status_lock:
+        active = state.mode_pass[mode] is not None
+    if active and entry.get('auto_sat'):
+        _auto_sat_join(did, mode)
+    _persist_dongles()
+    return True
+
+
+def _auto_sat_join(did, mode):
+    """Suspend one dongle's decode role for the running pass of `mode`
+    (the scheduler's PASS START hook for that track; also used when
+    auto-join or the sat mode is enabled mid-pass). The role flags clear,
+    so the supervisor hands the dongle to its satellite capture thread,
+    which retunes to the pass and records. Returns the suspended role
+    name, or None when there is nothing to do (no auto-join, a different
+    sat mode, paused, a Prawntuner session owns the dongle, already on
+    the satellites, already joined this pass)."""
     entry = state.sdrs.get(did)
     if entry is None:
         return None
@@ -794,6 +840,8 @@ def _auto_sat_join(did):
     with state.status_lock:
         if not entry.get('auto_sat') or entry.get('paused'):
             return None
+        if entry.get('sat_mode') != mode:
+            return None
         role = _dongle_role(entry)
         if role is None or entry.get('auto_saved_role'):
             return None
@@ -802,25 +850,28 @@ def _auto_sat_join(did):
         entry['auto_saved_aprs_lasar'] = bool(entry.get('aprs_lasar'))
         for flag in _ROLE_FLAGS:
             entry[flag] = False
-    state.log_console(f"🛰 Dongle {did} auto-joined the pass — {_role_band(entry, role)} resumes after set")
+    state.log_console(f"🛰 Dongle {did} auto-joined the {mode.upper()} pass — {_role_band(entry, role)} resumes after set")
     _stop_capture(entry)
     return role
 
 
-def auto_sat_join_all():
-    """PASS START hook: every dongle with auto-join enabled leaves its
-    decode role for the pass. Idempotent — dongles already joined this
-    pass (auto_saved_role set) are skipped, so the direct switch
-    between overlapping passes does not re-suspend anything."""
+def auto_sat_join_all(mode):
+    """PASS START hook for one mode's track: every dongle whose sat mode
+    is `mode` and that has auto-join enabled leaves its decode role for
+    the pass. Idempotent — dongles already joined this pass
+    (auto_saved_role set) are skipped, so the direct switch between
+    overlapping passes does not re-suspend anything."""
     for did in list(state.sdrs):
-        _auto_sat_join(did)
+        _auto_sat_join(did, mode)
 
 
-def auto_sat_leave_all():
-    """PASS END hook: return every dongle suspended by the auto-join to
-    the role it was in (APRS keeps its ISS/LASARsat channel preset).
-    Dongles whose role was changed by hand mid-pass carry no saved
-    role anymore — the manual choice stands and nothing is restored."""
+def auto_sat_leave_all(mode):
+    """PASS END hook for one mode's track: return every dongle suspended
+    by the auto-join to the role it was in (APRS keeps its ISS/LASARsat
+    channel preset). Dongles whose role was changed by hand mid-pass
+    carry no saved role anymore — the manual choice stands and nothing
+    is restored. (A dongle only ever joins its own sat mode's pass, so
+    the saved roles all belong to this track.)"""
     for did in list(state.sdrs):
         entry = state.sdrs.get(did)
         if entry is None:
@@ -846,18 +897,19 @@ def load_dongles():
     so later dashboard additions update the database)."""
     entries = [(r['host'], r['port'], bool(r['ais']), bool(r['orbcomm']),
                 bool(r['aprs']), bool(r['aprs_iss']), bool(r['aprs_lasar']),
-                bool(r['pocsag']), bool(r['adsb']), bool(r['auto_sat']))
+                bool(r['pocsag']), bool(r['adsb']), bool(r['auto_sat']),
+                r['sat_mode'] or 'meteor')
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
                                  " aprs_iss, aprs_lasar, pocsag, adsb,"
-                                 " auto_sat"
+                                 " auto_sat, sat_mode"
                                  " FROM dongles ORDER BY port, host")]
     from_db = bool(entries)   # persisted rows are the source of truth
     if not entries:
         entries = [(h, p, False, False, False, False, False, False, False,
-                    False)
+                    False, 'meteor')
                    for h, p in DEFAULT_DONGLES]
     for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_lasar, \
-            was_pocsag, was_adsb, was_auto_sat in entries:
+            was_pocsag, was_adsb, was_auto_sat, was_sat_mode in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -877,6 +929,10 @@ def load_dongles():
                 # the auto-join checkbox is a setting, not a role: it
                 # restores independently of the role chain below
                 state.sdrs[did]['auto_sat'] = was_auto_sat
+                # the sat mode is a setting too: which pass family
+                # (meteor / iss) this dongle tracks or auto-joins
+                if was_sat_mode in state.SAT_MODES:
+                    state.sdrs[did]['sat_mode'] = was_sat_mode
         if was_ais:
             # the AIS switch is persisted too - a restart must not silently
             # put a dongle the operator dedicated to ship traffic back on
@@ -1305,8 +1361,13 @@ def sdr_capture_thread(did):
         run_failed = False
         sock = None
         try:
+            # This dongle's satellite tracking mode decides which
+            # scheduler track (Meteor or ISS) it follows: connect tunes
+            # to that mode's park/pass frequency (see the snapshot below)
             with state.status_lock:
-                tuned_freq = state.manual_dongle_freq.get(did, state.current_frequency)
+                sat_mode = entry.get('sat_mode') or 'meteor'
+                tuned_freq = state.manual_dongle_freq.get(did,
+                                                          state.mode_freq[sat_mode])
             correction = tuning_correction(tuned_freq, did)
             # shown in the dongle cards' tuning infobox
             entry['correction'], entry['correction_src'] = correction_info(tuned_freq, did)
@@ -1389,13 +1450,21 @@ def sdr_capture_thread(did):
                 # them — the WAV then got the NEW satellite's name while the
                 # dongle stayed on the OLD frequency, and the retune test
                 # below never fired again for that pass.
+                # Per tracking mode (meteor / iss): this dongle follows its
+                # own mode's track — frequency, pass name, Doppler — so two
+                # dongles in different modes can record two overlapping
+                # passes at once. The mode itself is read outside the lock:
+                # set_dongle_sat_mode only flips it between captures and a
+                # mid-block flip just means the next block sees it.
+                sat_mode = entry.get('sat_mode') or 'meteor'
                 with state.status_lock:
                     override = did in state.manual_dongle_freq
-                    freq_now = state.manual_dongle_freq.get(did, state.current_frequency)
-                    sat_now = state.current_sat_name
-                    pass_active = state.is_pass_active
+                    freq_now = state.manual_dongle_freq.get(did, state.mode_freq[sat_mode])
+                    sat_now = state.mode_sat_name[sat_mode]
+                    pass_active = state.mode_pass[sat_mode] is not None
                     rec_paused = state.recordings_paused
-                    dop_hz, dop_freq = state.doppler_hz, state.doppler_freq_hz
+                    dop_hz = state.mode_doppler_hz[sat_mode]
+                    dop_freq = state.mode_doppler_freq_hz[sat_mode]
                     bw_hz = state.manual_dongle_bw.get(did)
                     manual_rec = did in state.manual_recording
 
@@ -1442,7 +1511,11 @@ def sdr_capture_thread(did):
                             with state.signal_lock:
                                 state.signal_strength = band
                                 if entry['is_recording']:
-                                    state.pass_signal_peak = max(state.pass_signal_peak, band)
+                                    # peak attribution follows the dongle's
+                                    # tracking mode — each mode's pass log
+                                    # gets its own track's peak
+                                    state.mode_pass_peak[sat_mode] = max(
+                                        state.mode_pass_peak[sat_mode], band)
                                 if now_ts - last_history_append >= 1.0:
                                     last_history_append = now_ts
                                     state.signal_history.append(band)

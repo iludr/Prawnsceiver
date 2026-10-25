@@ -124,8 +124,35 @@ def wait_for(cond, secs=4.0, what=''):
     raise AssertionError(f'timeout waiting for {what}')
 
 def set_sched(freq, sat, active):
+    """Drive the scheduler state the way the two-mode scheduler does: the
+    per-mode track (which the capture threads read; the mode follows the
+    satellite name) plus the legacy summary globals. sat == 'idle' means
+    no pass anywhere: both tracks park on freq (the test's idle park)."""
     with state.status_lock:
-        state.current_frequency = freq; state.current_sat_name = sat; state.is_pass_active = active
+        if not active or sat == 'idle':
+            for m in state.SAT_MODES:
+                state.mode_pass[m] = None
+                state.mode_freq[m] = freq
+                state.mode_sat_name[m] = sat
+        else:
+            mode = 'iss' if sat.startswith('ISS') else 'meteor'
+            state.mode_freq[mode] = freq
+            state.mode_sat_name[mode] = sat
+            state.mode_pass[mode] = {'sat_name': sat, 'frequency': freq}
+        # legacy summary (meteor preferred, like the scheduler's)
+        summary = next((m for m in state.SAT_MODES if state.mode_pass[m] is not None), None)
+        if summary is not None:
+            state.current_frequency = state.mode_freq[summary]
+            state.current_sat_name = state.mode_sat_name[summary]
+            state.is_pass_active = True
+        else:
+            state.current_frequency = freq
+            state.current_sat_name = sat
+            state.is_pass_active = False
+            state.mode_doppler_hz['meteor'] = 0
+            state.mode_doppler_freq_hz['meteor'] = 0
+            state.mode_doppler_hz['iss'] = 0
+            state.mode_doppler_freq_hz['iss'] = 0
 
 def expect_cmd(freq):
     want = (1, freq + SDR_OFFSET_HZ + tuning_correction(freq, DID))
@@ -151,7 +178,8 @@ expect_cmd(137100000)
 wait_for(lambda: entry['is_recording'] and 'Meteor-M_2-4_' in os.path.basename(entry['wav_path'] or ''), what='Meteor-M 2-4 wav')
 assert state.is_recording and state.current_wav_path == entry['wav_path']
 with state.status_lock:
-    state.doppler_hz, state.doppler_freq_hz = 2000, 137100000
+    # the capture threads read the per-mode Doppler now
+    state.mode_doppler_hz['meteor'], state.mode_doppler_freq_hz['meteor'] = 2000, 137100000
 wait_for(lambda: last_doppler['d'] == 2000, what='doppler applied after live retune (was gated on the start frequency)')
 print("2 pass start: retune, WAV open, Doppler applied on the retuned band OK")
 
@@ -163,12 +191,14 @@ time.sleep(0.2); assert not commands, f"no retune expected on same frequency, go
 with wave.open(first_wav) as w: assert w.getnframes() > 0 and w.getframerate() == 48000
 print("3 same-frequency switch: WAV split, no retune, first WAV valid OK")
 
-# 4. band switch mid-pass (overlapping pass) to ISS
+# 4. band switch mid-pass (overlapping pass) to ISS: the dongle must be
+# in the ISS tracking mode to follow it (sat_mode gating, section 14)
+assert radio.set_dongle_sat_mode(DID, 'iss') is True
 set_sched(437550000, "ISS (Zarya)", True)
 expect_cmd(437550000)
 wait_for(lambda: entry['wav_path'] and 'ISS_(Zarya)_' in os.path.basename(entry['wav_path']), what='ISS wav')
 with state.status_lock:
-    state.doppler_hz, state.doppler_freq_hz = -9000, 437550000
+    state.mode_doppler_hz['iss'], state.mode_doppler_freq_hz['iss'] = -9000, 437550000
 wait_for(lambda: last_doppler['d'] == -9000, what='ISS doppler')
 print("4 band switch mid-pass: WAV closed/reopened, retune, Doppler follows OK")
 
@@ -189,6 +219,9 @@ wait_for(lambda: not entry['is_recording'] and not state.is_recording and state.
 for p in wavs():
     with wave.open(p) as w: assert w.getnframes() > 0, p
 print(f"6 pass end: WAV closed, {len(wavs())} valid WAVs: {[os.path.basename(p) for p in wavs()]}")
+
+# back to the default tracking mode for the following sections
+assert radio.set_dongle_sat_mode(DID, 'meteor') is True
 
 # 6b. manual raw recording (dashboard Record button): captures the idle
 # tune's UNTOUCHED uint8 IQ (no audio WAV any more), survives the global
@@ -472,7 +505,7 @@ assert radio.set_dongle_auto_sat(DID, True) is True
 assert db.query_one("SELECT auto_sat FROM dongles")["auto_sat"] == 1, "auto-join must persist"
 assert radio.set_dongle_auto_sat(DID, True) is True            # idempotent
 # a dongle on the satellites has nothing to suspend
-radio.auto_sat_join_all()
+radio.auto_sat_join_all('meteor')
 with state.status_lock:
     assert not entry.get('auto_saved_role'), "a dongle on the satellites must not be suspended"
 # put it in the AIS role and start the AIS thread (no supervisor in
@@ -481,9 +514,12 @@ assert radio.set_dongle_ais(DID, True) is True
 t_ais = threading.Thread(target=_ais.ais_capture_thread, args=(DID,), daemon=True); t_ais.start()
 wait_for(lambda: state.ais_enabled and state.ais_dongle == DID, what='AIS thread up')
 # PASS START: the role is suspended, the AIS thread exits, the satellite
-# capture thread takes over, retunes to the pass and records
+# capture thread takes over, retunes to the pass and records. The dongle
+# must be in the ISS tracking mode to auto-join an ISS pass.
+assert radio.set_dongle_sat_mode(DID, 'iss') is True
+assert db.query_one("SELECT sat_mode FROM dongles")["sat_mode"] == 'iss', "sat mode must persist"
 set_sched(437550000, "ISS (Zarya)", True)
-radio.auto_sat_join_all()
+radio.auto_sat_join_all('iss')
 with state.status_lock:
     assert not entry['ais'] and entry['auto_saved_role'] == 'ais'
 wait_for(lambda: not t_ais.is_alive(), secs=5, what='AIS thread exits on auto-join')
@@ -491,13 +527,13 @@ t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True);
 expect_cmd(437550000)
 wait_for(lambda: entry['is_recording'] and 'ISS_(Zarya)_' in os.path.basename(entry['wav_path'] or ''), what='auto-joined dongle records the pass')
 # idempotent: a direct switch to an overlapping pass must not re-suspend
-radio.auto_sat_join_all()
+radio.auto_sat_join_all('iss')
 with state.status_lock:
     assert entry['auto_saved_role'] == 'ais' and not entry['ais']
 # PASS END: the role is restored, the satellite thread exits, the AIS
 # thread takes over again
 set_sched(137620000, "idle", False)
-radio.auto_sat_leave_all()
+radio.auto_sat_leave_all('iss')
 with state.status_lock:
     assert entry['ais'] and not entry.get('auto_saved_role')
 wait_for(lambda: not t.is_alive(), secs=5, what='satellite thread exits on role restore')
@@ -508,8 +544,9 @@ expect_cmd(AIS_CENTER_HZ)
 # a manual role choice mid-pass wins over the pending restore (the
 # auto-joined dongle shows "Satellites" in the role dropdown, so the
 # operator's manual pick is a DIFFERENT dedicated role)
+assert radio.set_dongle_sat_mode(DID, 'meteor') is True   # the Meteor track now
 set_sched(137100000, "Meteor-M 2-3", True)
-radio.auto_sat_join_all()
+radio.auto_sat_join_all('meteor')
 with state.status_lock:
     assert entry['auto_saved_role'] == 'ais' and not entry['ais']
 wait_for(lambda: not t_ais.is_alive(), secs=5, what='AIS thread exits on the second auto-join')
@@ -517,20 +554,20 @@ assert radio.set_dongle_adsb(DID, True) is True               # operator picks a
 with state.status_lock:
     assert entry['adsb'] and not entry.get('auto_saved_role'), "a manual role change must cancel the pending restore"
 set_sched(137620000, "idle", False)
-radio.auto_sat_leave_all()
+radio.auto_sat_leave_all('meteor')
 with state.status_lock:
     assert entry['adsb'] and not entry['ais'], "no restore after a manual mid-pass role change"
 assert radio.set_dongle_adsb(DID, False) is True
 # unchecking the checkbox cancels a pending restore too
 assert radio.set_dongle_ais(DID, True) is True
 set_sched(137100000, "Meteor-M 2-3", True)
-radio.auto_sat_join_all()
+radio.auto_sat_join_all('meteor')
 with state.status_lock:
     assert entry['auto_saved_role'] == 'ais'
 assert radio.set_dongle_auto_sat(DID, False) is True
 with state.status_lock:
     assert not entry.get('auto_saved_role') and not entry['auto_sat']
-radio.auto_sat_leave_all()
+radio.auto_sat_leave_all('meteor')
 with state.status_lock:
     assert not entry['ais'], "unchecking must cancel the pending restore"
 # enabling the checkbox mid-pass joins the running pass immediately
@@ -540,30 +577,68 @@ assert radio.set_dongle_auto_sat(DID, True) is True
 with state.status_lock:
     assert entry['auto_saved_role'] == 'ais' and not entry['ais'], "enabling mid-pass must join immediately"
 set_sched(137620000, "idle", False)
-radio.auto_sat_leave_all()
+radio.auto_sat_leave_all('meteor')
 with state.status_lock:
     assert entry['ais'] and not entry.get('auto_saved_role')
 # a paused dongle is not auto-joined
 assert radio.set_dongle_paused(DID, True) is True
-radio.auto_sat_join_all()
+radio.auto_sat_join_all('meteor')
 with state.status_lock:
     assert entry['ais'] and not entry.get('auto_saved_role'), "a paused dongle must not auto-join"
 assert radio.set_dongle_paused(DID, False) is True
 # APRS keeps its channel preset across the suspend/restore
 assert radio.set_dongle_aprs(DID, True) is True
 assert radio.set_dongle_aprs_iss(DID, True) is True
-radio.auto_sat_join_all()
+radio.auto_sat_join_all('meteor')
 with state.status_lock:
     assert entry['auto_saved_role'] == 'aprs' and not entry['aprs']
-radio.auto_sat_leave_all()
+radio.auto_sat_leave_all('meteor')
 with state.status_lock:
     assert entry['aprs'] and entry['aprs_iss'] and not entry.get('auto_saved_role')
 assert radio.set_dongle_aprs(DID, False) is True
-# persistence roundtrip: the flag survives a reload from the dongles table
+# persistence roundtrip: the flags survive a reload from the dongles table
 radio.load_dongles()
 with state.status_lock:
     assert state.sdrs[DID]['auto_sat'] is True, "auto-join must restore from the dongles table"
+    assert state.sdrs[DID]['sat_mode'] == 'meteor', "sat mode must restore from the dongles table"
 assert radio.remove_dongle(DID) is True
 print("13 auto-join satellite passes: suspend/restore, manual override, pause, APRS preset, persistence OK")
+
+# 14. two tracking modes (they replaced the single auto-tracking mode):
+# a dongle follows ONLY its sat mode's track — an active pass of the
+# other family neither retunes it nor records — and a mid-pass mode
+# switch hands it to the other track live.
+did, created = radio.add_dongle(HOST, PORT)
+assert created and state.primary_dongle == DID
+entry = state.sdrs[DID]
+assert entry['sat_mode'] == 'meteor', "default tracking mode"
+assert radio.set_dongle_sat_mode(DID, 'bogus') is False, "invalid mode rejected"
+assert radio.set_dongle_sat_mode('nope:1', 'iss') is False, "unknown dongle rejected"
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: entry['last_data'] > 0, what='streaming')
+expect_cmd(137620000)   # connect tune: the meteor track's park
+# an active ISS pass is invisible to a meteor-mode dongle
+set_sched(437550000, "ISS (Zarya)", True)
+time.sleep(1.5)
+assert not entry['is_recording'], "a meteor-mode dongle must not record an ISS pass"
+assert not any(cmd[0] == 1 and cmd[1] == 437550000 + SDR_OFFSET_HZ for cmd in commands), "no ISS retune"
+# its own mode's pass records — while the ISS track stays active (the
+# two tracks are independent)
+set_sched(137100000, "Meteor-M 2-3", True)
+expect_cmd(137100000)
+wait_for(lambda: entry['is_recording'] and 'Meteor-M_2-3_' in os.path.basename(entry['wav_path'] or ''), what='meteor wav')
+time.sleep(0.5)
+with state.signal_lock:
+    assert state.mode_pass_peak['meteor'] > 0, "the signal peak must be attributed to the meteor track"
+# switching the mode mid-pass hands the dongle to the other track: live
+# retune to the ISS pass band, WAV reopened for the ISS
+assert radio.set_dongle_sat_mode(DID, 'iss') is True
+expect_cmd(437550000)
+wait_for(lambda: 'ISS_(Zarya)_' in os.path.basename(entry['wav_path'] or ''), what='iss wav after mode switch')
+# both tracks end: recording closes, the dongle parks on the shared idle freq
+set_sched(137620000, "idle", False)
+expect_cmd(137620000)
+wait_for(lambda: not entry['is_recording'], what='pass end closes the WAV')
+print("14 satellite tracking modes: meteor/iss gating, peak attribution, mid-pass mode switch OK")
 print("ALL RADIO TESTS PASSED")
 os._exit(0)
