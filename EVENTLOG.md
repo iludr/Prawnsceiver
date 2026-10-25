@@ -2342,3 +2342,43 @@ rise / after set in every pass recording). ADS-B dongle :1235 identified
 (it streams the 1090 MHz role); satellite dongle :1234. Prawntenna
 buffer spawn options -b 15 -n 1000 applied on both dongles earlier in
 the day: no regression, kept.
+
+## 2026-10-25 — ISM role: 433.92 MHz sensor decoding (new page /ism)
+
+New dedicated dongle role like POCSAG/ADS-B (role dropdown entry 🌡 ISM,
+/ism_dongle?d=<id>&on=0|1): the dongle parks on 433.92 MHz
+(config.ISM_CENTER_HZ) and decodes the OOK telemetry of the cheap
+thermo-hygrometers heard there — the 2026-10-23/24 tools/iq433 analysis
+turned into a live streaming decoder (noaa_receiver/decoding/ism.py,
+OokDecoder: |LP 25 kHz(shift)| envelope at 100 kS/s, run timing, >3 ms
+packet gap, PWM/PPM auto-detect, both polarities). Payload decoders:
+Nexus/Rubicson 36-bit PPM rows (channel = flags&3 + 1, battery bit3,
+Rubicson CRC-8 0x31/0x6c separates temperature-only sensors) and the
+unnamed PWM48 device (6 bytes, sum checksum, 7-symbol preamble).
+
+Dashboard: new nav entry + page /ism (ism.html + ism.js — sensor
+registry table + live packet feed via WS topics 'ism'/'ismlog', HTTP
+fallback /ism.json + /ismlog.json?count=); persistent log ism_messages
+(72 h retention, like the other decoders), sensor registry rebuilt from
+its tail on startup. Auto-join suspends the ISM role during passes of
+the dongle's sat mode like any dedicated role.
+
+Decoder fixes found against the real 2026-10-23 recording (test_ism
+end-to-end, all four sensors): 10 us single-sample noise spikes inside
+gaps fabricated phantom bits and split gap clusters (runs < 150 us are
+now ignored); threshold wobble split long PWM pulses into fragments
+(run merge / block-edge dip tolerance 80/100 us -> 300 us — the shortest
+real inter-pulse gap is ~975 us); the channel nibble encoding is
+flags&3 + 1 (0xA->ch3, 0x0->ch1, 0x8->ch1 — verified on all three
+recorded sensors), not (flags>>2)&3 + 1.
+
+Also fixed in passing: gain_auto existed in memory only since the AGC
+commit — the dongles-table column is now created (db migration) and
+persisted, and the five dedicated-role capture threads apply the AGC
+flag too (dongle_gain_db instead of the raw SDR_DONGLE_GAIN lookup).
+Supervisor spawns ism_capture_thread; dongles.json carries the ism
+flag. Tests: tests/test_ism.py (payload units, synthetic PPM stream,
+real-recording end-to-end, registry/log plumbing), test_radio/test_db/
+test_ws/test_manager/test_adsb/test_power/test_waterfall re-run OK;
+img/ISM.png + img/thumbs/ISM.jpg generated placeholders (PIL) for the
+nav menu.

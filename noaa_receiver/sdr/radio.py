@@ -448,7 +448,7 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
         'ais': did == AIS_DONGLE, 'orbcomm': False, 'aprs': False,
         'aprs_iss': False, 'aprs_lasar': False,
-        'pocsag': False, 'adsb': False, 'auto_sat': False,
+        'pocsag': False, 'adsb': False, 'ism': False, 'auto_sat': False,
         'sat_mode': 'meteor',
         'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
@@ -739,13 +739,13 @@ def set_dongle_aprs_lasar(did, on):
 
 # The dedicated decode role flags (dashboard role dropdown) — one
 # dongle, one role
-_ROLE_FLAGS = ('ais', 'orbcomm', 'aprs', 'pocsag', 'adsb')
+_ROLE_FLAGS = ('ais', 'orbcomm', 'aprs', 'pocsag', 'adsb', 'ism')
 
 
 def _dongle_role(entry):
     """The dedicated decode role a dongle is currently in ('ais',
-    'orbcomm', 'aprs', 'pocsag', 'adsb'), or None when it tracks the
-    satellites (a manual frequency override is not a role)."""
+    'orbcomm', 'aprs', 'pocsag', 'adsb', 'ism'), or None when it tracks
+    the satellites (a manual frequency override is not a role)."""
     for role in _ROLE_FLAGS:
         if entry.get(role):
             return role
@@ -1026,6 +1026,12 @@ def load_dongles():
                 state.sdrs[did]['adsb'] = True
             state.log_console(f"Dongle {did} restored to ADS-B (aircraft)"
                               + " - persisted role")
+        elif was_ism:
+            # and the ISM role: the receiver resumes on 433.92 MHz,
+            # decoding the sensor telemetry (see decoding/ism.py) —
+            # the flag itself was restored with the settings above
+            state.log_console(f"Dongle {did} restored to ISM (433.92 MHz sensors)"
+                              + " - persisted role")
     _persist_dongles()
 
 
@@ -1098,6 +1104,10 @@ def sdr_thread():
                     from ..decoding.adsb import adsb_capture_thread
                     t = threading.Thread(target=adsb_capture_thread, args=(did,),
                                          daemon=True, name=f'adsb-{did}')
+                elif entry.get('ism'):
+                    from ..decoding.ism import ism_capture_thread
+                    t = threading.Thread(target=ism_capture_thread, args=(did,),
+                                         daemon=True, name=f'ism-{did}')
                 else:
                     t = threading.Thread(target=sdr_capture_thread, args=(did,),
                                          daemon=True, name=f'sdr-{did}')
