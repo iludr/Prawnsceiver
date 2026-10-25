@@ -1893,7 +1893,7 @@
                 };
                 run(0);
             });
-            // Auto-join satellite passes checkbox (shown by
+            // Auto-join checkbox (shown by
             // applyDongleRole in the dedicated roles): while this dongle
             // listens for AIS/ADS-B/..., it leaves that role when a
             // satellite pass starts — tuning to the pass and recording
@@ -2003,7 +2003,23 @@
                     })
                     .catch(() => toast('Pause failed: receiver unreachable', true));
             };
-            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(roleSel); card.appendChild(autoSatRow); card.appendChild(aprsIssRow); card.appendChild(aprsLasarRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
+            // Tuner gain mode toggle: AGC (the tuner's own automatic gain
+            // control) vs the calibrated fixed gain (SDR_DONGLE_GAIN).
+            // The state mirrors d.gain_auto from dongles.json (the click
+            // flips it server-side; the poll confirms it back).
+            const gainBtn = document.createElement('button');
+            gainBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
+            gainBtn.title = 'Toggle the tuner gain between AGC (automatic) and the calibrated fixed gain';
+            gainBtn.onclick = () => {
+                const next = c.lastD && c.lastD.gain_auto ? 0 : 1;
+                fetch('/gain_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (next ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (!data.success) toast('Gain switch failed: ' + (data.error || 'unknown error'), true);
+                    })
+                    .catch(() => toast('Gain switch failed: receiver unreachable', true));
+            };
+            card.appendChild(info); card.appendChild(listenBtn); card.appendChild(roleSel); card.appendChild(gainBtn); card.appendChild(autoSatRow); card.appendChild(aprsIssRow); card.appendChild(aprsLasarRow); card.appendChild(pauseBtn); card.appendChild(removeBtn);
             col.appendChild(card);
             c = dongleCards[d.id] = {
                 cardEl: card,
@@ -2056,6 +2072,8 @@
             // already flipped it locally; this only follows external
             // changes, e.g. a second browser tab)
             if (c.autoSatLast !== !!d.auto_sat) { c.autoSatLast = !!d.auto_sat; c.autoSatBox.checked = c.autoSatLast; }
+            // AGC toggle state (button label follows the server flag)
+            if (c.gainLast !== !!d.gain_auto) { c.gainLast = !!d.gain_auto; c.gainBtn.textContent = c.gainLast ? '📶 Gain: AGC (auto)' : '📶 Gain: fixed (calibrated)'; }
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
             // Signal metric: ~150 = silence floor, 800+ = strong satellite carrier
             // with auto-gain — map that range onto the bar so idle noise

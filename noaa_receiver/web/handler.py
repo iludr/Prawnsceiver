@@ -61,6 +61,7 @@ def _dongle_list():
                 "adsb": bool(e.get("adsb")),
                 "auto_sat": bool(e.get("auto_sat")),
                 "sat_mode": e.get("sat_mode") or "meteor",
+                "gain_auto": bool(e.get("gain_auto")),
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
                 "connected": bool(e.get("connected")),
@@ -904,6 +905,19 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 return
             set_dongle_auto_sat(dev, on)
             self._send_json({'success': True, 'auto_sat': bool(entry.get('auto_sat'))}, code=200)
+        elif self.path.split('?')[0] == '/gain_dongle':
+            # Toggle one dongle's tuner gain between AGC (automatic) and
+            # the calibrated fixed gain: /gain_dongle?d=<id>&on=1 — the
+            # capture is restarted so the change takes effect at once.
+            query = self._query()
+            dev = (query.get('d') or [''])[0].strip()
+            on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
+            entry = state.sdrs.get(dev)
+            if entry is None:
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
+                return
+            set_dongle_gain_auto(dev, on)
+            self._send_json({'success': True, 'gain_auto': bool(entry.get('gain_auto'))}, code=200)
         elif self.path.split('?')[0] == '/sat_mode':
             # Set one dongle's satellite tracking mode (the role dropdown's
             # Meteor/ISS options on the dongle card):

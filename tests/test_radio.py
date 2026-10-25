@@ -169,6 +169,7 @@ expect_cmd(METEOR_LRPT_HZ)   # explicit tune on connect (state.current_frequency
 want_rate = (2, SDR_RATE)
 wait_for(lambda: want_rate in commands, what='sample-rate command on connect')
 commands.remove(want_rate)
+commands.remove((3, 0))   # explicit AGC enable on connect (no fixed gain configured)
 assert last_doppler['d'] == 0
 print("1 idle: streaming, waterfall rows, live audio, no retune OK")
 
@@ -640,5 +641,23 @@ set_sched(137620000, "idle", False)
 expect_cmd(137620000)
 wait_for(lambda: not entry['is_recording'], what='pass end closes the WAV')
 print("14 satellite tracking modes: meteor/iss gating, peak attribution, mid-pass mode switch OK")
+
+# 15. AGC toggle: gain_auto switches the dongle between the calibrated
+# fixed gain and the tuner's own AGC; the running capture restarts so
+# the change takes effect at once.
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: entry['last_data'] > 0, what='capture streaming (pre-AGC baseline)')
+assert radio.set_dongle_gain_auto(DID, True) is True
+wait_for(lambda: any(cmd[0] == 3 and cmd[1] == 0 for cmd in commands),
+         what='AGC gain-mode command on the reconnected capture')
+assert radio.set_dongle_gain_auto(DID, True) is True            # idempotent
+wait_for(lambda: any(cmd[0] == 3 and cmd[1] == 0 for cmd in commands),
+         what='capture keeps streaming after the AGC switch')
+# persistence roundtrip: the flag survives a reload from the dongles table
+radio.load_dongles()
+with state.status_lock:
+    assert state.sdrs[DID]['gain_auto'] is True, "gain_auto must restore from the dongles table"
+assert radio.set_dongle_gain_auto(DID, False) is True
+print("15 AGC toggle: gain switch, capture restart, persistence OK")
 print("ALL RADIO TESTS PASSED")
 os._exit(0)

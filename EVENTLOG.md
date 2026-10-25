@@ -2325,3 +2325,10 @@ Deploy: 2026-10-25 ~16:55 UTC — `systemctl --user restart prawnceiver`
 loaded the mode split into the running station (the service had been up
 since 2026-10-23, so /sat_mode 404'd until then). Dongle :1234 tracks
 Meteor, :1235 tracks ISS.
+
+## 2026-10-25 — AGC toggle for the dongle gain
+
+The dongle card gained a tuner-gain toggle (AGC on/off,
+/gain_dongle?d=<id>&on=0|1): on = the tuner's own automatic gain
+control, off = the calibrated fixed gain (SDR_DONGLE_GAIN). The running
+capture restarts on the switch; the flag persists in the dongles table.

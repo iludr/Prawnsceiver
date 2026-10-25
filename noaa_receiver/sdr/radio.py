@@ -182,6 +182,9 @@ def _rtl_tcp_connect(host, port, gain_db):
     if gain_db:
         _rtl_tcp_set(sock, RTL_TCP_SET_GAIN_MODE, 1)
         _rtl_tcp_set(sock, RTL_TCP_SET_GAIN, int(round(gain_db * 10)))
+    else:
+        # explicit AGC: the tuner's own gain control follows the signal
+        _rtl_tcp_set(sock, RTL_TCP_SET_GAIN_MODE, 0)
     return sock, tuner_type, gain_count
 
 
@@ -773,6 +776,41 @@ def set_dongle_auto_sat(did, on):
     else:
         state.log_console(f"🛰 Dongle {did}: auto-join satellite passes OFF")
     _persist_dongles()
+    return True
+
+
+def dongle_gain_db(did):
+    """The tuner gain (dB) to apply for a dongle, or None for AGC.
+
+    The dashboard's AGC toggle (the gain_auto flag, persisted in the
+    dongles table) overrides the calibrated fixed gain
+    (calibration.SDR_DONGLE_GAIN): the capture threads pass the return
+    value straight to their gain handling — None leaves the tuner on
+    its own automatic gain control."""
+    entry = state.sdrs.get(did)
+    if entry is not None and entry.get('gain_auto'):
+        return None
+    return SDR_DONGLE_GAIN.get(did, SDR_GAIN)
+
+
+def set_dongle_gain_auto(did, on):
+    """Toggle one dongle's automatic gain control (the AGC switch on its
+    dashboard card): on = the tuner's own AGC decides the gain, off = the
+    calibrated fixed gain (SDR_DONGLE_GAIN). Persists in the dongles
+    table; a running capture is restarted so the change takes effect at
+    once. Unknown id: False; a no-op request still succeeds."""
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return False
+    on = bool(on)
+    if entry.get('gain_auto') == on:
+        return True
+    entry['gain_auto'] = on
+    state.log_console(f"📶 Dongle {did}: tuner gain -> "
+                      + ("AGC (automatic)" if on else "fixed (calibrated)"))
+    _persist_dongles()
+    # the gain is applied when the capture (re)connects — restart it
+    _stop_capture(entry)
     return True
 
 
@@ -1376,7 +1414,7 @@ def sdr_capture_thread(did):
             # manual gain mode + gain in tenths of dB over the control
             # protocol — the rtl_tcp CLI parses -g as an int, so fractional
             # gain steps like the R820T's 29.7 dB must go through the socket
-            gain_db = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
+            gain_db = dongle_gain_db(did)
             if entry.get('usb_idx') is not None:
                 # Local USB dongle: rtl_sdr streams raw u8 IQ on stdout.
                 # It cannot be retuned while running — a band switch
