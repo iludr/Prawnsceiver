@@ -769,7 +769,7 @@ def ais_capture_thread(did):
     the dongle card shows the AIS spectrum like any other.
     """
     from ..sdr.dsp import iq_to_complex, frequency_shift
-    from ..sdr.radio import (_IQReader, _PipeRecv, _kill_rtl_sdr,
+    from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, _kill_rtl_sdr,
                         _rtl_tcp_connect, _spawn_rtl_sdr, push_wf_row,
                         CAPTURE_BATCH,
                         RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
@@ -825,7 +825,7 @@ def ais_capture_thread(did):
             # 2026-10-11, matching the measured values' sign: the old
             # +80 entry mistuned the AIS band by +26 kHz)
             entry["correction"], entry["correction_src"] = correction_info(AIS_CENTER_HZ, did)
-            gain_db = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
+            gain_db = dongle_gain_db(did)
             if entry.get("usb_idx") is not None:
                 # Local USB dongle: rtl_sdr on stdout, no control
                 # protocol (the AIS band is fixed, so no retune exists

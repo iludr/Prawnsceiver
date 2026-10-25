@@ -649,7 +649,7 @@ def orbcomm_capture_thread(did):
     backoff); instead of two fixed channels it tracks every carrier it
     finds in the 137.0-138.0 MHz downlink band."""
     from ..sdr.dsp import iq_to_complex
-    from ..sdr.radio import (_IQReader, _PipeRecv, push_wf_row,
+    from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, IQ_BLOCK,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
@@ -686,7 +686,7 @@ def orbcomm_capture_thread(did):
             correction = tuning_correction(ORBCOMM_CENTER_HZ, did)
             tune = ORBCOMM_CENTER_HZ + SDR_OFFSET_HZ + correction
             entry["correction"], entry["correction_src"] = correction_info(ORBCOMM_CENTER_HZ, did)
-            gain_db = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
+            gain_db = dongle_gain_db(did)
             if entry.get("usb_idx") is not None:
                 proc = _spawn_rtl_sdr(entry, tune, gain_db)
                 if proc is None:

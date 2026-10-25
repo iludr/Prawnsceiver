@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOAAh's CrabArk — 433 MHz ISM Sensors</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 0 15px 12px; }
+#header { margin: 0 -15px 12px; }
+#stats { color: #4da6ff; font-size: 0.9em; margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-bottom: 20px; }
+th { text-align: left; color: #888; border-bottom: 1px solid #0f3460; padding: 4px 6px; position: sticky; top: 0; background: #1a1a2e; }
+td { padding: 3px 6px; border-bottom: 1px solid #16213e; white-space: nowrap; }
+td.txt { white-space: normal; word-break: break-all; }
+tr:hover td { background: #16213e; }
+.t { color: #666; }
+.proto { color: #f39c12; }
+.id { color: #e0e0e0; font-weight: bold; }
+.temp { color: #53d769; font-weight: bold; }
+.hum { color: #4da6ff; }
+.batt-low { color: #e74c3c; font-weight: bold; }
+.batt-ok { color: #666; }
+.hex { color: #555; font-size: 0.85em; }
+.muted { color: #666; padding: 10px; }
+#sensorswrap { margin-bottom: 14px; }
+#sensorswrap h2 { font-size: 1.05em; color: #53d769; margin-bottom: 6px; font-weight: normal; }
+#sensorswrap h2 .cnt { color: #4da6ff; }
+</style>
+</head>
+<body>
+<div id="header">
+    <div class="head-left">
+        <img class="logo" src="/prawnceiver.jpg" alt="Prawnsceiver">
+        <div>
+            <h1>🌡 433 MHz ISM Sensors</h1>
+            <div class="info">433.92 MHz OOK telemetry · Nexus / Rubicson-family thermo-hygrometers</div>
+        </div>
+    </div>
+    <div class="head-right"><a href="/ism.json">live status (JSON)</a> &nbsp;·&nbsp; <a href="/ismlog.json">packet log (JSON)</a></div>
+</div>
+<div id="stats">Loading...</div>
+<div id="sensorswrap">
+    <h2>🌡 Known sensors — <span class="cnt" id="senscount">&hellip;</span></h2>
+    <table>
+    <thead><tr>
+        <th>protocol</th><th>id</th><th>channel</th><th>temperature</th>
+        <th>humidity</th><th>battery</th><th>last seen</th><th>packets</th>
+    </tr></thead>
+    <tbody id="sensorrows"><tr><td colspan="8" class="muted">Loading sensors...</td></tr></tbody>
+    </table>
+</div>
+<table>
+<thead><tr>
+    <th>time</th><th>freq</th><th>protocol</th><th>id</th><th>channel</th>
+    <th>temperature</th><th>humidity</th><th>battery</th><th>raw frame</th>
+</tr></thead>
+<tbody id="rows"><tr><td colspan="9" class="muted">Loading packets...</td></tr></tbody>
+</table>
+<script src="/ism.js"></script>
+<script src="/nav.js"></script>
+</body>
+</html>

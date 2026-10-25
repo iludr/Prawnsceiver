@@ -112,6 +112,12 @@ CREATE TABLE IF NOT EXISTS adsb_messages (
     id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
 CREATE INDEX IF NOT EXISTS adsb_messages_ts ON adsb_messages(ts);
 
+-- Decoded 433.92 MHz ISM sensor packets (see decoding/ism.py); the
+-- sensor registry is rebuilt from this log's tail on startup
+CREATE TABLE IF NOT EXISTS ism_messages (
+    id INTEGER PRIMARY KEY, ts REAL, entry TEXT);
+CREATE INDEX IF NOT EXISTS ism_messages_ts ON ism_messages(ts);
+
 -- Every ADS-B aircraft ever received (like the AIS ships table);
 -- the full aircraft dict is kept as JSON so the page shape is stable
 CREATE TABLE IF NOT EXISTS adsb_aircrafts (
@@ -199,6 +205,17 @@ def connect():
                 # single auto-tracking mode; see radio.set_dongle_sat_mode)
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN sat_mode TEXT DEFAULT 'meteor'")
+                _conn.commit()
+            if "ism" not in cols:
+                # ISM sensor decoding role (see decoding/ism.py)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN ism INTEGER DEFAULT 0")
+                _conn.commit()
+            if "gain_auto" not in cols:
+                # Per-dongle AGC toggle (see radio.set_dongle_gain_auto):
+                # the flag existed in memory only before this column
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN gain_auto INTEGER DEFAULT 0")
                 _conn.commit()
             # One-time repair: the pre-explicit-column positional
             # INSERTs wrote the orbcomm flag into added_ts and the

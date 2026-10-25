@@ -15,13 +15,14 @@ from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    METEOR_LRPT_HZ, RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE,
                    UTC_OFFSET, WEBDIR)
 
-from ..decoding import adsb, ais, aprs, orbcomm, pocsag
+from ..decoding import adsb, ais, aprs, ism, orbcomm, pocsag
 from ..sdr import scan
 from ..decoding.decode import decode_recording, forget_decode_marker
 from .history import (_load_history, get_recordings, quality_map,
                         recording_path, set_recording_quality)
 from .pages import (ADSB_HTML, AIS_HTML, APRS_HTML, CONSOLE_HTML,
-                    HISTORY_HTML, ORBCOMM_HTML, POCSAG_HTML, TUNER_HTML)
+                    HISTORY_HTML, ISM_HTML, ORBCOMM_HTML, POCSAG_HTML,
+                    TUNER_HTML)
 from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
@@ -29,8 +30,9 @@ from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_adsb,
                         set_dongle_ais, set_dongle_aprs,
                         set_dongle_aprs_iss, set_dongle_aprs_lasar,
                         set_dongle_auto_sat, set_dongle_orbcomm,
-                        set_dongle_pocsag, set_dongle_paused,
-                        set_dongle_sat_mode, usb_dongles)
+                        set_dongle_ism, set_dongle_pocsag, set_dongle_paused,
+                        set_dongle_gain_auto, set_dongle_sat_mode,
+                        usb_dongles)
 
 def _dongle_list():
     """Dongle descriptors for status/dongles.json: primary first, then stable
@@ -59,6 +61,7 @@ def _dongle_list():
                 "aprs_lasar": bool(e.get("aprs_lasar")),
                 "pocsag": bool(e.get("pocsag")),
                 "adsb": bool(e.get("adsb")),
+                "ism": bool(e.get("ism")),
                 "auto_sat": bool(e.get("auto_sat")),
                 "sat_mode": e.get("sat_mode") or "meteor",
                 "gain_auto": bool(e.get("gain_auto")),
@@ -252,6 +255,8 @@ _WS_TOPICS = {
     'aprsmsgs':     (10.0, lambda p: aprs.messages_view(_aislog_count(p))),
     'pocsag':       (5.0,  lambda p: pocsag.pocsag_status()),
     'pocsaglog':    (10.0, lambda p: pocsag.pocsag_log(_aislog_count(p))),
+    'ism':          (5.0,  lambda p: ism.ism_status()),
+    'ismlog':       (10.0, lambda p: ism.ism_log(_aislog_count(p))),
     'adsb':         (5.0,  lambda p: adsb.adsb_status()),
     'adsblog':      (10.0, lambda p: adsb.adsb_log(_aislog_count(p))),
     'adsb_aircrafts': (30.0, lambda p: adsb.aircrafts_registry()),
@@ -546,6 +551,9 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/pocsag.json':
             # POCSAG: tracked paging channels + recent pages
             self._send_json(pocsag.pocsag_status(), code=200)
+        elif self.path == '/ism.json':
+            # ISM: decoded 433 MHz sensor registry + recent packets
+            self._send_json(ism.ism_status(), code=200)
         elif self.path == '/adsb.json':
             # ADS-B: live aircraft table + receiver stats + raw frames
             self._send_json(adsb.adsb_status(), code=200)
@@ -573,6 +581,14 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 count = 200
             self._send_json(pocsag.pocsag_log(count), code=200)
+        elif self.path.startswith('/ismlog.json'):
+            # Newest-first tail of the persistent ISM sensor packet log
+            query = self._query()
+            try:
+                count = int((query.get('count') or ['200'])[0])
+            except ValueError:
+                count = 200
+            self._send_json(ism.ism_log(count), code=200)
         elif self.path.startswith('/adsblog.json'):
             # Newest-first tail of the persistent decoded-frame log
             query = self._query()
@@ -634,6 +650,12 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(POCSAG_HTML.encode())
+        elif self.path == '/ism' or self.path == '/ism.html':
+            # ISM page: decoded 433.92 MHz sensor telemetry
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(ISM_HTML.encode())
         elif self.path == '/tuner' or self.path == '/tuner.html':
             self.send_response(200)
             self.send_header('Content-type', 'text/html; charset=utf-8')
@@ -1204,6 +1226,15 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             dev = (query.get('d') or [''])[0]
             on = (query.get('on') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
             ok = set_dongle_pocsag(dev, on)
+            self._send_json({'success': ok}, code=200 if ok else 404)
+        elif self.path.split('?')[0] == '/ism_dongle':
+            # Switch one dongle between satellite tracking and the ISM
+            # sensor role: /ism_dongle?d=<id>&on=1 parks it on 433.92 MHz
+            # and decodes the 433 MHz thermo-hygrometer telemetry.
+            query = self._query()
+            dev = (query.get('d') or [''])[0]
+            on = (query.get('on') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
+            ok = set_dongle_ism(dev, on)
             self._send_json({'success': ok}, code=200 if ok else 404)
         elif self.path.split('?')[0] == '/fit_bw':
             # Fit the recorded (demod) bandwidth of one dongle to the signal

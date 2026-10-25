@@ -1082,7 +1082,7 @@ def adsb_capture_thread(did):
     connection lifecycle (handshake, gain, retune on connect, reconnect
     with backoff, role handover)."""
     from ..sdr.dsp import iq_to_complex
-    from ..sdr.radio import (_IQReader, _PipeRecv, push_wf_row,
+    from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, FFT_EVERY,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
@@ -1122,7 +1122,7 @@ def adsb_capture_thread(did):
             tune = ADSB_CENTER_HZ + SDR_OFFSET_HZ + correction
             entry["correction"], entry["correction_src"] = \
                 correction_info(ADSB_CENTER_HZ, did)
-            gain_db = SDR_DONGLE_GAIN.get(did, SDR_GAIN)
+            gain_db = dongle_gain_db(did)
             if entry.get("usb_idx") is not None:
                 proc = _spawn_rtl_sdr(entry, tune, gain_db)
                 if proc is None:

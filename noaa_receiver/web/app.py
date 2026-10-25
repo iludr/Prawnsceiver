@@ -74,6 +74,10 @@ def main():
     from ..decoding import pocsag as _pocsag
     _pocsag.load_pages()
 
+    # ISM sensors: rebuild the registry from the message log tail
+    from ..decoding import ism as _ism
+    _ism.restore_sensors()
+
     # Start scheduler thread (TLE refresh + pass prediction + frequency switching)
     threading.Thread(target=scheduler_thread, daemon=True).start()
 

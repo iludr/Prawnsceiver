@@ -415,8 +415,8 @@ def _persist_dongles():
                     host, port = e['host'], int(e['port'])
                 cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
                             " aprs, aprs_iss, aprs_lasar, pocsag, adsb,"
-                            " auto_sat, sat_mode, added_ts)"
-                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            " auto_sat, sat_mode, ism, gain_auto, added_ts)"
+                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             (host, port,
                              1 if e.get('ais') else 0,
                              1 if e.get('orbcomm') else 0,
@@ -426,7 +426,9 @@ def _persist_dongles():
                              1 if e.get('pocsag') else 0,
                              1 if e.get('adsb') else 0,
                              1 if e.get('auto_sat') else 0,
-                             e.get('sat_mode') or 'meteor', time.time()))
+                             e.get('sat_mode') or 'meteor',
+                             1 if e.get('ism') else 0,
+                             1 if e.get('gain_auto') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -566,6 +568,7 @@ _ROLE_DEFS = {
     'aprs': ('📡', 'APRS ({})'),
     'pocsag': ('📟', 'POCSAG paging (466.0 MHz)'),
     'adsb': ('✈️', 'ADS-B (1090 MHz)'),
+    'ism': ('🌡', 'ISM sensors (433.92 MHz)'),
 }
 
 
@@ -659,6 +662,13 @@ def set_dongle_pocsag(did, on):
     capture covers the local paging ecosystem, every channel decoded
     in parallel) and back — see _set_dongle_role."""
     return _set_dongle_role(did, 'pocsag', on)
+
+
+def set_dongle_ism(did, on):
+    """Dedicate this dongle to the 433.92 MHz ISM band (the cheap
+    thermo-hygrometer telemetry decoded in place — Nexus/Rubicson
+    family) and back — see _set_dongle_role."""
+    return _set_dongle_role(did, 'ism', on)
 
 
 def set_dongle_adsb(did, on):
@@ -936,18 +946,20 @@ def load_dongles():
     entries = [(r['host'], r['port'], bool(r['ais']), bool(r['orbcomm']),
                 bool(r['aprs']), bool(r['aprs_iss']), bool(r['aprs_lasar']),
                 bool(r['pocsag']), bool(r['adsb']), bool(r['auto_sat']),
-                r['sat_mode'] or 'meteor')
+                r['sat_mode'] or 'meteor', bool(r['ism']),
+                bool(r['gain_auto']))
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
                                  " aprs_iss, aprs_lasar, pocsag, adsb,"
-                                 " auto_sat, sat_mode"
+                                 " auto_sat, sat_mode, ism, gain_auto"
                                  " FROM dongles ORDER BY port, host")]
     from_db = bool(entries)   # persisted rows are the source of truth
     if not entries:
         entries = [(h, p, False, False, False, False, False, False, False,
-                    False, 'meteor')
+                    False, 'meteor', False, False)
                    for h, p in DEFAULT_DONGLES]
     for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_lasar, \
-            was_pocsag, was_adsb, was_auto_sat, was_sat_mode in entries:
+            was_pocsag, was_adsb, was_auto_sat, was_sat_mode, was_ism, \
+            was_gain_auto in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -971,6 +983,9 @@ def load_dongles():
                 # (meteor / iss) this dongle tracks or auto-joins
                 if was_sat_mode in state.SAT_MODES:
                     state.sdrs[did]['sat_mode'] = was_sat_mode
+                # the ISM role and the AGC flag are settings too
+                state.sdrs[did]['ism'] = was_ism
+                state.sdrs[did]['gain_auto'] = was_gain_auto
         if was_ais:
             # the AIS switch is persisted too - a restart must not silently
             # put a dongle the operator dedicated to ship traffic back on
@@ -1380,7 +1395,7 @@ def sdr_capture_thread(did):
             finalize_manual_rec()
             return
         if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or \
-                entry.get('pocsag') or entry.get('adsb'):
+                entry.get('pocsag') or entry.get('adsb') or entry.get('ism'):
             # AIS, Orbcomm or POCSAG was switched on from the dashboard after this
             # thread started: hand the dongle over to the supervisor's
             # dedicated capture thread for the new role
@@ -1456,7 +1471,7 @@ def sdr_capture_thread(did):
                 # — without this check the thread would reconnect as
                 # a ghost and hold the dongle forever
                 if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or \
-                entry.get('pocsag') or entry.get('adsb'):
+                entry.get('pocsag') or entry.get('adsb') or entry.get('ism'):
                     break
                 raw = reader.read_batch(CAPTURE_BATCH)
                 if raw is None:
@@ -1728,7 +1743,8 @@ def sdr_capture_thread(did):
             run_failed = True
             if not entry.get('closed') and not entry.get('ais') \
                     and not entry.get('orbcomm') and not entry.get('paused') \
-                    and not entry.get('pocsag') and not entry.get('adsb'):   # a removed/role-switched/paused dongle's socket is
+                    and not entry.get('pocsag') and not entry.get('adsb') \
+                    and not entry.get('ism'):   # a removed/role-switched/paused dongle's socket is
                 state.log_console(f"SDR thread error (dongle {did}): {e}", "error")  # closed under the thread — not an error
         entry['connected'] = False
         entry['sock'] = None
@@ -1740,7 +1756,7 @@ def sdr_capture_thread(did):
         finalize_manual_rec()
         if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') \
                 or entry.get('aprs') or entry.get('pocsag') or entry.get('adsb') \
-                or entry.get('paused'):
+                or entry.get('ism') or entry.get('paused'):
             # a removed/role-switched/paused dongle never reconnects;
             # a dongle removed mid-backoff also needs its WAV closed here
             close_wav()

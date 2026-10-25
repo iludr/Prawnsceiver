@@ -1338,8 +1338,8 @@
                     // 137.0-138.0 MHz downlink band), the APRS dongle on
                     // 144.8 MHz (145.825 with the ISS checkbox set) —
                     // none follow the shared satellite tune
-                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_lasar ? 436.925 : (d.aprs_iss ? 145.825 : 144.8)) : (d.pocsag ? 466.0 : (d.adsb ? 1090.0 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
-                        ? d.manual_frequency_mhz : (satModeFreqs[d.sat_mode || 'meteor'] || lastSharedMHz))))));
+                    b.centerMHz = d.ais ? 162.0 : (d.orbcomm ? 137.5 : (d.aprs ? (d.aprs_lasar ? 436.925 : (d.aprs_iss ? 145.825 : 144.8)) : (d.pocsag ? 466.0 : (d.adsb ? 1090.0 : (d.ism ? 433.92 : ((d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined)
+                        ? d.manual_frequency_mhz : (satModeFreqs[d.sat_mode || 'meteor'] || lastSharedMHz)))))));
                     updateDongleCard(d);
                 }
                 // the overlay follows per-dongle geometry (recorded
@@ -1412,6 +1412,7 @@
             if (d.aprs) return 'aprs';
             if (d.pocsag) return 'pocsag';
             if (d.adsb) return 'adsb';
+            if (d.ism) return 'ism';
             if (d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined) return 'manual';
             // the single satellite-tracking mode split into two (2026-10-25):
             // a tracker follows either the Meteor or the ISS track
@@ -1447,11 +1448,11 @@
             // and stays visible while the dongle is auto-joined
             // mid-pass (role flags cleared, auto_sat still set), so it
             // can be switched off again
-            const dedicated = role === 'ais' || role === 'orbcomm' || role === 'aprs' || role === 'pocsag' || role === 'adsb';
+            const dedicated = role === 'ais' || role === 'orbcomm' || role === 'aprs' || role === 'pocsag' || role === 'adsb' || role === 'ism';
             c.autoSatRow.style.display = (dedicated || d.auto_sat) ? 'flex' : 'none';
             if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
             c.roleLast = role;
-            if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag' || role === 'adsb') && liveAudioOn === d.id) toggleLiveAudio(d.id);
+            if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag' || role === 'adsb' || role === 'ism') && liveAudioOn === d.id) toggleLiveAudio(d.id);
         }
 
         function ensureDongleCard(d) {
@@ -1823,6 +1824,7 @@
                 ['orbcomm', '🛰 Orbcomm — satellite IoT'],
                 ['aprs',    '📡 APRS — packet radio'],
                 ['pocsag',  '📟 POCSAG — paging'],
+                ['ism',     '🌡 ISM — 433 MHz sensors'],
                 ['adsb',    '✈️ ADS-B — aircraft'],
             ];
             for (const [rv, rt] of ROLE_OPTS) {
@@ -1833,7 +1835,7 @@
             const ROLE_ENDPOINT = {
                 ais: 'ais_dongle', orbcomm: 'orbcomm_dongle',
                 aprs: 'aprs_dongle', pocsag: 'pocsag_dongle',
-                adsb: 'adsb_dongle',
+                adsb: 'adsb_dongle', ism: 'ism_dongle',
             };
             const ROLE_TOAST = {
                 sat_meteor: '🛰 Meteor tracking — this dongle follows the Meteor-M LRPT passes (137.9 MHz)',
@@ -1843,6 +1845,7 @@
                 orbcomm: '🛰 Switching this dongle to Orbcomm — satellite IoT downlink on 137.0-138.0 MHz',
                 aprs: '📡 Switching this dongle to APRS — ham packet radio on 144.800 MHz',
                 pocsag: '📟 Switching this dongle to POCSAG — paging channels decoded live',
+                ism: '🌡 Switching this dongle to ISM — 433 MHz sensor telemetry decoded live',
                 adsb: '✈️ Switching this dongle to ADS-B — aircraft on 1090 MHz decoded live',
             };
             roleSel.addEventListener('change', () => {
@@ -2010,6 +2013,7 @@
             const gainBtn = document.createElement('button');
             gainBtn.style.cssText = 'width:100%;margin-top:4px;padding:3px 10px;background:#0f3460;color:#4da6ff;border:1px solid #4da6ff;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
             gainBtn.title = 'Toggle the tuner gain between AGC (automatic) and the calibrated fixed gain';
+            gainBtn.textContent = '📶 Gain: fixed (calibrated)';   // replaced by the poll once dongles.json arrives
             gainBtn.onclick = () => {
                 const next = c.lastD && c.lastD.gain_auto ? 0 : 1;
                 fetch('/gain_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (next ? 1 : 0))
@@ -2024,7 +2028,7 @@
             c = dongleCards[d.id] = {
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
-                hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, autoSatRow, autoSatBox, aprsIssRow, aprsIssBox, aprsLasarRow, aprsLasarBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
+                hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, gainBtn, autoSatRow, autoSatBox, aprsIssRow, aprsIssBox, aprsLasarRow, aprsLasarBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
                 bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secMode, secBw, secScan, modeRow, modeSel, modeHint,
             };

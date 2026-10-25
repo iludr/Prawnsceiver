@@ -202,6 +202,18 @@ pocsag_dongle = None
 pocsag_channels = {}
 pocsag_pages = deque(maxlen=100)
 
+# ISM sensor telemetry (see noaa_receiver/decoding/ism.py): a dongle in
+# the ISM role tunes to config.ISM_CENTER_HZ (433.92 MHz) and decodes
+# the OOK telemetry of the cheap thermo-hygrometers in the band
+# (Nexus/Rubicson family). ism_sensors maps (proto, id, channel) ->
+# latest reading; ism_packets keeps the most recent decoded packets
+# for the dashboard's live feed.
+ism_lock = threading.Lock()
+ism_enabled = False
+ism_dongle = None
+ism_sensors = {}
+ism_packets = deque(maxlen=100)
+
 # ADS-B aircraft traffic (see noaa_receiver/decoding/adsb.py): a dongle
 # in the ADS-B role tunes to 1090 MHz and decodes Mode S extended
 # squitters. adsb_aircrafts maps ICAO hex -> aircraft dict (callsign,

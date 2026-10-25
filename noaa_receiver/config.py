@@ -118,6 +118,14 @@ MANUAL_REC_MAX_SECS = 120
 # list without recording it.
 RECORD_ISS = True
 
+# ISM sensor decoding (see decoding/ism.py): a dongle in the ISM role
+# parks here and decodes the 433.92 MHz OOK telemetry of the cheap
+# thermo-hygrometers in the band (Nexus/Rubicson family — the 2026-10-23
+# analysis, see tools/iq433/README.md).
+ISM_CENTER_HZ = 433_920_000
+# Rolling decoded-packet log (ism_messages table), trimmed by ts
+ISM_LOG_KEEP_HOURS = 72
+
 # Pass scheduling
 PASS_MIN_ALT = 10.0  # Only care about passes above 10°
 PASS_PREDICT_HOURS = 24  # Predict 24h ahead
