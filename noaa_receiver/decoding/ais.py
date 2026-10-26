@@ -771,7 +771,7 @@ def ais_capture_thread(did):
     from ..sdr.dsp import iq_to_complex, frequency_shift
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, _kill_rtl_sdr,
                         _rtl_tcp_connect, _spawn_rtl_sdr, push_wf_row,
-                        CAPTURE_BATCH,
+                        CAPTURE_BATCH, fft_offsets,
                         RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
     from ..config import FFT_SIZE, IQ_BLOCK
 
@@ -826,6 +826,7 @@ def ais_capture_thread(did):
             # +80 entry mistuned the AIS band by +26 kHz)
             entry["correction"], entry["correction_src"] = correction_info(AIS_CENTER_HZ, did)
             gain_db = dongle_gain_db(did)
+            wf_phase = 0
             if entry.get("usb_idx") is not None:
                 # Local USB dongle: rtl_sdr on stdout, no control
                 # protocol (the AIS band is fixed, so no retune exists
@@ -869,7 +870,9 @@ def ais_capture_thread(did):
                 # Waterfall + signal for the dongle card (rows rolled by
                 # +SDR_OFFSET_HZ so the card's center label reads the AIS
                 # channel - see push_wf_row)
-                for k in range(0, len(c) // FFT_SIZE, AIS_WF_BLOCKS):
+                wf_indices, wf_phase = fft_offsets(
+                    len(c) // FFT_SIZE, AIS_WF_BLOCKS, wf_phase)
+                for k in wf_indices:
                     try:
                         push_wf_row(entry, c, k, _SIG_BINS)
                     except Exception:

@@ -455,7 +455,8 @@
                 // newest row, the SDR#-style control values, and the
                 // time-range decimation state (pxCarry/accSum/accN;
                 // rowTs feeds the row-rate estimate)
-                dbRing: [], dbLatest: null, drawPending: 0,
+                dbRing: new Array(DB_RING_CAP), dbRingHead: 0, dbRingCount: 0,
+                dbLatest: null, drawPending: 0,
                 tRangeSec: WF_TIME_DEFAULT, pxCarry: 0,
                 accSum: null, accN: 0, rowTs: [],
             };
@@ -983,11 +984,14 @@
         // retained history via replayWaterfall - on both feed paths.
         function wfRowIn(b, entry) {
             if (!entry.db && entry.norm) entry.db = normToDb(entry.norm);
+            entry.receivedAt = Date.now();
             b.rowTs.push(performance.now());
             if (b.rowTs.length > 240) b.rowTs.shift();
-            b.dbRing.push(entry);
-            if (b.dbRing.length > DB_RING_CAP) b.dbRing.shift();
+            b.dbRing[b.dbRingHead] = entry;
+            b.dbRingHead = (b.dbRingHead + 1) % DB_RING_CAP;
+            b.dbRingCount = Math.min(DB_RING_CAP, b.dbRingCount + 1);
             b.dbLatest = entry;
+            if (document.hidden) return;
             // Time-range decimation: the canvas height is fixed and the
             // Time slider sets the covered span, so every incoming row
             // advances pxPerRow pixel rows — rows landing in the same
@@ -1001,7 +1005,7 @@
                 b.drawPending = requestAnimationFrame(() => {
                     b.drawPending = 0;
                     let n = Math.floor(b.pxCarry);
-                    if (n <= 0) return;
+                    if (n <= 0 || !b.accN) return;
                     b.pxCarry -= n;
                     if (n > WF_HEIGHT) n = WF_HEIGHT;
                     const mean = new Int16Array(512);
@@ -1111,6 +1115,14 @@
         // redraw the retained dB history: zoom and dB control changes take
         // effect on the whole waterfall immediately (SDR# behaviour)
         function replayWaterfall(b) {
+            if (b.drawPending) {
+                cancelAnimationFrame(b.drawPending);
+                b.drawPending = 0;
+            }
+            if (b.replayPending) {
+                cancelAnimationFrame(b.replayPending);
+                b.replayPending = 0;
+            }
             b.wfCtx.fillStyle = '#000';
             b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
             if (b.timeCtx) { b.timeCtx.fillStyle = '#000'; b.timeCtx.fillRect(0, 0, 54, WF_HEIGHT); }
@@ -1124,12 +1136,22 @@
             // averaged exactly like the live path so old and new lines
             // end up with the same resolution
             const want = Math.max(1, Math.round(estRowsPerSec(b) * (b.tRangeSec || WF_TIME_DEFAULT)));
-            const rows = b.dbRing.slice(-want);
-            const pxPerRow = WF_HEIGHT / Math.max(1, rows.length);
+            const rowCount = Math.min(want, b.dbRingCount);
+            if (!rowCount) return;
+            const first = (b.dbRingHead - rowCount + DB_RING_CAP) % DB_RING_CAP;
+            const oldestTs = b.dbRing[first].receivedAt;
+            const newestTs = b.dbRing[(b.dbRingHead - 1 + DB_RING_CAP) % DB_RING_CAP].receivedAt;
+            const spanMs = Math.max(1, newestTs - oldestTs);
+            const pxPerRow = WF_HEIGHT / rowCount;
             const sum = new Float64Array(512);
+            const image = b.wfCtx.createImageData(WF_WIDTH, WF_HEIGHT);
+            const pixels = image.data;
+            for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255;
             const srcBin = wfSrcBin(b);
-            let n = 0, carry = 0, lastMean = null;
-            for (const e of rows) {
+            let n = 0, carry = 0, writeY = WF_HEIGHT - 1;
+            let lastMean = null;
+            for (let row = 0; row < rowCount; row++) {
+                const e = b.dbRing[(first + row) % DB_RING_CAP];
                 for (let i = 0; i < 512; i++) sum[i] += e.db[i];
                 n++;
                 carry += pxPerRow;
@@ -1139,19 +1161,40 @@
                     const mean = new Int16Array(512);
                     for (let i = 0; i < 512; i++) mean[i] = Math.round(sum[i] / n);
                     lastMean = mean;
-                    for (let j = 0; j < k; j++) drawWaterfall(b, mean, srcBin);
+                    for (let j = 0; j < k && writeY >= 0; j++, writeY--) {
+                        for (let x = 0; x < WF_WIDTH; x++) {
+                            const level = (dbToLevel(b, mean[srcBin(x)]) + 0.5) | 0;
+                            const colorOffset = level * 4;
+                            const offset = (writeY * WF_WIDTH + x) * 4;
+                            pixels[offset] = WF_PALETTE[colorOffset];
+                            pixels[offset + 1] = WF_PALETTE[colorOffset + 1];
+                            pixels[offset + 2] = WF_PALETTE[colorOffset + 2];
+                        }
+                    }
                     sum.fill(0); n = 0;
                 }
             }
-            // the spectrum shows the newest replayed row — drawn once,
-            // not per pixel row
+            b.wfCtx.putImageData(image, 0, 0);
             if (lastMean) drawSpectrum(b, lastMean, srcBin);
+
+            if (b.timeCtx) {
+                const ctx = b.timeCtx;
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, 54, WF_HEIGHT);
+                ctx.fillStyle = '#a8b8d8';
+                ctx.font = '11px monospace';
+                ctx.textBaseline = 'top';
+                const tickMs = wfTickSec(b) * 1000;
+                const firstTick = Math.ceil(oldestTs / tickMs) * tickMs;
+                for (let ts = firstTick; ts <= newestTs; ts += tickMs) {
+                    const y = Math.max(0, Math.min(WF_HEIGHT - 12,
+                        (newestTs - ts) / spanMs * WF_HEIGHT));
+                    ctx.fillText(new Date(ts).toTimeString().slice(0, 8), 2, y);
+                }
+            }
         }
 
-        // Replays are batched onto the next animation frame: the slider
-        // and zoom handlers fire per input event, and a full-history
-        // replay per event made dragging them janky (a replay redraws up
-        // to a full canvas of pixel rows)
+        // Replays are coalesced onto the next animation frame while controls are dragged.
         function scheduleReplay(b) {
             if (b.replayPending) return;
             b.replayPending = requestAnimationFrame(() => {
@@ -1159,6 +1202,11 @@
                 replayWaterfall(b);
             });
         }
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden)
+                for (const b of Object.values(wfBlocks)) replayWaterfall(b);
+        });
 
         function updateFreqLabels(freqMHz) {
             document.getElementById('wf-freq').textContent = freqMHz.toFixed(3) + ' MHz';

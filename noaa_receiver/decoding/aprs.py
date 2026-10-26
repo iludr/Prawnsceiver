@@ -914,7 +914,7 @@ def aprs_capture_thread(did):
     from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
-                             CAPTURE_BATCH, IQ_BLOCK,
+                             CAPTURE_BATCH, IQ_BLOCK, fft_offsets,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
 
     entry = state.sdrs[did]
@@ -968,6 +968,7 @@ def aprs_capture_thread(did):
             tune = freq_hz + SDR_OFFSET_HZ + correction
             entry["correction"], entry["correction_src"] = correction_info(freq_hz, did)
             gain_db = dongle_gain_db(did)
+            wf_phase = 0
             if entry.get("usb_idx") is not None:
                 proc = _spawn_rtl_sdr(entry, tune, gain_db)
                 if proc is None:
@@ -1001,7 +1002,9 @@ def aprs_capture_thread(did):
                 c = iq_to_complex(raw)
                 # Waterfall + signal for the dongle card (center label
                 # reads 144.800 MHz - see push_wf_row)
-                for k in range(0, len(c) // FFT_SIZE, APRS_WF_BLOCKS):
+                wf_indices, wf_phase = fft_offsets(
+                    len(c) // FFT_SIZE, APRS_WF_BLOCKS, wf_phase)
+                for k in wf_indices:
                     try:
                         push_wf_row(entry, c, k, _SIG_BINS)
                     except Exception:

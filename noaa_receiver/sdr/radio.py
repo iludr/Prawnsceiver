@@ -53,6 +53,12 @@ from .dsp import (am_demodulate, doppler_shift, fm_demodulate, frequency_shift,
 # oversampled. At full block rate the FFT + row conversion (~1 ms/block on the
 # Pi) starved the demod once two dongles were attached.
 FFT_EVERY = max(8, round(0.00427 * SDR_RATE / (IQ_BLOCK // 2)))  # ~4 ms of RF between FFTs at any SDR_RATE (8 blocks at 960 kHz)
+
+def fft_offsets(frame_count, stride, phase):
+    """Return stride-spaced frame offsets and the phase for the next batch."""
+    first = (-phase) % stride
+    return range(first, frame_count, stride), (phase + frame_count) % stride
+
 # Blocks of IQ processed per capture-loop iteration (both capture
 # threads). Per-block processing at 2.4 Msps meant ~25 numpy calls
 # 4700 times a second per dongle; two dongles saturated the GIL
@@ -246,39 +252,30 @@ class _IQReader:
     """
     def __init__(self, sock, block, chunk=65536):
         self.sock, self.block, self.chunk = sock, block, chunk
-        self.buf, self.pos = b'', 0
+        self.buf, self.pos = bytearray(), 0
 
-    def read_block(self):
-        buf, pos, block = self.buf, self.pos, self.block
-        if len(buf) - pos < block:
-            buf = buf[pos:]
-            while len(buf) < block:
+    def _read(self, need):
+        buf, pos = self.buf, self.pos
+        if len(buf) - pos < need:
+            if pos:
+                del buf[:pos]
+                pos = 0
+            while len(buf) < need:
                 data = self.sock.recv(self.chunk)
                 if not data:
                     return None
-                buf += data
-            pos = 0
-            self.buf = buf
-        self.pos = pos + block
-        return buf[pos:pos + block]
+                buf.extend(data)
+        self.pos = pos + need
+        return bytes(buf[pos:self.pos])
+
+    def read_block(self):
+        return self._read(self.block)
 
     def read_batch(self, count):
         """Concatenated bytes of `count` blocks (same None-at-EOF
         contract as read_block): one iteration's worth of the batched
         capture loop - one pipe read fills it, no extra latency."""
-        buf, pos, block = self.buf, self.pos, self.block
-        need = block * count
-        if len(buf) - pos < need:
-            buf = buf[pos:]
-            while len(buf) < need:
-                data = self.sock.recv(self.chunk)
-                if not data:
-                    return None
-                buf += data
-            pos = 0
-            self.buf = buf
-        self.pos = pos + need
-        return buf[pos:pos + need]
+        return self._read(self.block * count)
 
 class _PipeRecv:
     """Adapter that makes an rtl_sdr stdout pipe look like a socket for
@@ -395,6 +392,8 @@ def _dongle_id(host, port):
     """Dongle id: the rtl_tcp server address."""
     return f'{host}:{int(port)}'
 
+_persist_dongles_lock = threading.Lock()
+
 def _persist_dongles():
     """Write the registered dongle list to the station database (dongles
     table), so a restart keeps the runtime-added set and each dongle's
@@ -404,31 +403,34 @@ def _persist_dongles():
     the in-memory set (the dashboard shows a warning once).
     """
     try:
-        with db.write() as cur:
-            cur.execute("DELETE FROM dongles")
-            for e in state.sdrs.values():
-                if e.get('usb_idx') is not None:
-                    # A USB dongle persists as its rtl_sdr device index,
-                    # not a network address
-                    host, port = 'usb', int(e['usb_idx'])
-                else:
-                    host, port = e['host'], int(e['port'])
-                cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
-                            " aprs, aprs_iss, aprs_lasar, pocsag, adsb,"
-                            " auto_sat, sat_mode, ism, gain_auto, added_ts)"
-                            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (host, port,
-                             1 if e.get('ais') else 0,
-                             1 if e.get('orbcomm') else 0,
-                             1 if e.get('aprs') else 0,
-                             1 if e.get('aprs_iss') else 0,
-                             1 if e.get('aprs_lasar') else 0,
-                             1 if e.get('pocsag') else 0,
-                             1 if e.get('adsb') else 0,
-                             1 if e.get('auto_sat') else 0,
-                             e.get('sat_mode') or 'meteor',
-                             1 if e.get('ism') else 0,
-                             1 if e.get('gain_auto') else 0, time.time()))
+        with _persist_dongles_lock:
+            with state.status_lock:
+                entries = [dict(e) for e in state.sdrs.values()]
+            with db.write() as cur:
+                cur.execute("DELETE FROM dongles")
+                for e in entries:
+                    if e.get('usb_idx') is not None:
+                        # A USB dongle persists as its rtl_sdr device index,
+                        # not a network address
+                        host, port = 'usb', int(e['usb_idx'])
+                    else:
+                        host, port = e['host'], int(e['port'])
+                    cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
+                                " aprs, aprs_iss, aprs_lasar, pocsag, adsb,"
+                                " auto_sat, sat_mode, ism, gain_auto, added_ts)"
+                                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (host, port,
+                                 1 if e.get('ais') else 0,
+                                 1 if e.get('orbcomm') else 0,
+                                 1 if e.get('aprs') else 0,
+                                 1 if e.get('aprs_iss') else 0,
+                                 1 if e.get('aprs_lasar') else 0,
+                                 1 if e.get('pocsag') else 0,
+                                 1 if e.get('adsb') else 0,
+                                 1 if e.get('auto_sat') else 0,
+                                 e.get('sat_mode') or 'meteor',
+                                 1 if e.get('ism') else 0,
+                                 1 if e.get('gain_auto') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -1135,6 +1137,7 @@ def sdr_capture_thread(did):
     # Recording failures (disk full, permissions) must not take the receiver
     # down: the WAV open is retried at most every WAV_RETRY_SECS
     wav_retry_at = 0.0
+    fft_error_log_at = 0.0
 
     def set_primary_recording(path):
         if primary:
@@ -1473,6 +1476,7 @@ def sdr_capture_thread(did):
                 reader = _IQReader(sock, IQ_BLOCK)
             last_history_append = 0.0
             block_count = 0
+            fft_phase = 0
             record_name = None
 
             while True:
@@ -1550,7 +1554,9 @@ def sdr_capture_thread(did):
                 # FFT_EVERY-th block of the batch (see FFT_EVERY — CPU
                 # budget, not display needs)
                 block_count += CAPTURE_BATCH
-                for k in range(0, len(c) // FFT_SIZE, FFT_EVERY):
+                fft_indices, fft_phase = fft_offsets(
+                    len(c) // FFT_SIZE, FFT_EVERY, fft_phase)
+                for k in fft_indices:
                     try:
                         window = _get_fft_window()
                         windowed = c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window
@@ -1616,8 +1622,13 @@ def sdr_capture_thread(did):
                             mm = entry.get('manual_meta')
                             if mm is not None:
                                 mm['wf'].append(db_row)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        error_ts = time.monotonic()
+                        if error_ts - fft_error_log_at >= 10:
+                            fft_error_log_at = error_ts
+                            state.log_console(
+                                f"Waterfall FFT failed (dongle {did}): {e}",
+                                "warn")
 
                 # Retune when this dongle's target frequency changes (idle
                 # park -> pass band, e.g. 137 MHz -> 437 MHz ISS; a manual

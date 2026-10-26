@@ -33,6 +33,35 @@ from noaa_receiver import state
 from noaa_receiver.config import AIS_CENTER_HZ, METEOR_LRPT_HZ, SDR_OFFSET_HZ, SDR_RATE, WATERFALL_ROWS
 from noaa_receiver.calibration import tuning_correction
 
+_phase = 0
+_frame_offset = 0
+_sampled_frames = []
+for _ in range(5):
+    _indices, _phase = radio.fft_offsets(64, 20, _phase)
+    _sampled_frames.extend(_frame_offset + _index for _index in _indices)
+    _frame_offset += 64
+assert all(later - earlier == 20
+           for earlier, later in zip(_sampled_frames, _sampled_frames[1:])), _sampled_frames
+assert len(_sampled_frames) == 16, _sampled_frames
+print("waterfall FFT cadence across batches: ok")
+
+class ChunkedSource:
+    def __init__(self, data, chunk_size):
+        self.data = data
+        self.chunk_size = chunk_size
+
+    def recv(self, size):
+        size = min(size, self.chunk_size, len(self.data))
+        data, self.data = self.data[:size], self.data[size:]
+        return data
+
+_source_data = bytes(range(64))
+_reader = radio._IQReader(ChunkedSource(_source_data, 7), block=4, chunk=16)
+assert _reader.read_block() == _source_data[:4]
+assert _reader.read_batch(3) == _source_data[4:16]
+assert _reader.read_block() == _source_data[16:20]
+print("waterfall IQ reader short-chunk buffering: ok")
+
 tmp = tempfile.mkdtemp(prefix='prawn_')
 radio.LOGDIR = os.path.join(tmp, 'log'); radio.RECORD_LOCAL_DIR = os.path.join(tmp, 'rec')
 from noaa_receiver import db   # dongle persistence lives in the station database

@@ -1084,7 +1084,7 @@ def adsb_capture_thread(did):
     from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
-                             CAPTURE_BATCH, FFT_EVERY,
+                             CAPTURE_BATCH, FFT_EVERY, fft_offsets,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
 
     entry = state.sdrs[did]
@@ -1152,6 +1152,7 @@ def adsb_capture_thread(did):
             sig_bins = max(1, round(39375 / (SDR_RATE / FFT_SIZE)))
             rate_ts = time.time()          # stream-rate watchdog (see
             rate_bytes = 0                 # _rate_check): a wrong-rate
+            fft_phase = 0
             while True:                     # stream cannot decode
                 if entry.get("closed") or not entry.get("adsb"):
                     break
@@ -1190,7 +1191,9 @@ def adsb_capture_thread(did):
                 # 2.4 Msps) — the previous every-4th-block (~1171 rows/s)
                 # burned ~7% of a core on FFTs 40x faster than any client
                 # displays, all of it GIL-holding small-op work
-                for k in range(0, len(c) // FFT_SIZE, FFT_EVERY):
+                fft_indices, fft_phase = fft_offsets(
+                    len(c) // FFT_SIZE, FFT_EVERY, fft_phase)
+                for k in fft_indices:
                     try:
                         push_wf_row(entry, c, k, sig_bins)
                     except Exception:
