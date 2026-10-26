@@ -2413,3 +2413,27 @@ rtl_tcp = 76.8 Mbit/s saturates WiFi; rtl_tcp's default buffer slack
 (-n 500 = ~1.7 s) absorbs nothing longer, so the waterfall freezes for
 the stall duration and catches up after. Fix: wire the dongle host
 (documented zero-gap fix), or 5 GHz/AP work, or lower sample rates.
+
+## 2026-10-26 ~18:40 UTC — 📶 Correction + refined diagnosis: the :1234 hangs are RF noise bursts, not the WiFi link
+
+Operator correction: the SECOND waterfall (:1235, same dongle host) does
+NOT hang when left alone — but when tuned to the same ~139 MHz it shows
+the SAME artifact, and no dongle shows it tuned high (e.g. 400 MHz).
+So the earlier "WiFi starvation" entry above is wrong about the cause
+(the link is shared; a starving link would hit both streams equally).
+
+Measured with :1234 parked at 139 MHz for 90 s: broadband impulsive
+bursts — 393 of 512 bins (the whole 2.4 MHz span) rise ~8 dB over the
+per-bin median in clusters lasting ~50-100 ms, every ~1-2.5 s. That is
+external/RF-level interference reaching both dongles' antennas/front-
+ends in the VHF range, painted as periodic bright "lines" (each burst
+row is peak-normalized, so the burst crushes the rest of that row too).
+Not the decoder, not the waterfall code, not the rtl_tcp path.
+
+Candidate sources to eliminate one by one (power each off, watch the
+waterfall): the powerline-ethernet adapter tried today (notorious
+broadband polluter — unplug if still in place), LED drivers / phone
+chargers / switching PSUs near the antennas, and 2.4 GHz WiFi TX
+harmonics (2400/17 = 141.2 MHz — the Pi's own wifi is a suspect;
+its bursts land right in the 137-142 MHz window). At 400 MHz the
+R820T front-end coupling/antenna response hides the source.
