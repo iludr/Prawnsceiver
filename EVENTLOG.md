@@ -2393,3 +2393,23 @@ defaults (implicit -b 15 -n 500), spawn_opts back to `-f 137680000
 -s 2400000` / `-P -3`. rtl_tcp restarted on the republish — the receiver
 reconnected via its normal backoff (~1 min), both streams clean
 afterwards (no new rate-flake warnings after the restart window).
+
+## 2026-10-26 ~18:05 UTC — 📶 :1234 waterfall hangs diagnosed: the dongle host's WiFi link, not the code
+
+Operator report: periodic (~2.5 s) hangs in the :1234 waterfall. Measured
+the /waterfall.ws row feed directly (25 s + 60 s probes, rate=100/60):
+backend row production is smooth (median gap 11 ms, p99 35 ms) EXCEPT
+real stalls — one 13 s gap in 60 s, with the capture thread logging
+`SDR thread error (dongle ...:1234): timed out` at 17:56:04 and
+reconnecting 5 s later. The frontend/new waterfall code is not involved.
+Journal, last 24 h: 99 `timed out` + 123 `No route to host` errors on
+:1234; 7 days: 1662 + 5367 — chronic. A 4.5-minute total outage
+(No-route every ~18 s) hit 17:29-17:33 UTC. The ADS-B dongle :1235 on
+the SAME host shows the milder form (rate-flake warnings 1.6-3.2 vs
+2.4 Msps every few minutes). Ping to 192.168.3.245: 0% loss but
+avg RTT 6.7 ms, jitter ±5 ms — WiFi-grade (wired was 0.7 ms on
+2026-10-11). Same failure mode as the 2026-10-11 entry: 2x2.4 Msps
+rtl_tcp = 76.8 Mbit/s saturates WiFi; rtl_tcp's default buffer slack
+(-n 500 = ~1.7 s) absorbs nothing longer, so the waterfall freezes for
+the stall duration and catches up after. Fix: wire the dongle host
+(documented zero-gap fix), or 5 GHz/AP work, or lower sample rates.
