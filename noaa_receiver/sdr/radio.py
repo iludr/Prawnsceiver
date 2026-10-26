@@ -53,6 +53,12 @@ from .dsp import (am_demodulate, doppler_shift, fm_demodulate, frequency_shift,
 # oversampled. At full block rate the FFT + row conversion (~1 ms/block on the
 # Pi) starved the demod once two dongles were attached.
 FFT_EVERY = max(8, round(0.00427 * SDR_RATE / (IQ_BLOCK // 2)))  # ~4 ms of RF between FFTs at any SDR_RATE (8 blocks at 960 kHz)
+
+def fft_offsets(frame_count, stride, phase):
+    """Return stride-spaced frame offsets and the phase for the next batch."""
+    first = (-phase) % stride
+    return range(first, frame_count, stride), (phase + frame_count) % stride
+
 # Blocks of IQ processed per capture-loop iteration (both capture
 # threads). Per-block processing at 2.4 Msps meant ~25 numpy calls
 # 4700 times a second per dongle; two dongles saturated the GIL
@@ -1473,6 +1479,7 @@ def sdr_capture_thread(did):
                 reader = _IQReader(sock, IQ_BLOCK)
             last_history_append = 0.0
             block_count = 0
+            fft_phase = 0
             record_name = None
 
             while True:
@@ -1550,7 +1557,9 @@ def sdr_capture_thread(did):
                 # FFT_EVERY-th block of the batch (see FFT_EVERY — CPU
                 # budget, not display needs)
                 block_count += CAPTURE_BATCH
-                for k in range(0, len(c) // FFT_SIZE, FFT_EVERY):
+                fft_indices, fft_phase = fft_offsets(
+                    len(c) // FFT_SIZE, FFT_EVERY, fft_phase)
+                for k in fft_indices:
                     try:
                         window = _get_fft_window()
                         windowed = c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window

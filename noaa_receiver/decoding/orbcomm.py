@@ -651,7 +651,7 @@ def orbcomm_capture_thread(did):
     from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
-                             CAPTURE_BATCH, IQ_BLOCK,
+                             CAPTURE_BATCH, IQ_BLOCK, fft_offsets,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
 
     entry = state.sdrs[did]
@@ -687,6 +687,7 @@ def orbcomm_capture_thread(did):
             tune = ORBCOMM_CENTER_HZ + SDR_OFFSET_HZ + correction
             entry["correction"], entry["correction_src"] = correction_info(ORBCOMM_CENTER_HZ, did)
             gain_db = dongle_gain_db(did)
+            wf_phase = 0
             if entry.get("usb_idx") is not None:
                 proc = _spawn_rtl_sdr(entry, tune, gain_db)
                 if proc is None:
@@ -723,7 +724,9 @@ def orbcomm_capture_thread(did):
                 # Waterfall + signal for the dongle card, plus the band
                 # energy scan riding on the same FFTs (push_wf_row hands
                 # back the rolled pre-normalization magnitude)
-                for k in range(0, len(c) // FFT_SIZE, ORBCOMM_WF_BLOCKS):
+                wf_indices, wf_phase = fft_offsets(
+                    len(c) // FFT_SIZE, ORBCOMM_WF_BLOCKS, wf_phase)
+                for k in wf_indices:
                     try:
                         rolled = push_wf_row(entry, c, k, sig_bins)
                         for freq, _snr in _detect_channels(
