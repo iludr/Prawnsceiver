@@ -2382,3 +2382,14 @@ real-recording end-to-end, registry/log plumbing), test_radio/test_db/
 test_ws/test_manager/test_adsb/test_power/test_waterfall re-run OK;
 img/ISM.png + img/thumbs/ISM.jpg generated placeholders (PIL) for the
 nav menu.
+
+## 2026-10-26 ~16:30 UTC — Reverted the rtl_tcp buffer spawn options (-b/-n) on the dongle host
+
+Operator request: undo yesterday's Prawntenna buffer tuning. Both dongles
+republished via the manager (`/publish?d=<serial>&port=<port>&buffers=&buflen=`
+— an empty value clears the remembered option): satellite v5 :1234 was at
+`-b 30 -n 2000`, ADS-B :1235 at `-b 15 -n 1000`; both now run pure rtl_tcp
+defaults (implicit -b 15 -n 500), spawn_opts back to `-f 137680000
+-s 2400000` / `-P -3`. rtl_tcp restarted on the republish — the receiver
+reconnected via its normal backoff (~1 min), both streams clean
+afterwards (no new rate-flake warnings after the restart window).
