@@ -26,6 +26,9 @@ tr:hover td { background: #16213e; }
 #sensorswrap { margin-bottom: 14px; }
 #sensorswrap h2 { font-size: 1.05em; color: #53d769; margin-bottom: 6px; font-weight: normal; }
 #sensorswrap h2 .cnt { color: #4da6ff; }
+#ismgraph { position: fixed; background: #16213e; border: 1px solid #0f3460; padding: 6px; z-index: 20; pointer-events: none; }
+#ismgraph-title { color: #4da6ff; margin-bottom: 4px; }
+.hint { color: #666; font-size: 0.85em; font-weight: normal; }
 </style>
 </head>
 <body>
@@ -41,7 +44,7 @@ tr:hover td { background: #16213e; }
 </div>
 <div id="stats">Loading...</div>
 <div id="sensorswrap">
-    <h2>🌡 Known sensors — <span class="cnt" id="senscount">&hellip;</span></h2>
+    <h2>🌡 Known sensors — <span class="cnt" id="senscount">&hellip;</span> &nbsp;<span class="hint">hover a value for its 24 h history</span></h2>
     <table>
     <thead><tr>
         <th>protocol</th><th>id</th><th>channel</th><th>temperature</th>
@@ -50,13 +53,10 @@ tr:hover td { background: #16213e; }
     <tbody id="sensorrows"><tr><td colspan="8" class="muted">Loading sensors...</td></tr></tbody>
     </table>
 </div>
-<table>
-<thead><tr>
-    <th>time</th><th>freq</th><th>protocol</th><th>id</th><th>channel</th>
-    <th>temperature</th><th>humidity</th><th>battery</th><th>raw frame</th>
-</tr></thead>
-<tbody id="rows"><tr><td colspan="9" class="muted">Loading packets...</td></tr></tbody>
-</table>
+<div id="ismgraph" hidden>
+    <div id="ismgraph-title"></div>
+    <canvas id="ismgraph-cv" width="280" height="90"></canvas>
+</div>
 <script src="/ism.js"></script>
 <script src="/nav.js"></script>
 </body>

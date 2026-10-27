@@ -589,6 +589,15 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 count = 200
             self._send_json(ism.ism_log(count), code=200)
+        elif self.path.startswith('/ism_history.json'):
+            # Per-sensor time series for the ISM page hover graphs
+            query = self._query()
+            sid = (query.get('id') or [''])[0]
+            try:
+                hours = min(float((query.get('hours') or ['24'])[0]), 72.0)
+            except ValueError:
+                hours = 24.0
+            self._send_json(ism.ism_sensor_history(sid, hours), code=200)
         elif self.path.startswith('/adsblog.json'):
             # Newest-first tail of the persistent decoded-frame log
             query = self._query()

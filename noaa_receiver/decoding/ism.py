@@ -368,6 +368,25 @@ def ism_status():
     }
 
 
+def ism_sensor_history(sensor_id, hours=24):
+    """Time series for one sensor id over the last `hours` hours, from the
+    persistent message log: [{ts, temp_c, humidity, battery}, ...]."""
+    since = time.time() - hours * 3600
+    out = []
+    for r in db.query("SELECT ts, entry FROM ism_messages"
+                      " WHERE ts > ? ORDER BY ts", (since,)):
+        try:
+            p = json.loads(r["entry"])
+        except ValueError:
+            continue
+        if p.get("id") != sensor_id:
+            continue
+        out.append({"ts": r["ts"], "temp_c": p.get("temp_c"),
+                    "humidity": p.get("humidity"),
+                    "battery": p.get("battery")})
+    return out
+
+
 def ism_log(count=200):
     """Newest-first tail of the persistent decoded-packet log."""
     try:
