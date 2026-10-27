@@ -22,6 +22,7 @@
         ['/adsb',    '✈️',  'ADS-B Aircraft Tracking',   'img/thumbs/ADSB.jpg',    'img/ADSB.png'],
         ['/pocsag',  '📟',  'POCSAG Paging',            'img/thumbs/POCSAG.jpg',  'img/POCSAG.png'],
         ['/ism',     '🌡',  '433 MHz ISM Sensors',      'img/thumbs/ISM.jpg',     'img/ISM.png'],
+        ['/dab',     '📻',  'DAB+ Radio'],
         ['/tuner',   '🦀',  'Prawntuner'],
         ['/console', '🛠️', 'Debug Console',             'img/thumbs/debug.jpg',   'img/debug.png']
     ];

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NOAAh's CrabArk — DAB+ Radio</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: monospace; font-size: 16px; background: #1a1a2e; color: #e0e0e0; padding: 0 15px 12px; }
+#header { margin: 0 -15px 12px; }
+#stats { color: #4da6ff; font-size: 0.9em; margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-bottom: 20px; }
+th { text-align: left; color: #888; border-bottom: 1px solid #0f3460; padding: 4px 6px; position: sticky; top: 0; background: #1a1a2e; }
+td { padding: 3px 6px; border-bottom: 1px solid #16213e; white-space: nowrap; }
+td.txt { white-space: normal; word-break: break-all; }
+tr:hover td { background: #16213e; }
+tr.active td { background: #16213e; }
+.t { color: #666; }
+.muted { color: #666; padding: 10px; }
+#nowplaying { margin-bottom: 14px; padding: 12px; background: #16213e; border: 1px solid #0f3460; border-radius: 6px; display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+#nowplaying img#slide { max-width: 240px; max-height: 180px; border-radius: 4px; border: 1px solid #0f3460; display: none; }
+#nowplaying .npinfo { flex: 1; min-width: 240px; }
+#nowplaying .npname { font-size: 1.3em; color: #53d769; font-weight: bold; margin-bottom: 4px; }
+#nowplaying .npens { color: #4da6ff; font-size: 0.85em; margin-bottom: 8px; }
+#nowplaying .npdls { color: #a8b8d8; font-size: 0.9em; font-style: italic; min-height: 1.2em; }
+#nowplaying audio { width: 100%; margin-top: 10px; }
+#npbtns { margin-top: 10px; display: flex; gap: 8px; }
+#npbtns button { background: #0f3460; color: #4da6ff; border: 1px solid #4da6ff; border-radius: 4px; padding: 6px 14px; cursor: pointer; font-family: monospace; }
+#npbtns button:hover { background: #16294e; }
+#stationwrap { margin-bottom: 14px; }
+#stationwrap h2 { font-size: 1.05em; color: #53d769; margin-bottom: 6px; font-weight: normal; }
+</style>
+</head>
+<body>
+<div id="header">
+    <div class="head-left">
+        <img class="logo" src="/prawnceiver.jpg" alt="Prawnsceiver">
+        <div>
+            <h1>📻 DAB+ Radio</h1>
+            <div class="info">Band III broadcast radio · DAB/DAB+ decoded by welle-cli (welle.io)</div>
+        </div>
+    </div>
+    <div class="head-right"><a href="/dab.json">live status (JSON)</a></div>
+</div>
+<div id="stats">Loading...</div>
+<div id="nowplaying">
+    <img id="slide" alt="Station slideshow">
+    <div class="npinfo">
+        <div class="npname" id="npname">—</div>
+        <div class="npens" id="npens"></div>
+        <div class="npdls" id="npdls"></div>
+        <audio id="player" controls></audio>
+        <div id="npbtns">
+            <button id="prevbtn">⏮ Prev</button>
+            <button id="nextbtn">⏭ Next</button>
+        </div>
+    </div>
+</div>
+<div id="stationwrap">
+    <h2>📻 Stations on <span id="ensname">…</span> — <span class="cnt" id="servcount">…</span> <span class="hint">click a row to listen</span></h2>
+    <table>
+    <thead><tr>
+        <th>station</th><th>short</th><th>DLS / programme text</th><th>slideshow</th>
+    </tr></thead>
+    <tbody id="servrows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+    </table>
+</div>
+<script src="/dab.js"></script>
+<script src="/nav.js"></script>
+</body>
+</html>

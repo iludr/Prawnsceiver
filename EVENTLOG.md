@@ -2437,3 +2437,84 @@ chargers / switching PSUs near the antennas, and 2.4 GHz WiFi TX
 harmonics (2400/17 = 141.2 MHz — the Pi's own wifi is a suspect;
 its bursts land right in the 137-142 MHz window). At 400 MHz the
 R820T front-end coupling/antenna response hides the source.
+
+## 2026-10-26 ~20:00 UTC — 🏭 141 MHz line forest identified: SMPS/inverter harmonic comb
+
+Deep analysis of the manual recording `Manual_141.2286MHz_20261026_190055`:
+~21 continuous narrowband carriers on an exact 61.07 kHz comb spanning the
+whole 2.4 MHz capture, each ~5 kHz wide, individually FM-modulated with
+stable tones (~3.9 kHz sidebands, control-loop limit cycle). Rock-stable
+frequencies (<20 Hz over 11 s), no Doppler -> terrestrial, not a satellite.
+Comb anchored at ~141.31 MHz + n*61.07 kHz; NOT a WiFi TX harmonic (WiFi
+subcarriers sit on a 312.5 kHz grid; comb is not aligned to it). Verdict:
+switching-power-supply/inverter common-mode radiation (solar inverter, UPS,
+LED driver or the dongle host's own 5V buck) coupling into the antenna
+feedline, NOT a real transmitter. Disappears toward 400 MHz because the
+harmonic jitter smears the comb. Fix: ferrites on the feedline, separate the
+RTL dongle power feed from the polluter, or move the antenna.
+
+### 2026-10-27 ~22:50 CEST — 📻 DAB+ reception verified (welle.io 2.4 on the dongle host)
+
+- Installed welle.io 2.4 (welle-cli) on prawntenna2 host (192.168.3.245)
+  and on the prawnceiver VM — both from Debian/Ubuntu repos, no build.
+- Live test on the R820T dongle host (127.0.0.1:34803, AIS role dongle,
+  paused in prawnceiver for the test, unpaused after):
+  channel 5C (178.352 MHz) locked at SNR 16 dB, full FIC decode,
+  ensemble "DR Deutschland" (0x10BC), 15 services incl. Dlf, Dlf Kultur,
+  Dlf Nova, ENERGY, Schwarzwaldradio, radio horeb, ERF Plus.
+  100 s audio dump to /tmp/Dlf.msc grew to 1.1 MB — full DAB+ (AAC) decode
+  chain confirmed end-to-end through rtl_tcp.
+- Second dongle (v5, 127.0.0.1:34727, 137.68 MHz) NOT tested for DAB
+  (satellite role active). 5C reception requires a VHF-capable antenna
+  gain setting; 29.7 dB fixed gain worked (auto gain also fine).
+- Conclusion: a DAB+ role on the AIS dongle is feasible; welle-cli -c 5C
+  -d -F rtl_tcp,<dongle-host>:34803 -g -1 is the reference command.
+- welle-cli gotcha: it needs a valid client connection slot on the
+  dongle host's rtl_tcp — use the /pause_dongle API to free the slot
+  before testing, unpause afterwards.
+
+### 2026-10-27 ~23:05 CEST — 📻 DAB+ role wired into the dashboard (untested live)
+
+- Backend: /dab.json (ensemble + services + DLS + MOT status),
+  /dab_dongle?d=<id>&on=1|0 (the role toggle, like /ism_dongle),
+  /dab_channel?d=<id>&ch=<block> (persisted retune), /dab_slide?sid=
+  (MOT image proxy), /dab_audio/<sid> (MP3 audio proxy) in
+  web/handler.py; the dab role flag + dab_channel in the dongles table
+  (db.py migration), the dab branch in sdr_thread's role dispatch,
+  decoding/dab.py (welle-cli process manager: spawn/restart with
+  backoff, channel-change detection, mux.json polling into module
+  state, MOT slide cache).
+- Frontend: DAB+ card on the dashboard (role dropdown entry + station
+  name, ensemble, signal, MOT slideshow image, DLS text, prev/next
+  station buttons, click-to-play station list, audio player) —
+  dab.html + dab.js following the ism.html/ism.js pattern; nav.js entry.
+- Live-verified 2026-10-27 ~22:50 (see the entry above): 5C locked at
+  SNR 16 dB through the R820T + prawntenna, 15 services decoded.
+
+## 2026-10-27 ~22:36 — DAB+ feature finished (dab.js, decoding/dab.py, web/html/dab.html)
+
+- `noaa_receiver/decoding/dab.py`: welle-cli web-mode plumbing — `_fetch_json`
+  (127.0.0.1:9090 /mux.json), `dab_capture_thread` (rtl_tcp lifecycle,
+  restart-with-backoff, role/pause handover), `dab_status` snapshot,
+  `set_dab_channel` retune, `dab_slide` MOT cache.
+- `dab.js` (repo root): dashboard page — station table, DLS text,
+  slideshow (`/dab_slide?sid=`), audio player (`/dab_audio/<sid>`),
+  prev/next, WS `dab` topic fallback poll.
+- `noaa_receiver/web/html/dab.html`: page markup + styles.
+- Tests: `tests/test_dab.py` — unit (canned mux.json via monkeypatched
+  `_fetch_json`, channel validation incl. dongle-role gate) and E2E
+  (real welle-cli -w 8801 against the NFS capture
+  `Manual_178.352MHz_20261027_221501.iq.u8`, 77 TFs, null symbol at 38).
+  `ALL DAB+ TESTS PASSED`.
+
+## 2026-10-27 ~22:45 — fix: leaving the DAB+ role in the dashboard did nothing
+
+The role dropdown's change handler only sent the "turn the current role
+off" request for roles in its hardcoded DED list — `dab` (and `ism`) were
+never added. Leaving DAB+ therefore never sent
+`/dab_dongle?d=<id>&on=0`, the backend kept `dab=true`, dongles.json kept
+reporting the role and the dropdown snapped back on the next poll
+(welle-cli kept running). Fix: `dab` + `ism` added to DED in
+`dashboard.js` (one line). Backend `set_dongle_dab`/`_set_dongle_role`
+verified correct. Regression: jsdom smoke `/tmp/prawn-jsdom/smoke-dab.js`
+(4 checks, fails on the pre-fix code).

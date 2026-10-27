@@ -4,6 +4,7 @@ import json
 import os
 import struct
 import time
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
@@ -15,14 +16,14 @@ from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    METEOR_LRPT_HZ, RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE,
                    UTC_OFFSET, WEBDIR)
 
-from ..decoding import adsb, ais, aprs, ism, orbcomm, pocsag
+from ..decoding import adsb, ais, aprs, dab, ism, orbcomm, pocsag
 from ..sdr import scan
 from ..decoding.decode import decode_recording, forget_decode_marker
 from .history import (_load_history, get_recordings, quality_map,
                         recording_path, set_recording_quality)
 from .pages import (ADSB_HTML, AIS_HTML, APRS_HTML, CONSOLE_HTML,
-                    HISTORY_HTML, ISM_HTML, ORBCOMM_HTML, POCSAG_HTML,
-                    TUNER_HTML)
+                    DAB_HTML, HISTORY_HTML, ISM_HTML, ORBCOMM_HTML,
+                    POCSAG_HTML, TUNER_HTML)
 from .thumbs import THUMB_SUFFIX, ensure_thumb
 from ..tracking.passes import HAS_SKYFIELD, load, passes_to_json, wgs84
 from ..tracking.satnogs import satellite_info
@@ -31,8 +32,8 @@ from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_adsb,
                         set_dongle_aprs_iss, set_dongle_aprs_lasar,
                         set_dongle_auto_sat, set_dongle_orbcomm,
                         set_dongle_ism, set_dongle_pocsag, set_dongle_paused,
-                        set_dongle_gain_auto, set_dongle_sat_mode,
-                        usb_dongles)
+                        set_dongle_dab, set_dongle_gain_auto,
+                        set_dongle_sat_mode, usb_dongles)
 
 def _dongle_list():
     """Dongle descriptors for status/dongles.json: primary first, then stable
@@ -62,6 +63,8 @@ def _dongle_list():
                 "pocsag": bool(e.get("pocsag")),
                 "adsb": bool(e.get("adsb")),
                 "ism": bool(e.get("ism")),
+                "dab": bool(e.get("dab")),
+                "dab_channel": e.get("dab_channel") or "5C",
                 "auto_sat": bool(e.get("auto_sat")),
                 "sat_mode": e.get("sat_mode") or "meteor",
                 "gain_auto": bool(e.get("gain_auto")),
@@ -256,6 +259,7 @@ _WS_TOPICS = {
     'pocsag':       (5.0,  lambda p: pocsag.pocsag_status()),
     'pocsaglog':    (10.0, lambda p: pocsag.pocsag_log(_aislog_count(p))),
     'ism':          (5.0,  lambda p: ism.ism_status()),
+    'dab':          (5.0,  lambda p: dab.dab_status()),
     'ismlog':       (10.0, lambda p: ism.ism_log(_aislog_count(p))),
     'adsb':         (5.0,  lambda p: adsb.adsb_status()),
     'adsblog':      (10.0, lambda p: adsb.adsb_log(_aislog_count(p))),
@@ -554,6 +558,57 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/ism.json':
             # ISM: decoded 433 MHz sensor registry + recent packets
             self._send_json(ism.ism_status(), code=200)
+        elif self.path == '/dab.json':
+            # DAB+: ensemble + services + DLS + MOT flags of the dongle
+            # in the DAB+ role (welle-cli status, see decoding/dab.py)
+            self._send_json(dab.dab_status(), code=200)
+        elif self.path.startswith('/dab_slide'):
+            # MOT slideshow image of one DAB+ service (?sid=<hex sid>),
+            # proxied from welle-cli's own web server
+            query = self._query()
+            sid = (query.get('sid') or [''])[0]
+            img = dab.dab_slide(sid)
+            if img is None:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b'no slide')
+                return
+            data, ctype = img
+            self.send_response(200)
+            self.send_header('Content-type', ctype)
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            self.wfile.write(data)
+        elif self.path.startswith('/dab_audio/'):
+            # Live MP3 audio of one DAB+ service (welle-cli's /mp3/<sid>
+            # re-encode), proxied for same-origin playback
+            from urllib.parse import unquote
+            sid = unquote(self.path[len('/dab_audio/'):]).split('?', 1)[0]
+            try:
+                upstream = urllib.request.urlopen(
+                    f'http://127.0.0.1:{dab.DAB_WEB_PORT}/mp3/{sid}',
+                    timeout=5)
+            except Exception:
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b'no dab audio')
+                return
+            self.send_response(200)
+            self.send_header('Content-type',
+                             upstream.headers.get('Content-type',
+                                                  'audio/mpeg'))
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            try:
+                while True:
+                    chunk = upstream.read(8192)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, OSError):
+                pass
+            finally:
+                upstream.close()
         elif self.path == '/adsb.json':
             # ADS-B: live aircraft table + receiver stats + raw frames
             self._send_json(adsb.adsb_status(), code=200)
@@ -665,6 +720,13 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
             self.wfile.write(ISM_HTML.encode())
+        elif self.path == '/dab' or self.path == '/dab.html':
+            # DAB+ page: ensemble + programme info + MOT slideshow of the
+            # dongle in the DAB+ role
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html; charset=utf-8')
+            self.end_headers()
+            self.wfile.write(DAB_HTML.encode())
         elif self.path == '/tuner' or self.path == '/tuner.html':
             self.send_response(200)
             self.send_header('Content-type', 'text/html; charset=utf-8')
@@ -1244,6 +1306,26 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             dev = (query.get('d') or [''])[0]
             on = (query.get('on') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
             ok = set_dongle_ism(dev, on)
+            self._send_json({'success': ok}, code=200 if ok else 404)
+        elif self.path.split('?')[0] == '/dab_dongle':
+            # Switch one dongle between satellite tracking and the DAB+
+            # broadcast-radio role: /dab_dongle?d=<id>&on=1 dedicates it
+            # to the DAB+ ensemble decoded by welle-cli (decoding/dab.py);
+            # on=0 returns it to the satellites. The capture thread
+            # restarts in the new role.
+            query = self._query()
+            dev = (query.get('d') or [''])[0]
+            on = (query.get('on') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
+            ok = set_dongle_dab(dev, on)
+            self._send_json({'success': ok}, code=200 if ok else 404)
+        elif self.path.startswith('/dab_channel'):
+            # Retune the DAB+ receiver to another ensemble channel:
+            # /dab_channel?d=<id>&ch=7A — persisted with the role; the
+            # capture thread restarts welle-cli with the new -c.
+            query = self._query()
+            dev = (query.get('d') or [''])[0]
+            ch = (query.get('ch') or [''])[0]
+            ok = dab.set_dab_channel(dev, ch)
             self._send_json({'success': ok}, code=200 if ok else 404)
         elif self.path.split('?')[0] == '/fit_bw':
             # Fit the recorded (demod) bandwidth of one dongle to the signal

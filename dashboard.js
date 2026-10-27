@@ -1436,6 +1436,7 @@
         function curDongleMHz(serial) {
             const c = dongleCards[serial];
             if (!c || !c.lastD) return null;
+            if (c.lastD.ism) return 433.92;   // ISM dongle is parked on 433.92 MHz
             if (c.lastD.ais) return 162.0;   // AIS dongle never follows the shared tune
             if (c.lastD.orbcomm) return 137.5;   // Orbcomm dongle is parked on the band center
             if (c.lastD.aprs) return c.lastD.aprs_lasar ? 436.925 : (c.lastD.aprs_iss ? 145.825 : 144.8);     // APRS dongle is parked on the APRS channel (LASAR/ISS checkboxes: 436.925/145.825)
@@ -1461,6 +1462,7 @@
             if (d.pocsag) return 'pocsag';
             if (d.adsb) return 'adsb';
             if (d.ism) return 'ism';
+            if (d.dab) return 'dab';
             if (d.manual_frequency_mhz !== null && d.manual_frequency_mhz !== undefined) return 'manual';
             // the single satellite-tracking mode split into two (2026-10-25):
             // a tracker follows either the Meteor or the ISS track
@@ -1496,7 +1498,7 @@
             // and stays visible while the dongle is auto-joined
             // mid-pass (role flags cleared, auto_sat still set), so it
             // can be switched off again
-            const dedicated = role === 'ais' || role === 'orbcomm' || role === 'aprs' || role === 'pocsag' || role === 'adsb' || role === 'ism';
+            const dedicated = role === 'ais' || role === 'orbcomm' || role === 'aprs' || role === 'pocsag' || role === 'adsb' || role === 'ism' || role === 'dab';
             c.autoSatRow.style.display = (dedicated || d.auto_sat) ? 'flex' : 'none';
             if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
             c.roleLast = role;
@@ -1874,6 +1876,7 @@
                 ['pocsag',  '📟 POCSAG — paging'],
                 ['ism',     '🌡 ISM — 433 MHz sensors'],
                 ['adsb',    '✈️ ADS-B — aircraft'],
+                ['dab',     '📻 DAB+ — broadcast radio'],
             ];
             for (const [rv, rt] of ROLE_OPTS) {
                 const o = document.createElement('option');
@@ -1884,6 +1887,7 @@
                 ais: 'ais_dongle', orbcomm: 'orbcomm_dongle',
                 aprs: 'aprs_dongle', pocsag: 'pocsag_dongle',
                 adsb: 'adsb_dongle', ism: 'ism_dongle',
+                dab: 'dab_dongle',
             };
             const ROLE_TOAST = {
                 sat_meteor: '🛰 Meteor tracking — this dongle follows the Meteor-M LRPT passes (137.9 MHz)',
@@ -1895,6 +1899,7 @@
                 pocsag: '📟 Switching this dongle to POCSAG — paging channels decoded live',
                 ism: '🌡 Switching this dongle to ISM — 433 MHz sensor telemetry decoded live',
                 adsb: '✈️ Switching this dongle to ADS-B — aircraft on 1090 MHz decoded live',
+                dab: '📻 Switching this dongle to DAB+ — broadcast radio decoded live',
             };
             roleSel.addEventListener('change', () => {
                 const want = roleSel.value;
@@ -1902,7 +1907,7 @@
                 const cur = dongleRole(ld);
                 if (want === cur) return;
                 const id = encodeURIComponent(d.id);
-                const DED = ['ais', 'orbcomm', 'aprs', 'pocsag', 'adsb'];
+                const DED = ['ais', 'orbcomm', 'aprs', 'pocsag', 'adsb', 'ism', 'dab'];
                 // The requests, in order: leaving a dedicated role turns
                 // it off; "Manual" parks the dongle at its current
                 // frequency (detaching it from the scheduler);

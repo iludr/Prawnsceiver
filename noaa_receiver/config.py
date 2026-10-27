@@ -123,6 +123,13 @@ RECORD_ISS = True
 # thermo-hygrometers in the band (Nexus/Rubicson family — the 2026-10-23
 # analysis, see tools/iq433/README.md).
 ISM_CENTER_HZ = 433_920_000
+
+# DAB+ broadcast radio (see decoding/dab.py): a dongle in the DAB+ role
+# parks here and decodes the DAB/DAB+ ensemble of the local transmitter
+# with welle-cli (welle.io's command line receiver), streaming the audio
+# and the MOT slideshow to the dashboard.
+DAB_WEB_PORT = 9090
+DAB_CHANNEL_DEFAULT = '5C'
 # Rolling decoded-packet log (ism_messages table), trimmed by ts
 ISM_LOG_KEEP_HOURS = 72
 

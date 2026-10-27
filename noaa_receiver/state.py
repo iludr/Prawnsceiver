@@ -214,6 +214,15 @@ ism_dongle = None
 ism_sensors = {}
 ism_packets = deque(maxlen=100)
 
+# DAB+ broadcast radio (see noaa_receiver/decoding/dab.py): a dongle in
+# the DAB+ role runs welle-cli (welle.io's CLI receiver) in web mode
+# against the dongle's rtl_tcp stream; dab_channel is the tuned DAB
+# block, persisted with the role in the dongles table.
+dab_lock = threading.Lock()
+dab_enabled = False
+dab_dongle = None
+dab_channel = '5C'
+
 # ADS-B aircraft traffic (see noaa_receiver/decoding/adsb.py): a dongle
 # in the ADS-B role tunes to 1090 MHz and decodes Mode S extended
 # squitters. adsb_aircrafts maps ICAO hex -> aircraft dict (callsign,

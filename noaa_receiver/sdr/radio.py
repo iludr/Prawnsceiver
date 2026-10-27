@@ -417,8 +417,9 @@ def _persist_dongles():
                         host, port = e['host'], int(e['port'])
                     cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
                                 " aprs, aprs_iss, aprs_lasar, pocsag, adsb,"
-                                " auto_sat, sat_mode, ism, gain_auto, added_ts)"
-                                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                " auto_sat, sat_mode, ism, dab, dab_channel,"
+                                " gain_auto, added_ts)"
+                                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (host, port,
                                  1 if e.get('ais') else 0,
                                  1 if e.get('orbcomm') else 0,
@@ -430,6 +431,8 @@ def _persist_dongles():
                                  1 if e.get('auto_sat') else 0,
                                  e.get('sat_mode') or 'meteor',
                                  1 if e.get('ism') else 0,
+                                 1 if e.get('dab') else 0,
+                                 e.get('dab_channel') or '5C',
                                  1 if e.get('gain_auto') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
@@ -451,6 +454,7 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         'ais': did == AIS_DONGLE, 'orbcomm': False, 'aprs': False,
         'aprs_iss': False, 'aprs_lasar': False,
         'pocsag': False, 'adsb': False, 'ism': False, 'auto_sat': False,
+        'dab': False, 'dab_channel': '5C',
         'sat_mode': 'meteor',
         'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
@@ -571,6 +575,7 @@ _ROLE_DEFS = {
     'pocsag': ('📟', 'POCSAG paging (466.0 MHz)'),
     'adsb': ('✈️', 'ADS-B (1090 MHz)'),
     'ism': ('🌡', 'ISM sensors (433.92 MHz)'),
+    'dab': ('📻', 'DAB+ broadcast radio (band III)'),
 }
 
 
@@ -666,6 +671,13 @@ def set_dongle_pocsag(did, on):
     return _set_dongle_role(did, 'pocsag', on)
 
 
+def set_dongle_dab(did, on):
+    """Dedicate this dongle to DAB+ broadcast radio (band III — the
+    ensemble decoded by welle-cli, see decoding/dab.py) and back — see
+    _set_dongle_role."""
+    return _set_dongle_role(did, 'dab', on)
+
+
 def set_dongle_ism(did, on):
     """Dedicate this dongle to the 433.92 MHz ISM band (the cheap
     thermo-hygrometer telemetry decoded in place — Nexus/Rubicson
@@ -741,7 +753,7 @@ def set_dongle_aprs_lasar(did, on):
 
 # The dedicated decode role flags (dashboard role dropdown) — one
 # dongle, one role
-_ROLE_FLAGS = ('ais', 'orbcomm', 'aprs', 'pocsag', 'adsb', 'ism')
+_ROLE_FLAGS = ('ais', 'orbcomm', 'aprs', 'pocsag', 'adsb', 'ism', 'dab')
 
 
 def _dongle_role(entry):
@@ -949,19 +961,21 @@ def load_dongles():
                 bool(r['aprs']), bool(r['aprs_iss']), bool(r['aprs_lasar']),
                 bool(r['pocsag']), bool(r['adsb']), bool(r['auto_sat']),
                 r['sat_mode'] or 'meteor', bool(r['ism']),
-                bool(r['gain_auto']))
+                bool(r['gain_auto']), bool(r['dab']),
+                r['dab_channel'] or '5C')
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
                                  " aprs_iss, aprs_lasar, pocsag, adsb,"
-                                 " auto_sat, sat_mode, ism, gain_auto"
+                                 " auto_sat, sat_mode, ism, dab, dab_channel,"
+                                 " gain_auto"
                                  " FROM dongles ORDER BY port, host")]
     from_db = bool(entries)   # persisted rows are the source of truth
     if not entries:
         entries = [(h, p, False, False, False, False, False, False, False,
-                    False, 'meteor', False, False)
+                    False, 'meteor', False, False, False, '5C')
                    for h, p in DEFAULT_DONGLES]
     for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_lasar, \
             was_pocsag, was_adsb, was_auto_sat, was_sat_mode, was_ism, \
-            was_gain_auto in entries:
+            was_gain_auto, was_dab, was_dab_channel in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -988,6 +1002,9 @@ def load_dongles():
                 # the ISM role and the AGC flag are settings too
                 state.sdrs[did]['ism'] = was_ism
                 state.sdrs[did]['gain_auto'] = was_gain_auto
+                # the DAB+ tuned channel is a setting too (the role flag
+                # itself is restored by the was_dab branch below)
+                state.sdrs[did]['dab_channel'] = was_dab_channel
         if was_ais:
             # the AIS switch is persisted too - a restart must not silently
             # put a dongle the operator dedicated to ship traffic back on
@@ -1034,6 +1051,14 @@ def load_dongles():
             # the flag itself was restored with the settings above
             state.log_console(f"Dongle {did} restored to ISM (433.92 MHz sensors)"
                               + " - persisted role")
+        elif was_dab:
+            # and the DAB+ role: the receiver resumes on the persisted
+            # DAB block (see decoding/dab.py) — the flag itself was
+            # restored with the settings above
+            with state.status_lock:
+                state.sdrs[did]['dab'] = True
+            state.log_console(f"Dongle {did} restored to DAB+ (channel "
+                              f"{was_dab_channel}) - persisted role")
     _persist_dongles()
 
 
@@ -1106,6 +1131,10 @@ def sdr_thread():
                     from ..decoding.adsb import adsb_capture_thread
                     t = threading.Thread(target=adsb_capture_thread, args=(did,),
                                          daemon=True, name=f'adsb-{did}')
+                elif entry.get('dab'):
+                    from ..decoding.dab import dab_capture_thread
+                    t = threading.Thread(target=dab_capture_thread, args=(did,),
+                                         daemon=True, name=f'dab-{did}')
                 elif entry.get('ism'):
                     from ..decoding.ism import ism_capture_thread
                     t = threading.Thread(target=ism_capture_thread, args=(did,),

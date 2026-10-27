@@ -217,6 +217,16 @@ def connect():
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN gain_auto INTEGER DEFAULT 0")
                 _conn.commit()
+            if "dab" not in cols:
+                # DAB+ broadcast-radio role (see decoding/dab.py)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN dab INTEGER DEFAULT 0")
+                _conn.commit()
+            if "dab_channel" not in cols:
+                # The DAB block a dongle in the DAB+ role tunes
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN dab_channel TEXT DEFAULT '5C'")
+                _conn.commit()
             # One-time repair: the pre-explicit-column positional
             # INSERTs wrote the orbcomm flag into added_ts and the
             # timestamp into orbcomm (the column arrived by ALTER
