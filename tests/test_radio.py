@@ -456,6 +456,27 @@ wait_for(lambda: entry['last_data'] > 0 and not entry['ais'], what='satellite ca
 expect_cmd(137620000)         # back on the shared idle frequency
 print("9b AIS toggle: role flip both ways, 162 MHz tune, recording flag dropped OK")
 
+# 9b2. DAB+ switch: the satellite thread must hand the dongle over to the
+# DAB+ role. Regression 2026-10-28: 'dab' was missing from the satellite
+# thread's role-handover checks — a ghost satellite thread kept the dongle
+# tuned to the satellite park, the supervisor never started the DAB+
+# capture and the card kept showing the old frequency.
+from noaa_receiver.decoding import dab as _dab
+assert radio.set_dongle_dab(DID, True) is True
+assert db.query_one("SELECT dab FROM dongles")["dab"] == 1, "the DAB+ role must persist"
+wait_for(lambda: not t.is_alive(), secs=5, what='satellite thread exits after the DAB+ switch')
+assert entry['dab'] and not entry['is_recording']
+t = threading.Thread(target=_dab.dab_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: state.dab_enabled and state.dab_dongle == DID, what='DAB thread marks the receiver enabled')
+assert radio.set_dongle_dab(DID, False) is True
+assert db.query_one("SELECT dab FROM dongles")["dab"] == 0
+wait_for(lambda: not t.is_alive(), secs=5, what='DAB thread exits after the switch back')
+assert not state.dab_enabled and state.dab_dongle is None
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+entry['last_data'] = 0   # don't be fooled by the DAB thread's last stamp
+wait_for(lambda: entry['last_data'] > 0 and not entry['dab'], what='satellite capture streaming again')
+print("9b2 DAB+ handover: satellite thread exits on the role switch, DAB capture takes over OK")
+
 # 9c. POCSAG role switch: unknown dongle rejected, the flag flips and
 # persists, switching to AIS clears it (one dedicated role per dongle)
 assert radio.set_dongle_pocsag("nope:1", True) is False

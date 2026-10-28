@@ -1437,6 +1437,7 @@
             const c = dongleCards[serial];
             if (!c || !c.lastD) return null;
             if (c.lastD.ism) return 433.92;   // ISM dongle is parked on 433.92 MHz
+            if (c.lastD.dab) return c.lastD.dab_freq_mhz || 178.352;   // DAB+ dongle is parked on its block's RF frequency
             if (c.lastD.ais) return 162.0;   // AIS dongle never follows the shared tune
             if (c.lastD.orbcomm) return 137.5;   // Orbcomm dongle is parked on the band center
             if (c.lastD.aprs) return c.lastD.aprs_lasar ? 436.925 : (c.lastD.aprs_iss ? 145.825 : 144.8);     // APRS dongle is parked on the APRS channel (LASAR/ISS checkboxes: 436.925/145.825)
@@ -1502,7 +1503,7 @@
             c.autoSatRow.style.display = (dedicated || d.auto_sat) ? 'flex' : 'none';
             if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
             c.roleLast = role;
-            if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag' || role === 'adsb' || role === 'ism') && liveAudioOn === d.id) toggleLiveAudio(d.id);
+            if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag' || role === 'adsb' || role === 'ism' || role === 'dab') && liveAudioOn === d.id) toggleLiveAudio(d.id);
         }
 
         function ensureDongleCard(d) {
@@ -2215,6 +2216,7 @@
             else if (d.aprs) { fTxt = '📡 APRS ' + (d.aprs_lasar ? '436.925 MHz (LASARsat)' : (d.aprs_iss ? '145.825 MHz (ISS)' : '144.800 MHz')); fCol = '#53d769'; }
             else if (d.pocsag) { fTxt = '📟 POCSAG 466.0 MHz (±1.2 MHz)'; fCol = '#f39c12'; }
             else if (d.adsb) { fTxt = '✈️ ADS-B 1090.0 MHz'; fCol = '#4da6ff'; }
+            else if (d.dab) { fTxt = '📻 DAB+ ' + (d.dab_channel || '5C') + ' ' + ((d.dab_freq_mhz || 178.352)).toFixed(3) + ' MHz'; fCol = '#4da6ff'; }
             else if (eff !== null) {
                 fTxt = eff.toFixed(4) + ' MHz' + (d.manual_frequency_mhz ? ' (manual)' : '');
                 fCol = d.manual_frequency_mhz ? '#f39c12' : '#53d769';

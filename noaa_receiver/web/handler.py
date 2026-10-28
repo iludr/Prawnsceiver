@@ -12,6 +12,7 @@ from .. import db
 from .. import power
 from .. import state
 from .. import tuner
+from ..decoding.dab import DAB_CHANNELS
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    METEOR_LRPT_HZ, RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE,
                    UTC_OFFSET, WEBDIR)
@@ -65,6 +66,10 @@ def _dongle_list():
                 "ism": bool(e.get("ism")),
                 "dab": bool(e.get("dab")),
                 "dab_channel": e.get("dab_channel") or "5C",
+                # the DAB block's RF frequency (dongle-card frequency line;
+                # None outside the DAB role)
+                "dab_freq_mhz": (round(DAB_CHANNELS[e.get("dab_channel") or "5C"] / 1e6, 4)
+                                 if e.get("dab") else None),
                 "auto_sat": bool(e.get("auto_sat")),
                 "sat_mode": e.get("sat_mode") or "meteor",
                 "gain_auto": bool(e.get("gain_auto")),
