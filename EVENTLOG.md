@@ -2518,3 +2518,13 @@ reporting the role and the dropdown snapped back on the next poll
 `dashboard.js` (one line). Backend `set_dongle_dab`/`_set_dongle_role`
 verified correct. Regression: jsdom smoke `/tmp/prawn-jsdom/smoke-dab.js`
 (4 checks, fails on the pre-fix code).
+
+## 2026-10-29 — raw IQ of successfully decoded passes is now deleted automatically
+
+`decode._satdump_decode` already removed the `.iq.u8` when SatDump produced
+a composite image, but kept it on "products, no image" successes — 69 such
+files (~158 GB) had piled up on the NFS share and were deleted manually.
+Now every successful decode deletes the raw IQ via the new
+`decode._delete_raw_iq_after_success` (both success branches call it);
+failed decodes still keep the IQ for retries, and ISS raw IQ is never
+deleted (`_keep_raw_iq`). Regression: `tests/test_waterfall.py` section 6c.

@@ -58,6 +58,30 @@ def _keep_raw_iq(wav_path):
     return sat is not None and sat.startswith('ISS')
 
 
+def _delete_raw_iq_after_success(wav_path, iq_path):
+    """Delete the raw IQ sibling of a recording whose decode SUCCEEDED.
+    The u8 baseband is 4x the WAV (a full 2.4 Msps pass is ~3.5 GB) with
+    no further use once the products are on disk — the composite, the
+    product images and the WAV carry the outcome (operator request
+    2026-10-17; extended 2026-10-29 to successes without a composite
+    image, "products only"). Deleted on SUCCESS only: a dark transmitter
+    keeps its IQ so the decode can be retried by hand. ISS IQ is NEVER
+    deleted — see _keep_raw_iq."""
+    if not os.path.exists(iq_path):
+        return
+    if _keep_raw_iq(wav_path):
+        state.log_console(f"🛰 Raw IQ kept (ISS pass, decode fallback): "
+                          f"{os.path.basename(iq_path)}")
+        return
+    try:
+        iq_mb = os.path.getsize(iq_path) / (1024 * 1024)
+        os.remove(iq_path)
+        state.log_console(f"🧹 Raw IQ deleted after successful decode: "
+                          f"{os.path.basename(iq_path)} ({iq_mb:.0f} MB) — images kept")
+    except OSError:
+        pass
+
+
 def _pass_waterfall(wav_path):
     """Best-effort pass waterfall (analysis.waterfall.pass_waterfall) for
     a recording whose decode produced no image — a waterfall diagram for
@@ -586,29 +610,13 @@ def _satdump_decode(pipeline, iq_path, out_dir, label, shift_hz=None,
         shutil.copyfile(image, iq_path[:-len('.iq.u8')] + '.png')
         state.log_console(f"🛰 SatDump decode done ({label}): {len(products)} product file(s), composite {os.path.basename(image)}")
         _write_decode_marker(wav_path, True, f"SatDump: {len(products)} products, composite {os.path.basename(image)}")
-        # The raw IQ did its job: the decode succeeded, and the u8 baseband
-        # is 4x the WAV (a full 2.4 Msps pass is ~3.5 GB) with no further
-        # use — the composite, the product images and the WAV carry the
-        # outcome (operator request 2026-10-17). Deleted on SUCCESS only:
-        # a recording whose transmitter stayed dark keeps its IQ so the
-        # decode can be retried by hand. ISS IQ is NEVER deleted — the
-        # SSTV decode runs on the WAV audio and the baseband is the
-        # fallback for decode issues (operator request 2026-10-23, see
-        # _keep_raw_iq).
-        if _keep_raw_iq(wav_path):
-            state.log_console(f"🛰 Raw IQ kept (ISS pass, decode fallback): "
-                              f"{os.path.basename(iq_path)}")
-        else:
-            try:
-                iq_mb = os.path.getsize(iq_path) / (1024 * 1024)
-                os.remove(iq_path)
-                state.log_console(f"🧹 Raw IQ deleted after successful decode: "
-                                  f"{os.path.basename(iq_path)} ({iq_mb:.0f} MB) — images kept")
-            except OSError:
-                pass
+        # The raw IQ did its job — see _delete_raw_iq_after_success.
+        _delete_raw_iq_after_success(wav_path, iq_path)
     elif products:
         state.log_console(f"🛰 SatDump decode done ({label}): {len(products)} product file(s) in {os.path.basename(out_dir)}/ (no image)")
         _write_decode_marker(wav_path, True, f"SatDump: {len(products)} product file(s) (no image)")
+        # A success without a composite image still consumed the raw IQ.
+        _delete_raw_iq_after_success(wav_path, iq_path)
     else:
         state.log_console(f"SatDump produced no products ({label}) - signal too weak or transmitter off", "warn")
         _write_decode_marker(wav_path, False, "SatDump produced no products - signal too weak or transmitter off")

@@ -213,5 +213,24 @@ try:
 finally:
     history.RECORD_DIR, history.RECORD_LOCAL_DIR = saved_dir, saved_local
 
+print("6c. raw IQ is deleted after EVERY successful decode (2026-10-29)")
+from noaa_receiver.decoding.decode import _delete_raw_iq_after_success  # noqa: E402
+d = tempfile.mkdtemp()
+# Meteor pass, decode succeeded -> IQ deleted
+wav = os.path.join(d, 'Meteor-M_2-3_20261029_110408.wav')
+iq = wav[:-len('.wav')] + '.iq.u8'
+open(iq, 'wb').write(b'\0' * 4096)
+_delete_raw_iq_after_success(wav, iq)
+check("Meteor IQ deleted on success", not os.path.exists(iq))
+# ISS pass, decode succeeded -> IQ kept (decode fallback)
+wav = os.path.join(d, 'ISS_(Zarya)_20261029_030116.wav')
+iq = wav[:-len('.wav')] + '.iq.u8'
+open(iq, 'wb').write(b'\0' * 4096)
+_delete_raw_iq_after_success(wav, iq)
+check("ISS IQ kept even on success", os.path.exists(iq))
+# missing IQ is a no-op, not an error
+_delete_raw_iq_after_success(wav, iq + '.gone')
+check("missing IQ tolerated", True)
+
 print("test_waterfall: all OK")
 os._exit(0)
