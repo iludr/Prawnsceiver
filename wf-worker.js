@@ -11,13 +11,15 @@
 //
 // Message API (id = dongle id "host:port"):
 //   {type:'init', id, canvas}   register a block's transferred canvas
-//   {type:'put',  id, buf, h}   putImageData a finished RGBA frame
-//                               (h = 1 for a live row, 300 for a replay)
+//   {type:'row',  id, buf}      live row: scroll 1px down, put the new row
+//   {type:'put',  id, buf, h}   putImageData a finished full frame (replay)
 //   {type:'mark', id, x0, w}    red AIS frame box across the canvas top
 //   {type:'clear', id}          blacken the canvas
 
 const WF_WIDTH = 512, WF_HEIGHT = 300;
 const blocks = {};   // dongle id -> OffscreenCanvasRenderingContext2D
+const slate = new OffscreenCanvas(WF_WIDTH, WF_HEIGHT);      // scroll slate
+const slateCtx = slate.getContext('2d');
 
 onmessage = e => {
     const m = e.data;
@@ -27,7 +29,15 @@ onmessage = e => {
     }
     const ctx = blocks[m.id];
     if (!ctx) return;
-    if (m.type === 'put') {
+    if (m.type === 'row') {
+        // live row: save the canvas on the slate, blit it back shifted
+        // 1px down (never self-referential — see dashboard.js
+        // drawWaterfall), then write the new row into the vacated top
+        slateCtx.drawImage(ctx.canvas, 0, 0);
+        ctx.drawImage(slate, 0, 1);
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(m.buf),
+                                       WF_WIDTH, 1), 0, 0);
+    } else if (m.type === 'put') {
         ctx.putImageData(new ImageData(new Uint8ClampedArray(m.buf),
                                        WF_WIDTH, m.h || WF_HEIGHT), 0, 0);
     } else if (m.type === 'mark') {
