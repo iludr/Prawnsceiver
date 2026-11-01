@@ -566,11 +566,13 @@ def pocsag_capture_thread(did):
     every paging channel in the 2.4 MHz capture."""
     from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
+                             live_audio_demod, new_state,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, IQ_BLOCK, fft_offsets,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
 
     entry = state.sdrs[did]
+    dst = new_state()   # dsp chain state for the live-audio demod
 
     def reception_off():
         others = [d for d, e in state.sdrs.items()
@@ -643,6 +645,13 @@ def pocsag_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
+                # Live audio for the 🔊 Listen button: mode-dispatched demod
+                # of the batch center (the dashboard's demod selector applies
+                # here too) — skipped unless someone is listening
+                audio = live_audio_demod(entry, did, c, PAGING_CENTER_HZ, dst,
+                                         only_if_listeners=True)
+                if audio:
+                    state.push_live_audio(entry, audio)
                 # waterfall + signal for the dongle card
                 # (see push_wf_row)
                 wf_indices, wf_phase = fft_offsets(

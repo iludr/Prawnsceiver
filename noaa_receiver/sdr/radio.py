@@ -90,6 +90,40 @@ def _get_fft_window():
     return _fft_window
 
 
+def live_audio_demod(entry, did, c, freq_now, dst, only_if_listeners=False):
+    """Demodulate one shifted complex batch for live listening — the
+    mode dispatch shared by the satellite capture thread and the
+    dedicated decode roles (the dashboard's per-dongle demod selector,
+    /tune_dongle?mode=). Mode: the manual per-dongle override
+    (state.manual_dongle_mode), else auto = AM on the airband voice
+    segment, FM everywhere else; the demod channel width = the manual
+    per-dongle bandwidth override if set, else the mode default.
+    Returns int16 PCM bytes; b'' on demod failure — and immediately,
+    without demodulating, when only_if_listeners is set and nobody is
+    listening on /audio/ (the dedicated roles demodulate ONLY for live
+    listening, so the CPU is spent only while someone listens; the
+    satellite thread always demodulates — the pass WAV needs it)."""
+    if only_if_listeners and not entry['la'].get('listeners'):
+        return b''
+    with state.status_lock:
+        mode = state.manual_dongle_mode.get(did)
+        bw_hz = state.manual_dongle_bw.get(did)
+    if mode is None:
+        mode = 'am' if AIRBAND[0] <= freq_now <= AIRBAND[1] else 'fm'
+    try:
+        if mode == 'am':
+            return am_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz or 10000, st=dst)
+        if mode in ('usb', 'lsb', 'cw'):
+            return ssb_demodulate(c, DECIMATION, mode,
+                                  iq_cutoff_hz=bw_hz or (4000 if mode == 'cw' else 6000),
+                                  st=dst)
+        if FM_BAND[0] <= freq_now <= FM_BAND[1]:
+            return fm_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz, audio_cutoff_hz=18000, st=dst)
+        # Auto demod width: the narrow 22 kHz satellite default
+        return fm_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz or 22000, st=dst)
+    except Exception:
+        return b''
+
 def push_wf_row(entry, c, k, sig_bins):
     """One dongle-card feed update from FFT block k of complex batch c —
     the waterfall/signal block shared by the decode capture threads
@@ -1797,33 +1831,9 @@ def sdr_capture_thread(did):
                     finalize_manual_rec()
 
                 # Demodulate the batch (every dongle: each feeds its own
-                # live audio ring and its own WAV). Mode dispatch:
-                # - manual per-dongle override (state.manual_dongle_mode),
-                #   else auto: AM on the airband voice segment, FM
-                #   everywhere else (broadcast FM and NFM satellites)
-                # - FM: broadcast tunes deviate ±75 kHz, so the whole ±120
-                #   kHz capture band is demodulated and only the audio is
-                #   low-passed; satellite SSTV keeps the narrow 22 kHz.
-                # - AM/SSB/CW: channel low-pass + demodulator (dsp.py);
-                #   demod channel width = the manual per-dongle override
-                #   (bw_hz) if set, else the mode default.
-                try:
-                    mode = state.manual_dongle_mode.get(did)
-                    if mode is None:
-                        mode = 'am' if AIRBAND[0] <= freq_now <= AIRBAND[1] else 'fm'
-                    if mode == 'am':
-                        audio = am_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz or 10000, st=dst)
-                    elif mode in ('usb', 'lsb', 'cw'):
-                        audio = ssb_demodulate(c, DECIMATION, mode,
-                                               iq_cutoff_hz=bw_hz or (4000 if mode == 'cw' else 6000),
-                                               st=dst)
-                    elif FM_BAND[0] <= freq_now <= FM_BAND[1]:
-                        audio = fm_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz, audio_cutoff_hz=18000, st=dst)
-                    else:
-                        # Auto demod width: the narrow 22 kHz satellite default
-                        audio = fm_demodulate(c, DECIMATION, iq_cutoff_hz=bw_hz or 22000, st=dst)
-                except Exception:
-                    audio = b''
+                # live audio ring and its own WAV) — mode dispatch shared
+                # with the dedicated decode roles, see live_audio_demod.
+                audio = live_audio_demod(entry, did, c, freq_now, dst)
                 if audio:
                     state.push_live_audio(entry, audio)
                     if entry['wav'] is not None:

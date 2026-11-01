@@ -1493,9 +1493,13 @@
         }
         function applyDongleRole(c, d) {
             const role = dongleRole(d);
-            // Manual controls (tuning, bandwidth, scan, demod) live in
-            // Manual mode only — the dedicated roles park the dongle on
-            // their band and auto tracking needs no manual input
+            // Manual controls (tuning, bandwidth, scan) live in Manual
+            // mode only — the dedicated roles park the dongle on their
+            // band and auto tracking needs no manual input. Exception:
+            // the demod selector also serves the dedicated roles (live
+            // listening demod — see live_audio_demod), except DAB whose
+            // audio comes from welle-cli's MP3 streams.
+            const dedicated = role === 'ais' || role === 'orbcomm' || role === 'aprs' || role === 'pocsag' || role === 'adsb' || role === 'ism' || role === 'dab';
             const free = role === 'manual' ? '' : 'none';
             c.tuneRow.style.display = free;
             c.nudgeRow.style.display = free;
@@ -1503,17 +1507,19 @@
             c.scanRow.style.display = free;
             c.scanRow2.style.display = free;
             c.secTune.style.display = free;
-            c.modeRow.style.display = free;
-            c.secMode.style.display = free;
+            const demodCtl = (role === 'manual' || (dedicated && role !== 'dab')) ? '' : 'none';
+            c.modeRow.style.display = demodCtl;
+            c.secMode.style.display = demodCtl;
             c.secBw.style.display = free;
             c.secScan.style.display = free;
             // Record (manual raw IQ) and Listen stay available while the
             // dongle is on satellites or in Manual — pass capture and
-            // live audio are the point there; the decode roles hide both
-            // (APRS keeps its listenable FM audio)
+            // live audio are the point there; the decode roles keep
+            // Listen (their threads demodulate the batch center while a
+            // listener is connected) and hide Record
             const onSat = role === 'sat_meteor' || role === 'sat_iss';
             c.recBtn.style.display = (onSat || role === 'manual') ? '' : 'none';
-            c.listenBtn.style.display = (onSat || role === 'manual' || role === 'aprs') ? '' : 'none';
+            c.listenBtn.style.display = (onSat || role === 'manual' || (dedicated && role !== 'dab')) ? '' : 'none';
             // the ISS digipeater checkbox only exists in APRS mode
             c.aprsIssRow.style.display = role === 'aprs' ? 'flex' : 'none';
             c.aprsLasarRow.style.display = role === 'aprs' ? 'flex' : 'none';
@@ -1521,11 +1527,12 @@
             // and stays visible while the dongle is auto-joined
             // mid-pass (role flags cleared, auto_sat still set), so it
             // can be switched off again
-            const dedicated = role === 'ais' || role === 'orbcomm' || role === 'aprs' || role === 'pocsag' || role === 'adsb' || role === 'ism' || role === 'dab';
             c.autoSatRow.style.display = (dedicated || d.auto_sat) ? 'flex' : 'none';
             if (c.roleSel._last !== role) { c.roleSel._last = role; c.roleSel.value = role; }
             c.roleLast = role;
-            if ((role === 'ais' || role === 'orbcomm' || role === 'pocsag' || role === 'adsb' || role === 'ism' || role === 'dab') && liveAudioOn === d.id) toggleLiveAudio(d.id);
+            // the live-audio stream only drops for DAB (its audio comes
+            // from welle-cli's MP3 streams, not the dongle's demod)
+            if (role === 'dab' && liveAudioOn === d.id) toggleLiveAudio(d.id);
         }
 
         function ensureDongleCard(d) {

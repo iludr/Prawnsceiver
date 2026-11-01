@@ -771,6 +771,7 @@ def ais_capture_thread(did):
     from ..sdr.dsp import iq_to_complex, frequency_shift
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, _kill_rtl_sdr,
                         _rtl_tcp_connect, _spawn_rtl_sdr, push_wf_row,
+                        live_audio_demod, new_state,
                         CAPTURE_BATCH, fft_offsets,
                         RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
     from ..config import FFT_SIZE, IQ_BLOCK
@@ -779,6 +780,7 @@ def ais_capture_thread(did):
     channel_names = ["A", "B"]
     shifts = _ais_shifts()
     st = [new_channel_state() for _ in shifts]
+    dst = new_state()   # dsp chain state for the live-audio demod
     # Dual-AIS support: two dongles may listen at the same time (A/B
     # comparison); every decoded frame is stamped with the receiving
     # dongle in the persistent log, so attribution is unambiguous
@@ -867,6 +869,13 @@ def ais_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
+                # Live audio for the 🔊 Listen button: mode-dispatched demod
+                # of the batch center (the dashboard's demod selector applies
+                # here too) — skipped unless someone is listening
+                audio = live_audio_demod(entry, did, c, AIS_CENTER_HZ, dst,
+                                         only_if_listeners=True)
+                if audio:
+                    state.push_live_audio(entry, audio)
                 # Waterfall + signal for the dongle card (rows rolled by
                 # +SDR_OFFSET_HZ so the card's center label reads the AIS
                 # channel - see push_wf_row)

@@ -1083,6 +1083,7 @@ def adsb_capture_thread(did):
     with backoff, role handover)."""
     from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
+                             live_audio_demod, new_state,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, FFT_EVERY, fft_offsets,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
@@ -1107,6 +1108,7 @@ def adsb_capture_thread(did):
         state.adsb_stats = {}
     st = new_demod_state()
     st["dongle"] = did
+    dst = new_state()   # dsp chain state for the live-audio demod
     state.log_console(f"✈️ ADS-B receiver on dongle {did}: "
                       f"{ADSB_CENTER_HZ / 1e6:.1f} MHz — decoding Mode S "
                       f"extended squitters")
@@ -1186,6 +1188,13 @@ def adsb_capture_thread(did):
                     rate_ts = time.time()
                     rate_bytes = 0
                 c = iq_to_complex(raw)
+                # Live audio for the 🔊 Listen button: mode-dispatched demod
+                # of the batch center (the dashboard's demod selector applies
+                # here too) — skipped unless someone is listening
+                audio = live_audio_demod(entry, did, c, ADSB_CENTER_HZ, dst,
+                                         only_if_listeners=True)
+                if audio:
+                    state.push_live_audio(entry, audio)
                 # waterfall + signal for the dongle card (see push_wf_row);
                 # the satellite thread's FFT_EVERY cadence (~234 rows/s at
                 # 2.4 Msps) — the previous every-4th-block (~1171 rows/s)

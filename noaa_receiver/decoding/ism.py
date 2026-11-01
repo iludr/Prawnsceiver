@@ -424,7 +424,8 @@ def ism_capture_thread(did):
     handover); the IQ stream is envelope-demodulated around 433.92 MHz
     and every sensor packet decoded (see OokDecoder)."""
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db,
-                             push_wf_row, _kill_rtl_sdr, _rtl_tcp_connect,
+                             push_wf_row, live_audio_demod,
+                             _kill_rtl_sdr, _rtl_tcp_connect,
                              _spawn_rtl_sdr, CAPTURE_BATCH, IQ_BLOCK,
                              FFT_SIZE, FFT_EVERY,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
@@ -496,6 +497,7 @@ def ism_capture_thread(did):
             from ..sdr.dsp import new_state as _ns, iq_to_complex as _i2c, \
                 frequency_shift as _fs
             wf_st = _ns()
+            dst = _ns()   # dsp chain state for the live-audio demod
             while True:
                 if entry.get("closed") or not entry.get("ism"):
                     break
@@ -508,6 +510,15 @@ def ism_capture_thread(did):
                 now = time.time()
                 # waterfall + signal for the dongle card
                 c = _i2c(raw)
+                # Live audio for the 🔊 Listen button: mode-dispatched
+                # demod of the batch center (the ISM signal sits at the
+                # tuner center = batch DC here; the SDR_OFFSET shift for
+                # the waterfall/decoder happens below) — skipped unless
+                # someone is listening
+                audio = live_audio_demod(entry, did, c, ISM_CENTER_HZ, dst,
+                                         only_if_listeners=True)
+                if audio:
+                    state.push_live_audio(entry, audio)
                 c = _fs(c, SDR_OFFSET_HZ, SDR_RATE, wf_st)
                 for k in range(0, len(c) // FFT_SIZE, FFT_EVERY):
                     try:

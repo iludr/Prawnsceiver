@@ -650,12 +650,14 @@ def orbcomm_capture_thread(did):
     finds in the 137.0-138.0 MHz downlink band."""
     from ..sdr.dsp import iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
+                             live_audio_demod, new_state,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, IQ_BLOCK, fft_offsets,
                              RTL_TCP_SET_FREQ, TUNER_NAMES, _rtl_tcp_set)
 
     entry = state.sdrs[did]
     det = {"floor": None, "channels": {}}
+    dst = new_state()   # dsp chain state for the live-audio demod
 
     def orbcomm_reception_off():
         others = [d for d, e in state.sdrs.items()
@@ -721,6 +723,13 @@ def orbcomm_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
+                # Live audio for the 🔊 Listen button: mode-dispatched demod
+                # of the batch center (the dashboard's demod selector applies
+                # here too) — skipped unless someone is listening
+                audio = live_audio_demod(entry, did, c, ORBCOMM_CENTER_HZ, dst,
+                                         only_if_listeners=True)
+                if audio:
+                    state.push_live_audio(entry, audio)
                 # Waterfall + signal for the dongle card, plus the band
                 # energy scan riding on the same FFTs (push_wf_row hands
                 # back the rolled pre-normalization magnitude)

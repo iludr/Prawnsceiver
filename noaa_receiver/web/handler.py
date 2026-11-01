@@ -1359,6 +1359,10 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json({"error": "Unknown dongle"}, code=404)
                 return
             state.log_console(f"🔊 Live audio listener connected ({self.client_address[0]}, dongle {dev})")
+            # Listener count on the ring: the dedicated decode roles only
+            # spend CPU demodulating while someone is actually listening
+            with entry['la']['cond']:
+                entry['la']['listeners'] = entry['la'].get('listeners', 0) + 1
             self.send_response(200)
             self.send_header('Content-type', 'audio/wav')
             self.send_header('Cache-Control', 'no-cache')
@@ -1390,6 +1394,9 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                     self.wfile.write(data)
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass  # listener disconnected
+            finally:
+                with entry['la']['cond']:
+                    entry['la']['listeners'] = max(0, entry['la'].get('listeners', 0) - 1)
             state.log_console(f"🔊 Live audio listener disconnected ({self.client_address[0]}, dongle {dev})")
             return
         elif self.path.startswith('/decode/'):
