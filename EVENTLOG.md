@@ -2528,3 +2528,16 @@ Now every successful decode deletes the raw IQ via the new
 `decode._delete_raw_iq_after_success` (both success branches call it);
 failed decodes still keep the IQ for retries, and ISS raw IQ is never
 deleted (`_keep_raw_iq`). Regression: `tests/test_waterfall.py` section 6c.
+
+## 2026-11-01 ~14:00 UTC — antennas on the dongle host (192.168.3.245)
+
+Operator hardware update:
+
+- Dongle 192.168.3.245:1234 (ADS-B role): self-built **moxon** antenna
+  cut for 1090 MHz. Expect noticeably better ADS-B range on the
+  north/west approaches than the previous whips.
+- Dongle 192.168.3.245:1235 (satellite/sdr-thread role): self-built
+  **V-dipole** cut for 137.9 MHz (Meteor-M LRPT downlinks).
+
+Both antennas are the operator's own builds; the passthrough via the
+prawntenna manager is unchanged (same rtl_tcp ports 1234/1235).
