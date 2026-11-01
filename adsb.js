@@ -276,7 +276,7 @@ function planeIcon(a) {
     const shape = '<svg width="22" height="22" viewBox="0 0 24 24">'
         + '<path d="M12 1 L14 9 L21 12 L14 14.5 L14 19 L12 23 L10 19 L10 14.5 L3 12 L10 9 Z"'
         + ' fill="' + color + '" stroke="#10131f" stroke-width="0.8"/></svg>';
-    const stale = (Date.now() / 1000 - (heard[a.icao] || 0)) > 600;
+    const stale = (Date.now() / 1000 - (heard[a.icao] || 0)) > 120;
     return L.divIcon({
         className: '',
         iconSize: [28, 28],
@@ -321,7 +321,7 @@ async function loadCoverage() {
 function updateMapStats() {
     document.getElementById('mapstats').textContent =
         mapStats.onMap + ' aircraft with position on the map'
-        + (mapStats.stale ? ' · ' + mapStats.stale + ' faded (not heard for 10+ min)' : '')
+        + (mapStats.stale ? ' · ' + mapStats.stale + ' faded (not heard for 2+ min)' : '')
         + (mapStats.noPos ? ' · ' + mapStats.noPos + ' without position yet' : '')
         + (coverageInfo.points
             ? ' · coverage: ' + coverageInfo.points + ' aircraft positions (all-time registry)' : '');
@@ -371,7 +371,7 @@ function updateMap(aircraft) {
             f.ac = a;    // fresher row (callsign etc) for the popup
         }
         const age = Math.max(0, Math.round(now - (heard[a.icao] || now)));
-        if (age > 600) staleCount++;
+        if (age > 120) staleCount++;
         let m = markers[a.icao];
         if (!m) {
             m = markers[a.icao] = L.marker([a.lat, a.lon], { title: a.callsign || a.icao }).addTo(map);
