@@ -461,6 +461,9 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
         # bin, appended with the display row; wf_db_seq counts them
         'wf_db': deque(maxlen=512), 'wf_db_seq': 0,
+        # shifted complex batches waiting for the dongle's waterfall FFT
+        # thread (see _wf_enqueue / _wf_thread)
+        'wfq': deque(), 'wfq_lock': threading.Lock(),
         'paused': False,
         'waterfall': waterfall, 'lock': lock,
         'signal': 0.0, 'last_mag': None, 'connected': False,
@@ -1149,14 +1152,137 @@ def sdr_thread():
             threads.pop(did, None)
         time.sleep(2)
 
+# ---------- dedicated waterfall FFT thread ----------
+# The waterfall/signal FFT rows used to be computed INLINE in the
+# satellite capture thread — the same loop that demodulates and writes
+# the pass WAV/IQ recordings. A slow recording write or a demod burst
+# stalled the waterfall feed, and an FFT hiccup delayed the recording.
+# The capture thread now only hands the shifted complex batch to a
+# bounded drop-newest queue, and this thread owns all FFT/signal state
+# updates. The decode-role threads (adsb/ais/aprs/pocsag/ism/orbcomm)
+# keep their inline push_wf_row: they never record, and Orbcomm rides
+# its channel scan on the same FFT result.
+
+WFQ_CAP = 2   # batches in flight (~27 ms of RF each) before drops start
+
+def _wf_enqueue(entry, c):
+    """Hand one shifted complex batch to the dongle's waterfall thread.
+    Drops the batch when the queue is full: the waterfall may skip rows
+    under load but never lags behind live."""
+    with entry['wfq_lock']:
+        if len(entry['wfq']) < WFQ_CAP:
+            entry['wfq'].append(c)
+
+def _wf_thread(did):
+    """Per-dongle waterfall/signal FFT loop (fed by _wf_enqueue).
+    Maintains exactly the state the inline capture-thread block used to
+    update: waterfall/wf_db rows, wf_db_seq, signal, last_mag, and the
+    primary dongle's signal history + pass peak attribution."""
+    import numpy as np
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return
+    primary = entry.get('primary')
+    fft_phase = 0
+    last_history_append = 0.0
+    fft_error_log_at = 0.0
+    while not entry.get('closed'):
+        batch = None
+        with entry['wfq_lock']:
+            if entry['wfq']:
+                batch = entry['wfq'].popleft()
+        if batch is None:
+            time.sleep(0.004)
+            continue
+        now_ts = time.time()
+        sat_mode = entry.get('sat_mode') or 'meteor'
+        try:
+            fft_indices, fft_phase = fft_offsets(
+                len(batch) // FFT_SIZE, FFT_EVERY, fft_phase)
+            for k in fft_indices:
+                window = _get_fft_window()
+                windowed = batch[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window
+                fft_result = np.fft.fftshift(np.fft.fft(windowed))
+                magnitude = np.abs(fft_result)
+                center = len(magnitude) // 2
+                # signal metric: ~+/-18.75 kHz around the tracked
+                # carrier (constant Hz width, so signal peaks stay
+                # comparable across SDR_RATE changes)
+                half = max(1, round(18750 / (SDR_RATE / FFT_SIZE)))
+                band = float(magnitude[center-half:center+half].mean())
+                with entry['lock']:
+                    entry['signal'] = band
+                    # Raw (pre-normalization) row for the scanner
+                    # (scan.py): peak/floor detection and the
+                    # recorded-bandwidth fit need true magnitudes;
+                    # the waterfall row below is display-scaled
+                    entry['last_mag'] = magnitude.astype(np.float32)
+                    entry['last_mag_ts'] = now_ts
+                if primary:
+                    with state.signal_lock:
+                        state.signal_strength = band
+                        if entry['is_recording']:
+                            # peak attribution follows the dongle's
+                            # tracking mode — each mode's pass log
+                            # gets its own track's peak
+                            state.mode_pass_peak[sat_mode] = max(
+                                state.mode_pass_peak[sat_mode], band)
+                        if now_ts - last_history_append >= 1.0:
+                            last_history_append = now_ts
+                            state.signal_history.append(band)
+                # dBFS row for the WebSocket feed: absolute per-bin
+                # level, computed BEFORE the display normalization below
+                # (which rescales to the row max and destroys level).
+                # Full scale: a +/-127.5 amplitude sine, Hann-windowed,
+                # peaks at sum(window)/2 = 0.25 * FFT_SIZE of |X|.
+                db_row = (20 * np.log10(
+                    np.maximum(magnitude, 1e-6)
+                    / (31.875 * FFT_SIZE)) * 10).astype(np.int16).tobytes()
+                # Display normalization by the row max. The DC spike at
+                # +SDR_OFFSET_HZ is a mild artifact on both current
+                # dongles (~2x the noise floor, never the row max).
+                peak = magnitude.max()
+                if peak > 0:
+                    magnitude *= 255.0 / peak
+                row = magnitude.astype(int).tolist()
+                with entry['lock']:
+                    entry['waterfall'].append(row)
+                    entry['wf_db'].append(db_row)
+                    entry['wf_db_seq'] += 1
+                    mm = entry.get('manual_meta')
+                    if mm is not None:
+                        mm['wf'].append(db_row)
+        except Exception as e:
+            error_ts = time.monotonic()
+            if error_ts - fft_error_log_at >= 10:
+                fft_error_log_at = error_ts
+                state.log_console(
+                    f"Waterfall FFT failed (dongle {did}): {e}",
+                    "warn")
+
+def _ensure_wf_thread(did):
+    """Start the dongle's waterfall FFT thread if it is not running
+    (idempotent: called from every sdr_capture_thread start/reconnect;
+    the thread exits with the entry's 'closed' flag on removal)."""
+    entry = state.sdrs[did]
+    t = entry.get('wf_thread')
+    if t is not None and t.is_alive():
+        return
+    t = threading.Thread(target=_wf_thread, args=(did,),
+                         daemon=True, name=f'wf-{did}')
+    t.start()
+    entry['wf_thread'] = t
+
 def sdr_capture_thread(did):
     """Capture loop for one dongle (a remote rtl_tcp server): IQ stream →
-    FFT waterfall + FM demod + live audio; WAV recording during passes
-    (every dongle records its own file). Reconnects with backoff while the
-    server is unreachable; exits when the dongle is removed."""
+    FM demod + live audio; WAV recording during passes (every dongle
+    records its own file). The waterfall/signal FFT rows are computed on
+    the dongle's own _wf_thread (see _wf_enqueue). Reconnects with backoff
+    while the server is unreachable; exits when the dongle is removed."""
     import numpy as np
     entry = state.sdrs[did]
     primary = entry['primary']
+    _ensure_wf_thread(did)
     os.makedirs(LOGDIR, exist_ok=True)
     os.makedirs(RECORD_LOCAL_DIR, exist_ok=True)
     # This dongle's own DSP chain state — demod filters, rotator and NCO
@@ -1166,7 +1292,6 @@ def sdr_capture_thread(did):
     # Recording failures (disk full, permissions) must not take the receiver
     # down: the WAV open is retried at most every WAV_RETRY_SECS
     wav_retry_at = 0.0
-    fft_error_log_at = 0.0
 
     def set_primary_recording(path):
         if primary:
@@ -1504,9 +1629,6 @@ def sdr_capture_thread(did):
                 else:
                     state.log_console(f"Connected to rtl_tcp {did} (dongle, tuner {entry['tuner']}), tuned {freq_str}Hz")
                 reader = _IQReader(sock, IQ_BLOCK)
-            last_history_append = 0.0
-            block_count = 0
-            fft_phase = 0
             record_name = None
 
             while True:
@@ -1580,85 +1702,10 @@ def sdr_capture_thread(did):
                     dop_hz = 0
                 c = doppler_shift(c, dop_hz, SDR_RATE, dst)
 
-                # FFT for waterfall + signal strength: one row per
-                # FFT_EVERY-th block of the batch (see FFT_EVERY — CPU
-                # budget, not display needs)
-                block_count += CAPTURE_BATCH
-                fft_indices, fft_phase = fft_offsets(
-                    len(c) // FFT_SIZE, FFT_EVERY, fft_phase)
-                for k in fft_indices:
-                    try:
-                        window = _get_fft_window()
-                        windowed = c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window
-                        fft_result = np.fft.fftshift(np.fft.fft(windowed))
-                        magnitude = np.abs(fft_result)
-                        center = len(magnitude) // 2
-                        # signal metric: ~+/-18.75 kHz around the tracked
-                        # carrier (constant Hz width, so signal peaks stay
-                        # comparable across SDR_RATE changes)
-                        half = max(1, round(18750 / (SDR_RATE / FFT_SIZE)))
-                        band = float(magnitude[center-half:center+half].mean())
-                        with entry['lock']:
-                            entry['signal'] = band
-                            # Raw (pre-normalization) row for the scanner
-                            # (scan.py): peak/floor detection and the
-                            # recorded-bandwidth fit need true magnitudes;
-                            # the waterfall row below is display-scaled
-                            entry['last_mag'] = magnitude.astype(np.float32)
-                            entry['last_mag_ts'] = now_ts
-                        if primary:
-                            with state.signal_lock:
-                                state.signal_strength = band
-                                if entry['is_recording']:
-                                    # peak attribution follows the dongle's
-                                    # tracking mode — each mode's pass log
-                                    # gets its own track's peak
-                                    state.mode_pass_peak[sat_mode] = max(
-                                        state.mode_pass_peak[sat_mode], band)
-                                if now_ts - last_history_append >= 1.0:
-                                    last_history_append = now_ts
-                                    state.signal_history.append(band)
-                        # dBFS row for the WebSocket feed: absolute
-                        # per-bin level, computed BEFORE the display
-                        # normalization below (which rescales to the
-                        # row max and destroys level - useless for a
-                        # spectrum display with contrast/range/offset
-                        # controls). Full scale: a +/-127.5 amplitude
-                        # sine, Hann-windowed, peaks at sum(window)/2
-                        # = 0.25 * FFT_SIZE of |X|. Runs for EVERY
-                        # dongle - this block was once mis-indented
-                        # under the primary-only signal history, which
-                        # silently froze every non-primary dongle's
-                        # waterfall (signal updated, rows never grew).
-                        db_row = (20 * np.log10(
-                            np.maximum(magnitude, 1e-6)
-                            / (31.875 * FFT_SIZE)) * 10).astype(np.int16).tobytes()
-                        # Display normalization by the row max. The DC
-                        # spike at +SDR_OFFSET_HZ is a mild artifact on
-                        # both current dongles (~2x the noise floor,
-                        # never the row max - measured 2026-10-08 from
-                        # raw IQ), so it needs no special-casing; the
-                        # blanking that used to live here existed for
-                        # the removed FC0013, whose spike saturated at
-                        # 7x its strongest signal.
-                        peak = magnitude.max()
-                        if peak > 0:
-                            magnitude *= 255.0 / peak
-                        row = magnitude.astype(int).tolist()
-                        with entry['lock']:
-                            entry['waterfall'].append(row)
-                            entry['wf_db'].append(db_row)
-                            entry['wf_db_seq'] += 1
-                            mm = entry.get('manual_meta')
-                            if mm is not None:
-                                mm['wf'].append(db_row)
-                    except Exception as e:
-                        error_ts = time.monotonic()
-                        if error_ts - fft_error_log_at >= 10:
-                            fft_error_log_at = error_ts
-                            state.log_console(
-                                f"Waterfall FFT failed (dongle {did}): {e}",
-                                "warn")
+                # Hand the shifted batch to the dongle's waterfall FFT
+                # thread (rows, signal, history) — the capture loop stays
+                # free for demodulation and the recording writes.
+                _wf_enqueue(entry, c)
 
                 # Retune when this dongle's target frequency changes (idle
                 # park -> pass band, e.g. 137 MHz -> 437 MHz ISS; a manual
