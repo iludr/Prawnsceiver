@@ -2541,3 +2541,13 @@ Operator hardware update:
 
 Both antennas are the operator's own builds; the passthrough via the
 prawntenna manager is unchanged (same rtl_tcp ports 1234/1235).
+
+## 2026-11-01 ~15:00 UTC — moxon on 1234 was mounted horizontally, now vertical
+
+The operator had attached the 1090 MHz moxon **horizontally**; it is now
+mounted **vertically** (ADS-B is vertically polarized — horizontal
+mounting costs ~20 dB of coupling). That likely explains the weak
+edge-of-range behavior observed earlier today (4D2507 / EZY97VL /
+DLH4J dropping position updates at ~130 km): polarization loss, not
+the moxon's directional pattern. ADS-B range should now improve in
+ALL directions, including the southeast sector.
