@@ -181,10 +181,8 @@
             return 50 + ((khz - (b.zoomOffKHz || 0)) / (span / 2)) * 50;
         }
         function clearWfCanvas(b) {
-            // zoom changes the row geometry — the accumulated history would
-            // be torn, so the waterfall restarts empty
-            b.wfCtx.fillStyle = '#000';
-            b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
+            if (wfPainter) wfPainter.postMessage({type: 'clear', id: b.serial});
+            else { b.wfCtx.fillStyle = '#000'; b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT); }
             b.specCtx.fillStyle = '#000';
             b.specCtx.fillRect(0, 0, WF_WIDTH, SPEC_HEIGHT);
             if (b.timeCtx) { b.timeCtx.fillStyle = '#000'; b.timeCtx.fillRect(0, 0, 54, WF_HEIGHT); }
@@ -365,9 +363,17 @@
             // drawImage(canvas, 0, 1) — the classic source of fixed
             // flickering raster lines on some GPU/driver stacks,
             // while the backing store reads back clean
-            const wfCtx0 = wfCanvas.getContext('2d');
-            wfCtx0.fillStyle = '#000';
-            wfCtx0.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
+            const wfCtx0 = wfPainter ? null : wfCanvas.getContext('2d');
+            if (wfPainter) {
+                // the paint thread owns the visible canvas: transfer its
+                // control, then blacken it there (the init also registers
+                // the block for all future row/put messages)
+                const off = wfCanvas.transferControlToOffscreen();
+                wfPainter.postMessage({type: 'init', id: meta.id, canvas: off}, [off]);
+            } else {
+                wfCtx0.fillStyle = '#000';
+                wfCtx0.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
+            }
             const wfBuf = document.createElement('canvas');
             wfBuf.width = WF_WIDTH; wfBuf.height = WF_HEIGHT;
             const timeBuf = document.createElement('canvas');
@@ -444,7 +450,7 @@
             block.appendChild(head); block.appendChild(body);
             list.appendChild(block);
             b = wfBlocks[idx] = {
-                wfCtx: wfCanvas.getContext('2d'),
+                wfCtx: wfPainter ? null : wfCanvas.getContext('2d'),
                 specCtx: specCanvas.getContext('2d'),
                 timeCtx, dbScaleCtx, overlay, hover, title, led, selHl, selLbl,
                 wfBufCtx: wfBuf.getContext('2d'), timeBufCtx: timeBuf.getContext('2d'),
@@ -463,7 +469,7 @@
             // Reusable 1-px-high RGBA row the paint loop writes into
             // (one putImageData per pixel row); the alpha channel is
             // preset once — the loop only writes RGB
-            b.rowImg = b.wfCtx.createImageData(WF_WIDTH, 1);
+            b.rowImg = new ImageData(WF_WIDTH, 1);
             for (let x = 3; x < WF_WIDTH * 4; x += 4) b.rowImg.data[x] = 255;
             controls.replaceWith(buildWfControls(b, meta));
             drawDbScale(b);   // initial paint before the first row arrives
@@ -850,24 +856,39 @@
         // the zoom mapping, computed once per frame by the caller. The
         // spectrum pane is NOT redrawn here — callers draw it once per
         // frame with the newest row.
+        // Dedicated waterfall paint thread: when Workers + OffscreenCanvas
+        // are available, each block's canvas control is transferred into
+        // wf-worker.js and the main thread only ships finished RGBA rows;
+        // without them the same rows paint inline via b.wfCtx below.
+        let wfPainter = null;
+        if (typeof Worker !== 'undefined' && typeof OffscreenCanvas !== 'undefined') {
+            try { wfPainter = new Worker('wf-worker.js'); } catch (e) {}
+        }
+        // Route one finished RGBA frame to the paint worker — or put it
+        // directly on the fallback path. The buffer is CLONED, never
+        // transferred: the caller keeps painting into the same ImageData.
+        function wfPut(b, img) {
+            if (wfPainter) wfPainter.postMessage({type: 'put', id: b.serial, buf: img.data.buffer, h: img.height});
+            else b.wfCtx.putImageData(img, 0, 0);
+        }
         function drawWaterfall(b, dbRow, srcBin) {
-            // scroll one row down via the offscreen buffer: still all
-            // GPU-side (no getImageData/putImageData readback of the
-            // scrolled area), but never self-referential — drawing a
-            // canvas onto itself rasterizes with stale-tile seams on
-            // some GPU stacks (fixed flickering lines that the backing
-            // store never shows)
-            b.wfBufCtx.drawImage(b.wfCtx.canvas, 0, 0);
-            b.wfCtx.drawImage(b.wfBufCtx.canvas, 0, 1);
+            // LUT-map the dB row into the reusable strip, then ship the
+            // finished row: the paint thread scrolls + composites off the
+            // main thread; the inline fallback putImageData's directly.
             const d = b.rowImg.data, pal = WF_PALETTE;
             for (let x = 0; x < WF_WIDTH; x++) {
-                // dbToLevel returns 0..255, so the round-half-up index
-                // can never exceed the 256-entry LUT
                 const li = (dbToLevel(b, dbRow[srcBin(x)]) + 0.5) | 0;
                 const o = x * 4, p = li * 4;
                 d[o] = pal[p]; d[o + 1] = pal[p + 1]; d[o + 2] = pal[p + 2];
             }
-            b.wfCtx.putImageData(b.rowImg, 0, 0);
+            if (wfPainter) {
+                wfPainter.postMessage({type: 'row', id: b.serial, buf: b.rowImg.data.buffer});
+            } else {
+                // inline fallback: scroll via the buffer, then put the row
+                b.wfBufCtx.drawImage(b.wfCtx.canvas, 0, 0);
+                b.wfCtx.drawImage(b.wfBufCtx.canvas, 0, 1);
+                b.wfCtx.putImageData(b.rowImg, 0, 0);
+            }
             // Time gutter: scroll in lockstep; timestamp by wall clock (the
             // row rate varies with the capture rate / feed rate)
             if (b.timeCtx) {
@@ -1081,9 +1102,12 @@
                         const w = Math.max(2, Math.abs(x2 - x1));
                         const x0 = Math.max(0, xa);
                         if (x0 >= WF_WIDTH || xa + w <= 0) return;
-                        b.wfCtx.fillStyle = 'rgba(231, 76, 60, 0.95)';
-                        b.wfCtx.fillRect(x0, 0,
-                            Math.min(WF_WIDTH, xa + w) - x0, 3);
+                        if (wfPainter) wfPainter.postMessage({type: 'mark', id: did, x0, w});
+                        else {
+                            b.wfCtx.fillStyle = 'rgba(231, 76, 60, 0.95)';
+                            b.wfCtx.fillRect(x0, 0,
+                                Math.min(WF_WIDTH, xa + w) - x0, 3);
+                        }
                         return;
                     }
                     if (u[0] !== 1) return;
@@ -1123,9 +1147,7 @@
                 cancelAnimationFrame(b.replayPending);
                 b.replayPending = 0;
             }
-            b.wfCtx.fillStyle = '#000';
-            b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT);
-            if (b.timeCtx) { b.timeCtx.fillStyle = '#000'; b.timeCtx.fillRect(0, 0, 54, WF_HEIGHT); }
+            if (!wfPainter) { b.wfCtx.fillStyle = '#000'; b.wfCtx.fillRect(0, 0, WF_WIDTH, WF_HEIGHT); }
             b.lastTickTs = 0;
             drawDbScale(b);
             // restart the live decimator from a clean slate
@@ -1144,7 +1166,7 @@
             const spanMs = Math.max(1, newestTs - oldestTs);
             const pxPerRow = WF_HEIGHT / rowCount;
             const sum = new Float64Array(512);
-            const image = b.wfCtx.createImageData(WF_WIDTH, WF_HEIGHT);
+            const image = new ImageData(WF_WIDTH, WF_HEIGHT);
             const pixels = image.data;
             for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255;
             const srcBin = wfSrcBin(b);
@@ -1174,7 +1196,7 @@
                     sum.fill(0); n = 0;
                 }
             }
-            b.wfCtx.putImageData(image, 0, 0);
+            wfPut(b, image);
             if (lastMean) drawSpectrum(b, lastMean, srcBin);
 
             if (b.timeCtx) {
