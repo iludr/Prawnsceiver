@@ -295,12 +295,17 @@ function planeIcon(a) {
 // station's all-time registry (adsb_aircrafts, /adsb_coverage.json),
 // so the shape shows what our sky has EVER covered, not just the
 // current session. Refreshed every 5 min, live planes keep markers.
-let coverageLayer = null, coverageInfo = { points: 0, hours: 24 };
+let coverageLayer = null, coverageInfo = { points: 0 };
+// Coverage hull window: null = the all-time registry hull (the
+// original behavior), else the slider's hour count — only aircraft
+// HEARD within that window contribute their last position.
+let coverageHours = null;
 
 async function loadCoverage() {
     if (!map) return;
     try {
-        const c = await (await fetch('/adsb_coverage.json')).json();
+        const c = await (await fetch('/adsb_coverage.json'
+            + (coverageHours ? '?hours=' + coverageHours : ''))).json();
         coverageInfo = c;
         if (coverageLayer) { map.removeLayer(coverageLayer); coverageLayer = null; }
         if (c.hull && c.hull.length >= 3) {
@@ -309,7 +314,9 @@ async function loadCoverage() {
                 fillColor: '#5a6478', fillOpacity: 0.18, dashArray: '6 6'
             }).addTo(map);
             coverageLayer.bindPopup('🦀 Coverage — convex hull of '
-                + c.points + ' aircraft positions (entire registry)');
+                + c.points + ' aircraft positions'
+                + (coverageHours ? ' (heard last ' + coverageHours + ' h)'
+                                 : ' (entire registry)'));
             if (!fitted) fitted = true, fitAircraft();
         }
         updateMapStats();
@@ -324,7 +331,8 @@ function updateMapStats() {
         + (mapStats.stale ? ' · ' + mapStats.stale + ' faded (not heard for 2+ min)' : '')
         + (mapStats.noPos ? ' · ' + mapStats.noPos + ' without position yet' : '')
         + (coverageInfo.points
-            ? ' · coverage: ' + coverageInfo.points + ' aircraft positions (all-time registry)' : '');
+            ? ' · coverage: ' + coverageInfo.points + ' aircraft positions'
+              + (coverageHours ? ' (last ' + coverageHours + ' h)' : ' (all-time)') : '');
 }
 
 function fitAircraft() {
@@ -438,6 +446,31 @@ setInterval(advanceMarkers, EXTRAP_MS);
 
 initMap();
 loadCoverage();   // the map exists now — the early call above only armed the timer
+
+// ---------- coverage hull window slider ----------
+// The hull redraws for the selected 'planes heard in the last X hours'
+// window; 'all-time' restores the original every-aircraft-ever hull.
+const covHours = document.getElementById('covhours');
+const covHoursVal = document.getElementById('covhours-val');
+const covAll = document.getElementById('covall');
+if (covHours && covHoursVal && covAll) {
+    coverageHours = parseInt(covHours.value, 10) || null;
+    covHoursVal.textContent = covHours.value + ' h';
+    covHours.addEventListener('input', () => {
+        covHoursVal.textContent = covHours.value + ' h';
+    });
+    // fetch on release ('change'), not on every drag tick
+    covHours.addEventListener('change', () => {
+        if (covAll.checked) return;
+        coverageHours = parseInt(covHours.value, 10) || null;
+        loadCoverage();
+    });
+    covAll.addEventListener('change', () => {
+        covHours.disabled = covAll.checked;
+        coverageHours = covAll.checked ? null : (parseInt(covHours.value, 10) || null);
+        loadCoverage();
+    });
+}
 
 // ---------- status header + map (WS 'adsb' / /adsb.json) ----------
 function applyAdsbStatus(s) {

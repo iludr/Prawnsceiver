@@ -29,6 +29,10 @@ tr:hover td { background: #16213e; }
 .muted { color: #666; padding: 10px; }
 #mapwrap { margin-bottom: 14px; }
 #mapinfo { font-size: 0.85em; color: #888; margin: 4px 0 6px; display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
+#mapctrl { font-size: 0.85em; color: #888; margin: 0 0 6px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+#covhours { width: 140px; vertical-align: middle; }
+#covhours:disabled { opacity: 0.35; }
+#covall { vertical-align: middle; }
 #fitbtn, #trackmode-btn { background: #0f3460; color: #4da6ff; border: 1px solid #4da6ff; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
 #fitbtn:hover, #trackmode-btn:hover { background: #16294e; }
 .pgbtn { background: #0f3460; color: #4da6ff; border: 1px solid #4da6ff; border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 0.9em; padding: 1px 8px; }
@@ -85,6 +89,13 @@ tr:hover td { background: #16213e; }
         <span id="mapstats">map: waiting for aircraft positions…</span>
         <span id="maplegend" title="Marker colors: blue = airborne, orange = on the ground, red = military (ICAO 24-bit address in a military block — heuristic)">legend: <span style="color:#4da6ff">●</span> airborne <span style="color:#f39c12">●</span> on ground <span style="color:#e74c3c">●</span> military <span class="milbadge">🪖</span></span>
         <button id="fitbtn" title="Zoom/pan the map to all aircraft">&#8690; fit aircraft</button>
+    </div>
+    <div id="mapctrl">
+        <span id="covwrap" title="Convex hull of all aircraft heard within the selected window">&#129408; hull: planes heard for
+            <input type="range" id="covhours" min="1" max="24" step="1" value="24">
+            <span id="covhours-val">24 h</span>
+            <label><input type="checkbox" id="covall"> all-time</label>
+        </span>
     </div>
     <div id="map"></div>
 </div>

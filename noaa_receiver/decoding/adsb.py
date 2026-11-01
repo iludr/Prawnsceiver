@@ -649,7 +649,7 @@ def _haversine_km(lat1, lon1, lat2, lon2):
     return 2 * 6371.0 * asin(sqrt(a))
 
 
-def coverage_hull():
+def coverage_hull(hours=None):
     """Convex hull (lat/lon ring) of the position of EVERY aircraft
     in the persistent registry — the 'area where planes were heard'
     the ADS-B map draws as its coverage shape (instead of one gray
@@ -663,6 +663,11 @@ def coverage_hull():
     2026-10-20). The registry is the station's all-time memory; each
     aircraft contributes its latest decoded position.
 
+    hours: when set (dashboard slider), only aircraft HEARD within the
+    last `hours` hours contribute (last_seen window) — a windowed hull
+    breathes by design and shows the CURRENT antenna's reach, e.g.
+    right after an antenna change. None keeps the all-time hull.
+
     Positions are gated by physical plausibility: a ground station at
     LAT/LON hears ADS-B out to the radio horizon (~400 km for a plane
     at 40 kft), so anything beyond ADSB_COVERAGE_MAX_KM is a bad CPR
@@ -672,11 +677,14 @@ def coverage_hull():
     Egypt. The hull itself is Andrew's monotone chain in plain
     lat/lon space, plenty accurate at the few-hundred-km scale.
     """
+    cutoff = (time.time() - hours * 3600.0) if hours and hours > 0 else None
     pts = []
     for r in db.query("SELECT data FROM adsb_aircrafts"):
         try:
             a = json.loads(r["data"])
         except ValueError:
+            continue
+        if cutoff is not None and (a.get("last_seen") or 0) < cutoff:
             continue
         lat, lon = a.get("lat"), a.get("lon")
         if lat is None or lon is None:
@@ -703,7 +711,7 @@ def coverage_hull():
         upper.append(p)
     ring = lower[:-1] + upper[:-1]
     return {"hull": [[la, lo] for la, lo in ring],
-            "points": len(pts)}
+            "points": len(pts), "hours": hours}
 
 
 # ---------- persistent aircraft registry (every aircraft ever seen) ------
