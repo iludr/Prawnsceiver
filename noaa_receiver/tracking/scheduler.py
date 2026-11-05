@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from .. import state
 from ..config import (ISS_SSTV_HZ, LAT, LON, METEOR_LRPT_HZ, PASS_MARGIN_SECS,
                       PASS_PREDICT_HOURS, RECORD_ISS, RECORD_LOCAL_DIR,
-                      TLE_REFRESH_HOURS, TRACKED_SATS, UTC_OFFSET)
+                      TLE_REFRESH_HOURS, TRACKED_SATS, UTC_OFFSET, utc_to_local)
 
 from ..decoding.decode import (decode_recording, read_decode_marker,
                                sat_short_name, satellite_from_filename)
@@ -244,7 +244,7 @@ def scheduler_thread():
 
             state.log_console(f"Predicted {len(passes)} passes in next {PASS_PREDICT_HOURS}h")
             for p in passes[:5]:
-                local_rise = p["rise_utc"] + timedelta(hours=UTC_OFFSET)
+                local_rise = utc_to_local(p["rise_utc"])
                 state.log_console(f"  {p['sat_name']} {p['max_alt']:.0f}° at {local_rise.strftime('%H:%M')} ({round(p['frequency']/1e6,4)} MHz)")
 
             # Check every 10 seconds if we need to switch for an upcoming pass
@@ -320,14 +320,14 @@ def scheduler_thread():
                             state.mode_sat_name[mode] = triggered["sat_name"]
                             with state.signal_lock:
                                 state.mode_pass_peak[mode] = 0.0
-                            local_rise = triggered["rise_utc"] + timedelta(hours=UTC_OFFSET)
+                            local_rise = utc_to_local(triggered["rise_utc"])
                             state.log_console(f"🔴 {mode.upper()} PASS START: {triggered['sat_name']} {round(tune/1e6,4)} MHz, max {triggered['max_alt']:.0f}° at {local_rise.strftime('%H:%M')}")
                             if fb_note:
                                 state.log_console(f"🛰 {fb_note}")
                             started.append(mode)
                         elif triggered is None and state.mode_pass[mode] is not None:
                             fp = state.mode_pass[mode]
-                            local_set = fp["set_utc"] + timedelta(hours=UTC_OFFSET)
+                            local_set = utc_to_local(fp["set_utc"])
                             state.log_console(f"✅ {mode.upper()} PASS END: {fp['sat_name']} finished at {local_set.strftime('%H:%M')}")
                             with state.signal_lock:
                                 finished.append((fp, state.mode_pass_peak[mode]))

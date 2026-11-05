@@ -1,5 +1,6 @@
 """HTTP API and dashboard handler."""
 import http.server
+import numpy as np
 import json
 import os
 import struct
@@ -15,7 +16,7 @@ from .. import tuner
 from ..decoding.dab import DAB_CHANNELS
 from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    METEOR_LRPT_HZ, RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE,
-                   UTC_OFFSET, WEBDIR)
+                   UTC_OFFSET, WEBDIR, utc_to_local)
 
 from ..decoding import adsb, ais, aprs, dab, ism, orbcomm, pocsag
 from ..sdr import scan
@@ -142,7 +143,7 @@ def get_status():
                 "catnr": mp["catnr"],
                 "frequency_mhz": round(state.mode_freq[m] / 1e6, 4),
                 "max_alt": mp["max_alt"],
-                "set_local": (mp["set_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%H:%M"),
+                "set_local": utc_to_local(mp["set_utc"]).strftime("%H:%M"),
             } if mp is not None else None
     status["mode_passes"] = mode_passes
     status["mode_freqs"] = mode_freqs
@@ -153,7 +154,7 @@ def get_status():
             "catnr": cur_pass["catnr"],
             "frequency_mhz": round(cur_pass["frequency"] / 1e6, 4),
             "max_alt": cur_pass["max_alt"],
-            "set_local": (cur_pass["set_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%H:%M"),
+            "set_local": utc_to_local(cur_pass["set_utc"]).strftime("%H:%M"),
         }
     else:
         status["current_pass"] = None
@@ -165,7 +166,7 @@ def get_status():
             status["next_pass"] = {
                 "sat_name": p["sat_name"],
                 "frequency_mhz": round(p["frequency"] / 1e6, 4),
-                "rise_local": (p["rise_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%a %d.%m %H:%M"),
+                "rise_local": utc_to_local(p["rise_utc"]).strftime("%a %d.%m %H:%M"),
                 "max_alt": p["max_alt"],
                 "duration_min": p["duration_min"],
                 "countdown_min": round((p["rise_utc"] - now).total_seconds() / 60),
@@ -504,20 +505,22 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # WebSocket push of dBFS spectrum rows (see _waterfall_websocket)
             self._waterfall_websocket()
         elif self.path.startswith('/waterfall.json'):
-            # Optional ?d=<dongle serial> (default: primary) and last=1 for
-            # the newest row only (the dashboard scrolls client-side)
+            # wf_db rows are dBFS*10 int16 byte strings off the live
+            # capture threads; convert to the 0-255 norm scale the
+            # client's palette expects, lazily at request time
             query = self._query()
             dev = (query.get('d') or [''])[0] or (state.primary_dongle or '')
             entry = state.sdrs.get(dev)
-            if entry is None:
-                data = []
-            elif (query.get('last') or [''])[0] == '1':
+            rows = []
+            if entry is not None:
                 with entry['lock']:
-                    # deque supports indexing but not slicing
-                    data = [entry['waterfall'][-1]] if entry['waterfall'] else []
-            else:
-                with entry['lock']:
-                    data = list(entry['waterfall'])
+                    if (query.get('last') or [''])[0] == '1':
+                        rows = [entry['wf_db'][-1]] if entry['wf_db'] else []
+                    else:
+                        rows = list(entry['wf_db'])
+            data = [np.clip((np.frombuffer(r, '<i2') + 1300)
+                            * 0.255, 0, 255).astype(int).tolist()
+                    for r in rows]
             self._send_json(data, code=200)
         elif self.path == '/dongles.json':
             self._send_json(_dongle_list(), code=200)

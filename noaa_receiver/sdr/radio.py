@@ -52,7 +52,7 @@ from .dsp import (am_demodulate, doppler_shift, fm_demodulate, frequency_shift,
 # dashboard draws ~5 rows/s, so ~234 rows/s (960 kHz: 1875 blocks/s / 8) is still 40x
 # oversampled. At full block rate the FFT + row conversion (~1 ms/block on the
 # Pi) starved the demod once two dongles were attached.
-FFT_EVERY = max(8, round(0.00427 * SDR_RATE / (IQ_BLOCK // 2)))  # ~4 ms of RF between FFTs at any SDR_RATE (8 blocks at 960 kHz)
+FFT_EVERY = max(32, round(0.00427 * SDR_RATE / (IQ_BLOCK // 2)))  # ~13 ms of RF between FFTs at any SDR_RATE (32 blocks at 960 kHz)
 
 def fft_offsets(frame_count, stride, phase):
     """Return stride-spaced frame offsets and the phase for the next batch."""
@@ -153,9 +153,7 @@ def push_wf_row(entry, c, k, sig_bins):
             magnitude[center - sig_bins:center + sig_bins].mean())
         peak = magnitude.max()
         if peak > 0:
-            magnitude *= 255.0 / peak
-        entry["waterfall"].append(np.roll(magnitude, rot).astype(int).tolist())
-        entry["wf_db"].append(db_row)
+            entry["wf_db"].append(db_row)
         entry["wf_db_seq"] += 1
     return rolled
 

@@ -54,6 +54,35 @@ DECIMATION = SDR_RATE // AUDIO_RATE
 LAT, LON = 49.013, 12.099
 UTC_OFFSET = 2  # Germany UTC+2
 
+from datetime import timedelta as _timedelta
+
+try:
+    from zoneinfo import ZoneInfo
+    LOCAL_TZ = ZoneInfo("Europe/Berlin")
+except Exception:
+    from datetime import timezone as _timezone
+    LOCAL_TZ = _timezone(_timedelta(hours=UTC_OFFSET))
+
+
+def utc_to_local(dt):
+    """Convert a UTC datetime to Germany local time, DST-aware via the
+    Europe/Berlin zone database; falls back to the fixed UTC_OFFSET when
+    the tz database is unavailable."""
+    try:
+        return dt.astimezone(LOCAL_TZ)
+    except Exception:
+        return dt + _timedelta(hours=UTC_OFFSET)
+
+
+def utc_to_local(dt):
+    """Convert a UTC datetime to Germany local time, DST-aware via the
+    Europe/Berlin zone database; falls back to the fixed UTC_OFFSET when
+    the tz database is unavailable."""
+    try:
+        return dt.astimezone(LOCAL_TZ)
+    except Exception:
+        return dt + _timedelta(hours=UTC_OFFSET)
+
 # Tracked satellites: catalog number -> (name, frequency_hz)
 # NOAA 15/18/19 (POES) are NOT tracked: the constellation was
 # decommissioned Jun-Aug 2025 (NOAA-15 last, 2025-08-19) - APT and DSB

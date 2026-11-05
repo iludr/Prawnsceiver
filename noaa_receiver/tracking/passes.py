@@ -8,7 +8,7 @@ from .. import db
 from .. import state
 from .plan import receive_plan, transmitter_status
 from . import txstatus
-from ..config import LAT, LON, TRACKED_SATS, PASS_MIN_ALT, TLE_USER_AGENT, UTC_OFFSET
+from ..config import LAT, LON, TRACKED_SATS, PASS_MIN_ALT, TLE_USER_AGENT, UTC_OFFSET, utc_to_local
 
 try:
     from skyfield.api import load, wgs84, EarthSatellite
@@ -208,9 +208,9 @@ def passes_to_json(passes):
             "sat_name": p["sat_name"],
             "catnr": p["catnr"],
             "frequency_mhz": round(tuned / 1e6, 4),
-            "rise_local": (p["rise_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%a %d.%m %H:%M"),
-            "culm_local": (p["culm_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%H:%M"),
-            "set_local": (p["set_utc"] + timedelta(hours=UTC_OFFSET)).strftime("%H:%M"),
+            "rise_local": utc_to_local(p["rise_utc"]).strftime("%a %d.%m %H:%M"),
+            "culm_local": utc_to_local(p["culm_utc"]).strftime("%H:%M"),
+            "set_local": utc_to_local(p["set_utc"]).strftime("%H:%M"),
             "max_alt": p["max_alt"],
             "duration_min": p["duration_min"],
             "quality": "high" if p["max_alt"] >= 35 else ("medium" if p["max_alt"] >= 15 else "low"),

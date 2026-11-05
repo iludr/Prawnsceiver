@@ -1507,17 +1507,14 @@
             c.scanRow.style.display = free;
             c.scanRow2.style.display = free;
             c.secTune.style.display = free;
-            const demodCtl = (role === 'manual' || (dedicated && role !== 'dab')) ? '' : 'none';
+            const onSat = role === 'sat_meteor' || role === 'sat_iss';
+            // the demod selector also serves the satellite roles: pick the
+            // live-listening demodulation for a pass (FM, USB, ...)
+            const demodCtl = (role === 'manual' || onSat || (dedicated && role !== 'dab')) ? '' : 'none';
             c.modeRow.style.display = demodCtl;
             c.secMode.style.display = demodCtl;
             c.secBw.style.display = free;
             c.secScan.style.display = free;
-            // Record (manual raw IQ) and Listen stay available while the
-            // dongle is on satellites or in Manual — pass capture and
-            // live audio are the point there; the decode roles keep
-            // Listen (their threads demodulate the batch center while a
-            // listener is connected) and hide Record
-            const onSat = role === 'sat_meteor' || role === 'sat_iss';
             c.recBtn.style.display = (onSat || role === 'manual') ? '' : 'none';
             c.listenBtn.style.display = (onSat || role === 'manual' || (dedicated && role !== 'dab')) ? '' : 'none';
             // the ISS digipeater checkbox only exists in APRS mode

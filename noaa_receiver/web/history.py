@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 from .. import db
 from .. import state
-from ..config import RECORD_DIR, RECORD_LOCAL_DIR, UTC_OFFSET
+from ..config import (RECORD_DIR, RECORD_LOCAL_DIR, UTC_OFFSET, utc_to_local)
 from ..decoding.decode import read_decode_marker
 
 def log_pass(sat_name, frequency, max_alt, duration_min, rise_time, set_time, signal_peak, decoded, png_file, wav_file, quality=None, satnogs=None):
@@ -23,8 +23,8 @@ def log_pass(sat_name, frequency, max_alt, duration_min, rise_time, set_time, si
     """
     rise_ts = rise_time.timestamp()
     set_ts = set_time.timestamp()
-    rise_local = (rise_time + timedelta(hours=UTC_OFFSET)).strftime("%a %d.%m %H:%M")
-    set_local = (set_time + timedelta(hours=UTC_OFFSET)).strftime("%H:%M")
+    rise_local = utc_to_local(rise_time).strftime("%a %d.%m %H:%M")
+    set_local = utc_to_local(set_time).strftime("%H:%M")
     satnogs_json = json.dumps(satnogs) if satnogs is not None else None
     with db.write() as cur:
         row = cur.execute(
