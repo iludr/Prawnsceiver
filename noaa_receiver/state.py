@@ -31,6 +31,12 @@ signal_history = deque(maxlen=300)  # 5 min at 1 Hz
 # /live.wav?d=<dongle id>.
 LIVE_AUDIO_CHUNKS = 2048  # ~4s of live audio retained
 
+# Forwarding hooks, set only inside per-dongle worker processes
+# (noaa_receiver.sdr.worker): they ship log lines / live audio to the
+# master process instead of (only) the local buffers. None in the master.
+log_hook = None
+audio_hook = None
+
 def push_live_audio(entry, pcm):
     """Append a demodulated PCM block to a dongle entry's live audio ring."""
     ring = entry['la']
@@ -42,6 +48,11 @@ def push_live_audio(entry, pcm):
             del ring['data'][:drop]
             ring['base'] += drop
         ring['cond'].notify_all()
+    if audio_hook is not None:
+        try:
+            audio_hook(pcm)
+        except Exception:
+            pass
 
 # Debug console ring buffer (served at /console)
 console_buffer = deque(maxlen=100)
@@ -56,6 +67,11 @@ def log_console(msg, level="info"):
     }
     with console_lock:
         console_buffer.append(line)
+    if log_hook is not None:
+        try:
+            log_hook(line["msg"], level)
+        except Exception:
+            pass
     line_str = f"[{line['time']}] [{level}] {msg}"
     try:
         print(line_str)

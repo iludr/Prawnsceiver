@@ -191,7 +191,7 @@ def expect_cmd(freq):
 def wavs(): return sorted(glob.glob(os.path.join(radio.RECORD_LOCAL_DIR, '*.wav')))
 
 # 1. idle streaming
-wait_for(lambda: entry['last_data'] > 0 and len(entry['waterfall']) > 3, what='IQ flowing')
+wait_for(lambda: entry['last_data'] > 0 and len(entry['wf_db']) > 3, what='IQ flowing')
 wait_for(lambda: entry['la']['total'] > 10, what='live audio')
 assert entry['connected'] and not entry['is_recording']
 expect_cmd(METEOR_LRPT_HZ)   # explicit tune on connect (state.current_frequency park)

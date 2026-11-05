@@ -26,6 +26,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -39,7 +40,8 @@ from .. import state
 from ..calibration import (AIRBAND, AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMARY_DONGLE,
                           SDR_DONGLE_GAIN, correction_info, tuning_correction)
 from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION,
-                     FFT_SIZE, IQ_BLOCK, IQ_RECORD_FREQS, LAT, LOGDIR, LON,
+                     DONGLE_WORKER_PROCESSES, FFT_SIZE, IQ_BLOCK,
+                     IQ_RECORD_FREQS, LAT, LOGDIR, LON,
                      MANUAL_REC_MAX_SECS, RECORD_LOCAL_DIR, SDR_GAIN,
                      SDR_OFFSET_HZ,
                      SDR_RATE, WATERFALL_ROWS)
@@ -154,6 +156,11 @@ def push_wf_row(entry, c, k, sig_bins):
         peak = magnitude.max()
         if peak > 0:
             entry["wf_db"].append(db_row)
+            if _wf_row_hook is not None:
+                try:
+                    _wf_row_hook(entry["wf_db_seq"], db_row)
+                except Exception:
+                    pass
         entry["wf_db_seq"] += 1
     return rolled
 
@@ -410,6 +417,11 @@ def _stop_capture(entry):
     """Close a dongle's IQ source under its capture thread (remove,
     pause, role switch): the rtl_tcp socket and/or the spawned
     rtl_sdr process."""
+    if DONGLE_WORKER_PROCESSES and entry['id'] in _workers:
+        # the socket lives in the dongle's worker process — just tell it
+        # to reconfigure; its own supervisor restarts the right role
+        _push_worker(entry['id'], _worker_cfg(entry['id']) or {"cmd": "cfg"})
+        return
     sock = entry.get('sock')
     if sock is not None:
         try:
@@ -475,11 +487,7 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
     """Fresh state.sdrs entry for one dongle address (shared by load and
     add_dongle). The primary dongle aliases the legacy waterfall globals so
     the rest of the system (status, live audio, recording) keeps working."""
-    if primary:
-        waterfall, lock = state.waterfall_buffer, state.waterfall_lock
-    else:
-        waterfall = deque(maxlen=WATERFALL_ROWS)
-        lock = threading.Lock()
+    lock = threading.Lock()
     return {
         'id': did, 'host': host, 'port': int(port),
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
@@ -497,8 +505,7 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         # thread (see _wf_enqueue / _wf_thread)
         'wfq': deque(), 'wfq_lock': threading.Lock(),
         'paused': False,
-        'waterfall': waterfall, 'lock': lock,
-        'signal': 0.0, 'last_mag': None, 'connected': False,
+        'lock': lock,        'signal': 0.0, 'last_mag': None, 'connected': False,
         'sock': None, 'last_data': 0.0,
         # Live audio ring for this dongle's demodulated audio
         'la': {'data': [], 'base': 0, 'total': 0, 'cond': threading.Condition()},
@@ -573,6 +580,8 @@ def remove_dongle(did):
     if entry is None:
         return False
     entry['closed'] = True
+    if DONGLE_WORKER_PROCESSES:
+        _kill_worker(did)
     _stop_capture(entry)
     from . import scan
     scan.stop_scan(did)
@@ -593,8 +602,6 @@ def remove_dongle(did):
             if nxt is not None:
                 e = state.sdrs[nxt]
                 e['primary'] = True
-                e['waterfall'] = state.waterfall_buffer
-                e['lock'] = state.waterfall_lock
                 state.log_console(f"Dongle {nxt} is now the primary (live audio, recordings)")
     state.log_console(f"🔌 Dongle removed: {did}")
     _persist_dongles()
@@ -1128,6 +1135,277 @@ def set_dongle_paused(did, on):
     return True
 
 
+# ---------- per-dongle worker processes (DONGLE_WORKER_PROCESSES) ----------
+# When enabled, each dongle's capture pipeline runs in its own subprocess
+# (noaa_receiver.sdr.worker) so one dongle's load/crash can never stall the
+# other. The master mirrors worker reports into state.sdrs, so the web
+# layer is unchanged. Protocol: Unix socket, frames [u32be len][u8 type]
+# [payload]; type 1 = JSON command master->worker, 2 = status JSON,
+# 3 = wf row (u32be seq + bytes), 4 = decode JSON, 5 = log JSON,
+# 6 = audio bytes, all worker->master.
+
+_workers = {}          # did -> {"proc": Popen, "conn": socket}
+_workers_lock = threading.Lock()
+_worker_sock_dir = "/tmp/prawn-workers"
+
+
+def _worker_sock_path(did):
+    return os.path.join(_worker_sock_dir,
+                        f'{did.replace(":", "_")}.sock')
+
+
+def _push_worker(did, obj):
+    """Send one JSON command frame to a dongle's worker (no-op if none)."""
+    with _workers_lock:
+        w = _workers.get(did)
+    if not w:
+        return
+    try:
+        payload = json.dumps(obj).encode()
+        w["conn"].sendall(len(payload).to_bytes(4, 'big') + b'\x01' + payload)
+    except OSError:
+        pass
+
+
+def _worker_cfg(did):
+    """The cfg frame for one dongle: role flags + settings the worker
+    needs to mirror the master's entry."""
+    e = state.sdrs.get(did)
+    if e is None:
+        return None
+    with e['lock']:
+        cfg = {"cmd": "cfg"}
+        for flag in ('ais', 'orbcomm', 'aprs', 'aprs_iss', 'aprs_lasar',
+                     'pocsag', 'adsb', 'ism', 'dab', 'auto_sat', 'paused',
+                     'gain_auto'):
+            cfg[flag] = bool(e.get(flag))
+        cfg['sat_mode'] = e.get('sat_mode') or 'meteor'
+        cfg['dab_channel'] = e.get('dab_channel') or '5C'
+        cfg['manual_freq_hz'] = state.manual_dongle_freq.get(did)
+        cfg['manual_bw_hz'] = state.manual_dongle_bw.get(did)
+        cfg['manual_mode'] = state.manual_dongle_mode.get(did)
+        return cfg
+
+
+def _sched_frame():
+    with state.status_lock:
+        return {"cmd": "sched",
+                "mode_freq": dict(state.mode_freq),
+                "mode_sat_name": dict(state.mode_sat_name),
+                "mode_doppler_hz": dict(state.mode_doppler_hz),
+                "mode_doppler_freq_hz": dict(state.mode_doppler_freq_hz),
+                "mode_pass": {m: (p["sat_name"] if p else None)
+                              for m, p in state.mode_pass.items()},
+                "recordings_paused": state.recordings_paused,
+                "manual": {d: {"freq": state.manual_dongle_freq.get(d),
+                               "bw": state.manual_dongle_bw.get(d),
+                               "mode": state.manual_dongle_mode.get(d)}
+                           for d in state.sdrs}}
+
+
+def _broadcast_sched():
+    while True:
+        time.sleep(0.5)
+        frame = _sched_frame()
+        for did in list(state.sdrs):
+            _push_worker(did, frame)
+
+
+def _apply_decode(mod, args):
+    """Apply one decoded message in the MASTER process (single writer for
+    the DB + live registries the API serves)."""
+    from ..decoding import adsb, ais, aprs, orbcomm, pocsag, ism
+    try:
+        if mod == 'adsb':
+            adsb.handle_message(args[0])
+        elif mod == 'ais':
+            ais.handle_frames(args[0], args[1], args[2] if len(args) > 2 else {})
+        elif mod == 'aprs':
+            st = args[1] if len(args) > 1 else {}
+            if isinstance(st, dict):
+                st.setdefault('dongle', None)
+            aprs.handle_frames(args[0], st)
+        elif mod == 'orbcomm':
+            orbcomm.handle_packets({'dongle': None}, args[1])
+        elif mod == 'pocsag':
+            pocsag._log_page(args[0])
+        elif mod == 'ism':
+            ism._register(args[0])
+    except Exception as e:
+        state.log_console(f"worker decode apply failed ({mod}): {e}", "warn")
+
+
+def _worker_reader(did, conn):
+    """Apply one worker's frames into the master's state.sdrs mirror."""
+    buf = b''
+    while True:
+        try:
+            chunk = conn.recv(65536)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+        while len(buf) >= 5:
+            ln = int.from_bytes(buf[:4], 'big')
+            if len(buf) < 5 + ln:
+                break
+            ftype = buf[4]
+            payload = buf[5:5 + ln]
+            buf = buf[5 + ln:]
+            entry = state.sdrs.get(did)
+            if entry is None:
+                continue
+            if ftype == 2:
+                try:
+                    msg = json.loads(payload)
+                    t = msg.get('t')
+                    if t == 'status':
+                        with entry['lock']:
+                            for k in ('connected', 'tuner', 'signal',
+                                      'last_data', 'correction',
+                                      'correction_src', 'is_recording',
+                                      'wav_path', 'manual_rec_start',
+                                      'manual_zip'):
+                                if k in msg:
+                                    entry[k] = msg[k]
+                            if entry.get('paused'):
+                                entry['connected'] = False
+                        # the decode-role enable flags live in the worker
+                        # process; mirror them here from the role flags
+                        for flag in ('ais', 'orbcomm', 'aprs', 'pocsag',
+                                     'ism', 'dab', 'adsb'):
+                            en = f'{flag}_enabled'
+                            dg = f'{flag}_dongle'
+                            if entry.get(flag):
+                                setattr(state, en, True)
+                                setattr(state, dg, did)
+                            elif getattr(state, dg, None) == did:
+                                setattr(state, en, False)
+                                setattr(state, dg, None)
+                        if 'adsb_stats' in msg:
+                            with state.adsb_lock:
+                                state.adsb_stats = msg['adsb_stats']
+                        if 'pocsag_channels' in msg:
+                            with state.pocsag_lock:
+                                state.pocsag_channels = {
+                                    c.get('freq_mhz', i): c
+                                    for i, c in enumerate(msg['pocsag_channels'])}
+                        if 'ism_sensors' in msg:
+                            with state.ism_lock:
+                                state.ism_sensors = {
+                                    (s.get('proto'), s.get('id'),
+                                     s.get('channel')): s
+                                    for s in msg['ism_sensors']}
+                    elif t == 'log':
+                        state.log_console(msg.get('msg', ''),
+                                          msg.get('level', 'info'))
+                    elif t == 'decode':
+                        _apply_decode(msg.get('mod'), msg.get('args') or [])
+                except (ValueError, KeyError):
+                    pass
+            elif ftype == 3 and len(payload) >= 4:
+                seq = int.from_bytes(payload[:4], 'big')
+                row = payload[4:]
+                with entry['lock']:
+                    entry['wf_db'].append(row)
+                    entry['wf_db_seq'] = seq
+            elif ftype == 4:
+                try:
+                    msg = json.loads(payload)
+                    _apply_decode(msg.get('mod'), msg.get('args') or [])
+                except ValueError:
+                    pass
+            elif ftype == 6:
+                state.push_live_audio(entry, payload)
+    # worker gone: mark the mirror disconnected
+    entry = state.sdrs.get(did)
+    if entry is not None:
+        with entry['lock']:
+            entry['connected'] = False
+    with _workers_lock:
+        w = _workers.pop(did, None)
+    if w:
+        try:
+            w["proc"].terminate()
+        except Exception:
+            pass
+
+
+def _spawn_worker(did):
+    import subprocess
+    os.makedirs(_worker_sock_dir, exist_ok=True)
+    path = _worker_sock_path(did)
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(path)
+    srv.listen(1)
+    srv.settimeout(15)
+    proc = subprocess.Popen(
+        [sys.executable, '-m', 'noaa_receiver.sdr.worker', did, path],
+        cwd=os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))))
+    try:
+        conn, _ = srv.accept()
+    except OSError:
+        srv.close()
+        proc.terminate()
+        return
+    srv.close()
+    conn.settimeout(None)
+    with _workers_lock:
+        _workers[did] = {"proc": proc, "conn": conn}
+    threading.Thread(target=_worker_reader, args=(did, conn),
+                     daemon=True, name=f'wfread-{did}').start()
+    _push_worker(did, _worker_cfg(did) or {"cmd": "cfg"})
+    state.log_console(f"🧵 Worker process started for dongle {did} (pid {proc.pid})")
+
+
+def _kill_worker(did):
+    with _workers_lock:
+        w = _workers.pop(did, None)
+    if not w:
+        return
+    _push_worker(did, {"cmd": "shutdown"})
+    try:
+        w["conn"].close()
+    except OSError:
+        pass
+    try:
+        w["proc"].terminate()
+    except Exception:
+        pass
+
+
+def _worker_supervisor():
+    """Spawn/oversee one worker process per registered dongle."""
+    load_dongles()
+    threading.Thread(target=_broadcast_sched, daemon=True,
+                     name='worker-sched').start()
+    while True:
+        for did, entry in list(state.sdrs.items()):
+            with _workers_lock:
+                w = _workers.get(did)
+                alive = w is not None and w["proc"].poll() is None
+            if alive:
+                continue
+            if w is not None:
+                with _workers_lock:
+                    _workers.pop(did, None)
+            if entry.get('closed') or entry.get('paused'):
+                continue
+            try:
+                _spawn_worker(did)
+            except Exception as e:
+                state.log_console(f"worker spawn failed for {did}: {e}", "warn")
+        for did in [d for d in list(_workers) if d not in state.sdrs]:
+            _kill_worker(did)
+        time.sleep(2)
+
+
 def sdr_thread():
     """Keep one capture thread per registered dongle.
 
@@ -1135,7 +1413,13 @@ def sdr_thread():
     loop starts a capture thread for every new state.sdrs entry and lets
     threads of removed dongles exit (their entry carries a 'closed' flag).
     A capture thread whose rtl_tcp server goes away simply retries until
-    it comes back — the reconnect cadence is the thread's own backoff."""
+    it comes back — the reconnect cadence is the thread's own backoff.
+
+    With DONGLE_WORKER_PROCESSES the same job is done by one subprocess
+    per dongle (see _worker_supervisor) — full OS-level isolation."""
+    if DONGLE_WORKER_PROCESSES:
+        _worker_supervisor()
+        return
     load_dongles()
     threads = {}
     while True:
@@ -1196,6 +1480,11 @@ def sdr_thread():
 # its channel scan on the same FFT result.
 
 WFQ_CAP = 2   # batches in flight (~27 ms of RF each) before drops start
+
+# Forwarding hook, set only inside per-dongle worker processes: called
+# with (did, seq, row_bytes) after each wf_db append so the worker can ship
+# the row to the master process. None in the master / thread mode.
+_wf_row_hook = None
 
 def _wf_enqueue(entry, c):
     """Hand one shifted complex batch to the dongle's waterfall thread.
@@ -1270,17 +1559,14 @@ def _wf_thread(did):
                 db_row = (20 * np.log10(
                     np.maximum(magnitude, 1e-6)
                     / (31.875 * FFT_SIZE)) * 10).astype(np.int16).tobytes()
-                # Display normalization by the row max. The DC spike at
-                # +SDR_OFFSET_HZ is a mild artifact on both current
-                # dongles (~2x the noise floor, never the row max).
-                peak = magnitude.max()
-                if peak > 0:
-                    magnitude *= 255.0 / peak
-                row = magnitude.astype(int).tolist()
                 with entry['lock']:
-                    entry['waterfall'].append(row)
                     entry['wf_db'].append(db_row)
                     entry['wf_db_seq'] += 1
+                    if _wf_row_hook is not None:
+                        try:
+                            _wf_row_hook(entry['wf_db_seq'], db_row)
+                        except Exception:
+                            pass
                     mm = entry.get('manual_meta')
                     if mm is not None:
                         mm['wf'].append(db_row)

@@ -50,6 +50,14 @@ AUDIO_RATE = 48000
 IQ_BLOCK = FFT_SIZE * 2
 DECIMATION = SDR_RATE // AUDIO_RATE
 
+# Per-dongle worker processes: when True, each registered dongle's capture
+# pipeline (rtl_tcp read, waterfall FFT, demod, decode, recording) runs in
+# its own subprocess (noaa_receiver.sdr.worker) and reports back to this
+# process over a local socket; the master keeps the web API, scheduler and
+# DB and mirrors worker state into state.sdrs. When False, the classic
+# in-process per-dongle threads are used.
+DONGLE_WORKER_PROCESSES = True
+
 # Regensburg coordinates
 LAT, LON = 49.013, 12.099
 UTC_OFFSET = 2  # Germany UTC+2
