@@ -210,13 +210,22 @@ def _scan_recordings_all():
     return [merged[k] for k in sorted(merged, reverse=True)]
 
 
+_REC_DIRS = None
+
+
+def _update_cache(recs):
+    global _REC_LAST, _REC_CACHE, _REC_DIRS
+    with _REC_LOCK:
+        _REC_CACHE = recs
+        _REC_LAST = time.time()
+        _REC_DIRS = (os.path.realpath(RECORD_DIR),
+                     os.path.realpath(RECORD_LOCAL_DIR))
+
+
 def _rescan_recordings():
-    global _REC_LAST, _REC_SCANNING, _REC_CACHE
+    global _REC_SCANNING
     try:
-        recs = _scan_recordings_all()
-        with _REC_LOCK:
-            _REC_CACHE = recs
-            _REC_LAST = time.time()
+        _update_cache(_scan_recordings_all())
     except Exception:
         pass
     finally:
@@ -224,13 +233,24 @@ def _rescan_recordings():
 
 
 def get_recordings():
-    """Cached recordings list; a rescan runs in the background when the
-    cache is older than REC_SCAN_STALE_SECS (never blocks the caller)."""
+    """Cached recordings list. The first call (or a change of the
+    recording dirs) scans synchronously; afterwards a stale cache is
+    refreshed in a BACKGROUND thread — the NFS archive scan must never
+    block the caller (it ran inside the waterfall WebSocket push loop
+    and froze the waterfall rows on page reload)."""
     global _REC_SCANNING
     with _REC_LOCK:
         cache = list(_REC_CACHE)
+        dirs = (os.path.realpath(RECORD_DIR),
+                os.path.realpath(RECORD_LOCAL_DIR))
+        empty = not _REC_CACHE
+        changed = _REC_DIRS != dirs
         stale = time.time() - _REC_LAST > REC_SCAN_STALE_SECS
         busy = _REC_SCANNING
+    if empty or changed:
+        _rescan_recordings()          # synchronous: first use / moved dirs
+        with _REC_LOCK:
+            return list(_REC_CACHE)
     if stale and not busy:
         _REC_SCANNING = True
         threading.Thread(target=_rescan_recordings, daemon=True).start()
