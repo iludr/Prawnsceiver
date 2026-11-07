@@ -144,9 +144,12 @@ def push_wf_row(entry, c, k, sig_bins):
         c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window)))
     center = len(magnitude) // 2
     rot = int(SDR_OFFSET_HZ / SDR_RATE * FFT_SIZE)
-    db_row = np.roll((20 * np.log10(
-        np.maximum(magnitude, 1e-6)
-        / (31.875 * FFT_SIZE)) * 10).astype(np.int16), rot).tobytes()
+    # linear magnitude row (uint16, |X|*512, rolled past the DC
+    # offset): the browser converts to dBFS + color, keeping the
+    # per-bin log10 off the server (full scale |X| ~ 0.25*FFT_SIZE
+    # saturates the u2)
+    lin_row = np.roll(np.minimum(magnitude * 512.0, 65535.0)
+                      .astype('<u2'), rot).tobytes()
     rolled = np.roll(magnitude, rot)
     with entry["lock"]:
         entry["last_mag"] = rolled.astype(np.float32)
@@ -155,10 +158,10 @@ def push_wf_row(entry, c, k, sig_bins):
             magnitude[center - sig_bins:center + sig_bins].mean())
         peak = magnitude.max()
         if peak > 0:
-            entry["wf_db"].append(db_row)
+            entry["wf_db"].append(lin_row)
             if _wf_row_hook is not None:
                 try:
-                    _wf_row_hook(entry["wf_db_seq"], db_row)
+                    _wf_row_hook(entry["wf_db_seq"], lin_row)
                 except Exception:
                     pass
         entry["wf_db_seq"] += 1
@@ -1566,25 +1569,24 @@ def _wf_thread(did):
                         if now_ts - last_history_append >= 1.0:
                             last_history_append = now_ts
                             state.signal_history.append(band)
-                # dBFS row for the WebSocket feed: absolute per-bin
-                # level, computed BEFORE the display normalization below
-                # (which rescales to the row max and destroys level).
-                # Full scale: a +/-127.5 amplitude sine, Hann-windowed,
-                # peaks at sum(window)/2 = 0.25 * FFT_SIZE of |X|.
-                db_row = (20 * np.log10(
-                    np.maximum(magnitude, 1e-6)
-                    / (31.875 * FFT_SIZE)) * 10).astype(np.int16).tobytes()
+                # Linear magnitude row for the WebSocket feed (uint16,
+                # |X|*512): the browser converts to dBFS + color, so the
+                # per-bin log10 stays off the server. Full scale: a
+                # +/-127.5 sine, Hann-windowed, peaks at
+                # sum(window)/2 = 0.25 * FFT_SIZE of |X| (saturates u2).
+                lin_row = np.minimum(magnitude * 512.0, 65535.0) \
+                    .astype('<u2').tobytes()
                 with entry['lock']:
-                    entry['wf_db'].append(db_row)
+                    entry['wf_db'].append(lin_row)
                     entry['wf_db_seq'] += 1
                     if _wf_row_hook is not None:
                         try:
-                            _wf_row_hook(entry['wf_db_seq'], db_row)
+                            _wf_row_hook(entry['wf_db_seq'], lin_row)
                         except Exception:
                             pass
                     mm = entry.get('manual_meta')
                     if mm is not None:
-                        mm['wf'].append(db_row)
+                        mm['wf'].append(lin_row)
         except Exception as e:
             error_ts = time.monotonic()
             if error_ts - fft_error_log_at >= 10:
@@ -1755,16 +1757,17 @@ def sdr_capture_thread(did):
             pass
         base = meta['base']
         iq_path = base + '.iq.u8'
-        rows = (np.frombuffer(b"".join(meta['wf']), dtype=np.int16)
+        rows = (np.frombuffer(b"".join(meta['wf']), dtype='<u2')
                 .reshape(-1, FFT_SIZE)
                 if len(meta['wf']) else
-                np.zeros((0, FFT_SIZE), dtype=np.int16))
+                np.zeros((0, FFT_SIZE), dtype='<u2'))
         png_path = None
         if len(rows) >= 8:
             try:
                 from PIL import Image
-                lo = float(rows.max()) - 600.0    # 60 dB display window
-                img = np.clip((rows - lo) * (255.0 / 600.0),
+                hi = float(rows.max())
+                lo = hi / 1000.0                  # 60 dB window, linear domain
+                img = np.clip((rows - lo) * (255.0 / max(1.0, hi - lo)),
                               0, 255).astype(np.uint8)
                 Image.fromarray(img[::-1], mode='L').save(base + '.png')
                 png_path = base + '.png'

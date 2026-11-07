@@ -977,17 +977,17 @@
             if (b.dbContrast !== 1) t = Math.pow(t, b.dbContrast);
             return t * 255;
         }
-        // Fallback (polling) rows are per-row normalized 0..255 with no
-        // absolute level. Converting them to a FIXED pseudo-dB scale
-        // (0..255 -> -130..-30 dBFS) gives every control real meaning on
-        // the degraded path - the previous mapping defined the pseudo-dB
-        // window RELATIVE to the controls, which made Offset (and Range)
-        // algebraically cancel themselves. The absolute anchors are a
-        // fabrication, but a consistent one: peaks read ~-30 dBFS.
-        function normToDb(norm) {
+        // Waterfall rows arrive as LINEAR magnitudes (uint16, |X|*512;
+        // full scale |X| = 0.25*FFT_SIZE saturates). Convert to dBFS*10
+        // here in the browser — the per-bin log10 stays off the server.
+        const LIN_FULLSCALE = 31.875 * 512;   // dBFS reference (0.25*FFT*2)
+        function linToDb(lin) {
             const out = new Int16Array(512);
-            for (let i = 0; i < 512; i++)
-                out[i] = Math.round(((norm[i] / 255) * 100 - 130) * 10);
+            for (let i = 0; i < 512; i++) {
+                const mag = lin[i] / 512;
+                out[i] = Math.round(20 * Math.log10(Math.max(mag, 1e-6)
+                                                   / LIN_FULLSCALE) * 10);
+            }
             return out;
         }
         // srcBin: the visible slice of the 512-bin row is stretched across
@@ -1154,14 +1154,12 @@
         // [type=1][u16be id_len][id utf8][512 x int16le dB*10]. The client
         // sets its own row rate with a text frame ('rate=60'). Whenever the
         // socket is not open, fetchWaterfall falls back to the
-        // /waterfall.json polling (normalized rows -> normToDb).
-        // One retained INPUT row: { db: Int16Array | null, norm: array | null }
-        // - dB rows off the WebSocket, normalized rows off the polling
-        // fallback. The ring keeps the raw input (NOT the mapped palette
-        // levels), so every control or zoom change can re-map the whole
-        // retained history via replayWaterfall - on both feed paths.
+        // One retained INPUT row: { db: Int16Array } - linear rows
+        // converted to dB at ingest (WebSocket binary and the
+        // /waterfall.json polling fallback alike). The ring keeps the
+        // dB input (NOT the mapped palette levels), so every control or
+        // zoom change can re-map the retained history via replayWaterfall.
         function wfRowIn(b, entry) {
-            if (!entry.db && entry.norm) entry.db = normToDb(entry.norm);
             entry.receivedAt = Date.now();
             b.rowTs.push(performance.now());
             if (b.rowTs.length > 240) b.rowTs.shift();
@@ -1272,10 +1270,11 @@
                     const did = wfDecoder.decode(u.subarray(3, 3 + nlen));
                     const b = wfBlocks[did];
                     if (!b) return;
-                    // slice(): the payload offset is byte-aligned, Int16Array
-                    // needs an aligned buffer - the copy also detaches it
-                    const row = new Int16Array(ev.data.slice(3 + nlen));
-                    wfRowIn(b, { db: row, norm: null });
+                    // slice(): the payload offset is byte-aligned - the
+                    // copy also detaches it; rows are uint16 linear
+                    // magnitudes, converted to dB in the browser
+                    const row = linToDb(new Uint16Array(ev.data.slice(3 + nlen)));
+                    wfRowIn(b, { db: row });
                 };
                 // back off 5 -> 10 -> 20 -> 40 -> 60 s while the socket
                 // stays unavailable (e.g. nginx not proxying it yet -
@@ -1588,7 +1587,7 @@
                     const r = await fetch('/waterfall.json?d=' + encodeURIComponent(idx) + '&last=1');
                     const data = await r.json();
                     if (data.length > 0)
-                        wfRowIn(b, { db: null, norm: data[data.length - 1] });
+                        wfRowIn(b, { db: linToDb(data[data.length - 1]) });
                 } catch(e) {}
             }
         }

@@ -522,9 +522,9 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # WebSocket push of dBFS spectrum rows (see _waterfall_websocket)
             self._waterfall_websocket()
         elif self.path.startswith('/waterfall.json'):
-            # wf_db rows are dBFS*10 int16 byte strings off the live
-            # capture threads; convert to the 0-255 norm scale the
-            # client's palette expects, lazily at request time
+            # wf_db rows are linear uint16 magnitude rows (|X|*512) off
+            # the live capture threads; ship them as plain int lists —
+            # the client converts to dBFS (log10 stays in the browser)
             query = self._query()
             dev = (query.get('d') or [''])[0] or (state.primary_dongle or '')
             entry = state.sdrs.get(dev)
@@ -535,9 +535,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                         rows = [entry['wf_db'][-1]] if entry['wf_db'] else []
                     else:
                         rows = list(entry['wf_db'])
-            data = [np.clip((np.frombuffer(r, '<i2') + 1300)
-                            * 0.255, 0, 255).astype(int).tolist()
-                    for r in rows]
+            data = [np.frombuffer(r, '<u2').tolist() for r in rows]
             self._send_json(data, code=200)
         elif self.path == '/dongles.json':
             self._send_json(_dongle_list(), code=200)
