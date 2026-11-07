@@ -2584,3 +2584,12 @@ A dongle in the ADS-B role now hides its waterfall block and embeds the
 live aircraft map (same /adsb.json data as the /adsb page, Leaflet
 loaded on demand, "→ full page" link) in its place. The control card
 stays visible so the role can be switched back.
+
+## 2026-11-07 ~13:00 — ✈️ readsb service now follows the ADS-B role (c7bc31c)
+
+Leaving the ADS-B role on the 1234 dongle now stops the readsb service
+(its bridge held the dongle's single rtl_tcp client slot, blocking the
+dongle for other roles); entering the role starts it again. Managed
+passwordless via a narrow sudoers rule (/etc/sudoers.d/prawnsdr-readsb:
+only start/stop/restart/is-active of readsb.service). Verified live:
+role off -> readsb inactive, role on -> active + aircraft decoding.
