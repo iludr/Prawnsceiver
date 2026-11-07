@@ -602,7 +602,7 @@
                 const seen = {};
                 for (const a of data.aircraft) {
                     if (a.lat === undefined || a.lat === null || a.lon === undefined || a.lon === null) continue;
-                    if (now - (a.last_seen || 0) > 600) continue;
+                    if (now - (a.last_seen || 0) > 120) continue;
                     seen[a.icao] = true;
                     b.miniMarkers = b.miniMarkers || {};
                     let m = b.miniMarkers[a.icao];

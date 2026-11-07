@@ -238,7 +238,7 @@ async function drawTrack(icao) {
     }
 }
 
-setInterval(() => { if (!adsbWsLive()) loadRegistry(); }, 30000);
+setInterval(loadRegistry, 30000);   // also while the WS is live: the registry has no WS topic
 setInterval(loadCoverage, 300000);
 loadRegistry();
 document.getElementById('trackmode-btn').addEventListener('click', toggleTrackMode);
@@ -255,7 +255,7 @@ document.getElementById('reg-next').addEventListener('click',
 
 let map = null, markers = {}, fitted = false;
 let regAircraft = [];
-let mapStats = { onMap: 0, stale: 0, noPos: 0 };
+let mapStats = { onMap: 0, noPos: 0 };
 
 function initMap() {
     if (typeof L === 'undefined') {
@@ -311,13 +311,12 @@ function planeIcon(a) {
     const shape = '<svg width="22" height="22" viewBox="0 0 24 24">'
         + '<path d="M12 1 L14 9 L21 12 L14 14.5 L14 19 L12 23 L10 19 L10 14.5 L3 12 L10 9 Z"'
         + ' fill="' + color + '" stroke="#10131f" stroke-width="0.8"/></svg>';
-    const stale = (Date.now() / 1000 - (heard[a.icao] || 0)) > 120;
     return L.divIcon({
         className: '',
         iconSize: [28, 28],
         iconAnchor: [14, 14],
         popupAnchor: [0, -12],
-        html: '<div class="planeIcon' + (stale ? ' stale' : '')
+        html: '<div class="planeIcon'
             + (selectedPlane === a.icao ? ' sel' : '')
             + (a.military ? ' mil' : '') + '">'
             + '<div class="rot" style="transform: rotate(' + rot + 'deg)">' + shape + '</div>'
@@ -365,7 +364,6 @@ async function loadCoverage() {
 function updateMapStats() {
     document.getElementById('mapstats').textContent =
         mapStats.onMap + ' aircraft with position on the map'
-        + (mapStats.stale ? ' · ' + mapStats.stale + ' faded (not heard for 2+ min)' : '')
         + (mapStats.noPos ? ' · ' + mapStats.noPos + ' without position yet' : '')
         + (coverageInfo.points
             ? ' · coverage: ' + coverageInfo.points + ' aircraft positions'
@@ -388,7 +386,7 @@ function updateMap(aircraft) {
     if (!map) return;
     const now = Date.now() / 1000;
     const seen = new Set();
-    let onMap = 0, noPos = 0, staleCount = 0;
+    let onMap = 0, noPos = 0;
     for (const a of aircraft) {
         if (a.lat === undefined || a.lat === null || a.lon === undefined || a.lon === null) { noPos++; continue; }
         seen.add(String(a.icao));
@@ -415,8 +413,6 @@ function updateMap(aircraft) {
         } else {
             f.ac = a;    // fresher row (callsign etc) for the popup
         }
-        const age = Math.max(0, Math.round(now - (heard[a.icao] || now)));
-        if (age > 120) staleCount++;
         let m = markers[a.icao];
         if (!m) {
             m = markers[a.icao] = L.marker([a.lat, a.lon], { title: a.callsign || a.icao }).addTo(map);
@@ -433,10 +429,15 @@ function updateMap(aircraft) {
         m.setIcon(planeIcon(a));
     }
     for (const k of Object.keys(markers)) {
-        if (!seen.has(k)) { map.removeLayer(markers[k]); delete markers[k]; delete lastFix[k]; delete heard[k]; }
+        // drop from the map when absent from the push OR not heard for
+        // MARKER_MAX_AGE_S — a gone-quiet plane must not linger as a
+        // faded ghost (the registry still keeps it)
+        if (!seen.has(k) || now - (heard[k] || 0) > MARKER_MAX_AGE_S) {
+            map.removeLayer(markers[k]); delete markers[k]; delete lastFix[k]; delete heard[k];
+        }
     }
     if (onMap && !fitted) fitted = true, fitAircraft();
-    mapStats = { onMap: onMap, stale: staleCount, noPos: noPos };
+    mapStats = { onMap: onMap, noPos: noPos };
     updateMapStats();
 }
 
@@ -447,6 +448,7 @@ function updateMap(aircraft) {
 // projection is capped so a plane that goes silent freezes in place
 // instead of flying off into fantasy; the next real fix snaps the
 // marker back onto the true path. Grounded planes never move.
+const MARKER_MAX_AGE_S = 120;  // map drops planes not heard for this long
 const EXTRAP_MS = 5000;        // advance the markers every 5 s
 const EXTRAP_MAX_SECS = 120;   // never project further than this
 const lastFix = {};            // icao -> last real fix + the aircraft row
