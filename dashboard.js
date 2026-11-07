@@ -530,9 +530,19 @@
         function escHtml(s) {
             return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
+        function miniAdsbAltColor(a) {
+            if (a.military) return '#e74c3c';
+            if (a.onground) return '#f39c12';
+            const alt = a.alt_ft;
+            if (alt === undefined || alt === null) return '#4da6ff';
+            if (alt < 10000) return '#4da6ff';
+            if (alt < 20000) return '#53d769';
+            if (alt < 30000) return '#f1c40f';
+            return '#b39ddb';
+        }
         function miniPlaneIcon(a) {
             const rot = (a.track_deg !== undefined && a.track_deg !== null) ? a.track_deg : 0;
-            const color = a.military ? '#e74c3c' : (a.onground ? '#f39c12' : '#4da6ff');
+            const color = miniAdsbAltColor(a);
             const shape = '<svg width="20" height="20" viewBox="0 0 24 24">'
                 + '<path d="M12 1 L14 9 L21 12 L14 14.5 L14 19 L12 23 L10 19 L10 14.5 L3 12 L10 9 Z"'
                 + ' fill="' + color + '" stroke="#10131f" stroke-width="0.8"/></svg>';

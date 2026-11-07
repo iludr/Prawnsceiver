@@ -268,11 +268,22 @@ function planePopup(a, age) {
         + '<br>' + pos + ' · last seen ' + seenAt + ' (' + age + ' s ago)';
 }
 
+// Marker color: military (ICAO 24-bit block heuristic) always red, on
+// the ground always orange, airborne colored by altitude band.
+function adsbAltColor(a) {
+    if (a.military) return '#e74c3c';
+    if (a.onground) return '#f39c12';
+    const alt = a.alt_ft;
+    if (alt === undefined || alt === null) return '#4da6ff';
+    if (alt < 10000) return '#4da6ff';        // low: blue
+    if (alt < 20000) return '#53d769';        // mid: green
+    if (alt < 30000) return '#f1c40f';        // high: yellow
+    return '#b39ddb';                          // very high: purple
+}
+
 function planeIcon(a) {
     const rot = (a.track_deg !== undefined && a.track_deg !== null) ? a.track_deg : 0;
-    // military (ICAO 24-bit address in a military block) overrides the
-    // airborne/ground colors — the whole point is to spot them at a glance
-    const color = a.military ? '#e74c3c' : (a.onground ? '#f39c12' : '#4da6ff');
+    const color = adsbAltColor(a);
     const shape = '<svg width="22" height="22" viewBox="0 0 24 24">'
         + '<path d="M12 1 L14 9 L21 12 L14 14.5 L14 19 L12 23 L10 19 L10 14.5 L3 12 L10 9 Z"'
         + ' fill="' + color + '" stroke="#10131f" stroke-width="0.8"/></svg>';
