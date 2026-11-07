@@ -266,8 +266,14 @@ def main():
             from ..decoding.pocsag import pocsag_capture_thread
             t = threading.Thread(target=pocsag_capture_thread, args=(did,), daemon=True)
         elif entry.get('adsb'):
-            from ..decoding.adsb import adsb_capture_thread
-            t = threading.Thread(target=adsb_capture_thread, args=(did,), daemon=True)
+            from ..decoding import adsb_readsb
+            if adsb_readsb.is_readsb_dongle(did):
+                # readsb owns this dongle's rtl_tcp feed — leave the slot
+                # free; the master's readsb consumer decodes its output
+                t = None
+            else:
+                from ..decoding.adsb import adsb_capture_thread
+                t = threading.Thread(target=adsb_capture_thread, args=(did,), daemon=True)
         elif entry.get('dab'):
             from ..decoding.dab import dab_capture_thread
             t = threading.Thread(target=dab_capture_thread, args=(did,), daemon=True)
@@ -276,7 +282,8 @@ def main():
             t = threading.Thread(target=ism_capture_thread, args=(did,), daemon=True)
         else:
             t = threading.Thread(target=radio.sdr_capture_thread, args=(did,), daemon=True)
-        t.start()
+        if t is not None:
+            t.start()
 
 
 if __name__ == '__main__':

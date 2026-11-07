@@ -1421,6 +1421,9 @@ def sdr_thread():
 
     With DONGLE_WORKER_PROCESSES the same job is done by one subprocess
     per dongle (see _worker_supervisor) — full OS-level isolation."""
+    from ..decoding import adsb_readsb
+    threading.Thread(target=adsb_readsb.readsb_supervisor, daemon=True,
+                     name='readsb-sched').start()
     if DONGLE_WORKER_PROCESSES:
         _worker_supervisor()
         return
@@ -1451,9 +1454,16 @@ def sdr_thread():
                     t = threading.Thread(target=pocsag_capture_thread, args=(did,),
                                          daemon=True, name=f'pocsag-{did}')
                 elif entry.get('adsb'):
-                    from ..decoding.adsb import adsb_capture_thread
-                    t = threading.Thread(target=adsb_capture_thread, args=(did,),
-                                         daemon=True, name=f'adsb-{did}')
+                    from ..decoding import adsb_readsb
+                    if adsb_readsb.is_readsb_dongle(did):
+                        # readsb owns this dongle's rtl_tcp feed — do not
+                        # connect ourselves; the master's readsb consumer
+                        # (adsb_readsb.readsb_supervisor) decodes its output
+                        t = None
+                    else:
+                        from ..decoding.adsb import adsb_capture_thread
+                        t = threading.Thread(target=adsb_capture_thread, args=(did,),
+                                             daemon=True, name=f'adsb-{did}')
                 elif entry.get('dab'):
                     from ..decoding.dab import dab_capture_thread
                     t = threading.Thread(target=dab_capture_thread, args=(did,),
@@ -1465,8 +1475,9 @@ def sdr_thread():
                 else:
                     t = threading.Thread(target=sdr_capture_thread, args=(did,),
                                          daemon=True, name=f'sdr-{did}')
-                t.start()
-                threads[did] = t
+                if t is not None:
+                    t.start()
+                    threads[did] = t
         # Threads of removed dongles leave the map on their own death
         for did in [d for d, t in threads.items() if not t.is_alive()]:
             threads.pop(did, None)
