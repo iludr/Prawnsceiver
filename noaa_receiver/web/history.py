@@ -2,6 +2,8 @@
 import glob
 import json
 import os
+import threading
+import time
 from datetime import datetime, timedelta
 
 from .. import db
@@ -181,13 +183,20 @@ def _scan_recordings(root, qualities, active_wav):
     return recordings
 
 
-def get_recordings():
-    """List available recordings (with reception quality where known).
+# The recordings list is cached and rescanned in the BACKGROUND: the
+# archive is a network share (hundreds of files, several stat calls
+# each), so a synchronous scan blocks callers for seconds — it ran
+# inside the waterfall WebSocket push loop (via the status/recordings
+# topics) and froze the waterfall rows on page reload.
+_REC_CACHE = []
+_REC_LOCK = threading.Lock()
+_REC_LAST = 0.0
+_REC_SCANNING = False
+REC_SCAN_STALE_SECS = 15.0
 
-    The fresh recordings sit in the LOCAL capture dir (RECORD_LOCAL_DIR)
-    until the archiver moves them to the archive (RECORD_DIR - a network
-    share); both are listed, the local copy winning while a family
-    straddles the two mid-move. A single-directory setup scans once."""
+
+def _scan_recordings_all():
+    """The real scan (former get_recordings body)."""
     qualities = quality_map()
     with state.status_lock:
         active_wav = state.current_wav_path if state.is_recording else None
@@ -199,3 +208,30 @@ def get_recordings():
     for r in local:
         merged[r["filename"]] = r
     return [merged[k] for k in sorted(merged, reverse=True)]
+
+
+def _rescan_recordings():
+    global _REC_LAST, _REC_SCANNING, _REC_CACHE
+    try:
+        recs = _scan_recordings_all()
+        with _REC_LOCK:
+            _REC_CACHE = recs
+            _REC_LAST = time.time()
+    except Exception:
+        pass
+    finally:
+        _REC_SCANNING = False
+
+
+def get_recordings():
+    """Cached recordings list; a rescan runs in the background when the
+    cache is older than REC_SCAN_STALE_SECS (never blocks the caller)."""
+    global _REC_SCANNING
+    with _REC_LOCK:
+        cache = list(_REC_CACHE)
+        stale = time.time() - _REC_LAST > REC_SCAN_STALE_SECS
+        busy = _REC_SCANNING
+    if stale and not busy:
+        _REC_SCANNING = True
+        threading.Thread(target=_rescan_recordings, daemon=True).start()
+    return cache
