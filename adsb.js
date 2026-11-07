@@ -368,6 +368,7 @@ function planeIcon(a) {
 // so the shape shows what our sky has EVER covered, not just the
 // current session. Refreshed every 5 min, live planes keep markers.
 let coverageLayer = null, coverageInfo = { points: 0 };
+let lastHullSig = '';   // mapped-aircraft set the hull was last drawn from
 // Coverage hull window: null = the all-time registry hull (the
 // original behavior), else the slider's hour count — only aircraft
 // HEARD within that window contribute their last position.
@@ -475,6 +476,13 @@ function updateMap(aircraft) {
     if (onMap && !fitted) fitted = true, fitAircraft();
     mapStats = { onMap: onMap, noPos: noPos };
     updateMapStats();
+    // the coverage hull follows the map: reload it when the set of
+    // mapped aircraft changed (new plane heard / one dropped)
+    const sig = [...seen].sort().join(',');
+    if (sig !== lastHullSig) {
+        lastHullSig = sig;
+        loadCoverage();
+    }
 }
 
 // ---------- dead reckoning: planes glide between real fixes ----------
