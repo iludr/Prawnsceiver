@@ -140,7 +140,9 @@
             .pass-row { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 48px minmax(56px, auto); }
             .pass-freq { display: none; }
         }
-    </style>
+    /* military planes blink on the ADS-B mini map */
+@keyframes prawn-milblink { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+</style>
 </head>
 <body>
     <div id="header">

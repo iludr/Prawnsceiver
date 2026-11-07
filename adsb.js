@@ -272,17 +272,18 @@ function initMap() {
     document.getElementById('fitbtn').onclick = () => { fitted = false; fitAircraft(); };
 }
 
-// Marker color: military (ICAO 24-bit block heuristic) always red, on
-// the ground always orange, airborne colored by altitude band.
+// Marker color: airborne planes get a continuous altitude gradient —
+// orange at low altitude through to violet at very high altitude;
+// on the ground is grey; military is red and blinks (CSS class 'mil').
 function adsbAltColor(a) {
-    if (a.military) return '#e74c3c';
-    if (a.onground) return '#f39c12';
+    // military is NOT red — the blink (CSS class 'mil') marks it; the
+    // color stays on the altitude gradient like every other plane
+    if (a.onground) return '#888888';
     const alt = a.alt_ft;
-    if (alt === undefined || alt === null) return '#4da6ff';
-    if (alt < 10000) return '#4da6ff';        // low: blue
-    if (alt < 20000) return '#53d769';        // mid: green
-    if (alt < 30000) return '#f1c40f';        // high: yellow
-    return '#b39ddb';                          // very high: purple
+    if (alt === undefined || alt === null) return '#f39c12';
+    const t = Math.min(1, Math.max(0, alt / 45000));   // 0..45k ft
+    const hue = 30 + (270 - 30) * t;                    // orange -> violet
+    return 'hsl(' + Math.round(hue) + ', 85%, 55%)';
 }
 
 // ---------- selection: registry row click <-> map marker click ----------
@@ -317,7 +318,8 @@ function planeIcon(a) {
         iconAnchor: [14, 14],
         popupAnchor: [0, -12],
         html: '<div class="planeIcon' + (stale ? ' stale' : '')
-            + (selectedPlane === a.icao ? ' sel' : '') + '">'
+            + (selectedPlane === a.icao ? ' sel' : '')
+            + (a.military ? ' mil' : '') + '">'
             + '<div class="rot" style="transform: rotate(' + rot + 'deg)">' + shape + '</div>'
             + (a.callsign ? '<div class="lbl">' + esc(a.callsign) + '</div>' : '')
             + '</div>'
