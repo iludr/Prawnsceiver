@@ -2577,3 +2577,10 @@ decoder. Note: the waterfall on a readsb-backed dongle is frozen while
 in ADS-B mode (readsb owns the IQ), and readsb keeps the dongle's
 rtl_tcp slot even after prawnceiver leaves the role (stop the readsb
 service to fully free 1234).
+
+## 2026-11-07 ~12:20 — ✈️ Dashboard: ADS-B dongle shows the live map, not the waterfall
+
+A dongle in the ADS-B role now hides its waterfall block and embeds the
+live aircraft map (same /adsb.json data as the /adsb page, Leaflet
+loaded on demand, "→ full page" link) in its place. The control card
+stays visible so the role can be switched back.

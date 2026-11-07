@@ -440,6 +440,20 @@
             const wfPart = document.createElement('div');
             wfPart.className = 'dongle-block-wf';
             wfPart.appendChild(row); wfPart.appendChild(labels);
+            // In the ADS-B role the waterfall is replaced by the live
+            // aircraft map (same data as the /adsb page) — readsb owns
+            // the dongle's IQ, so no waterfall rows flow anyway
+            const mapWrap = document.createElement('div');
+            mapWrap.className = 'adsb-minimap';
+            mapWrap.style.cssText = 'display:none;position:relative;height:' + WF_HEIGHT + 'px;background:#000;border:1px solid #0f3460;border-radius:4px;overflow:hidden;';
+            const mapBar = document.createElement('div');
+            mapBar.style.cssText = 'position:absolute;top:0;left:0;right:0;z-index:500;display:flex;justify-content:space-between;padding:2px 6px;background:rgba(0,0,0,0.65);color:#a8b8d8;font-size:0.75em;pointer-events:none;';
+            mapBar.innerHTML = '<span id="adsb-mini-stats-' + meta.id + '">✈️ ADS-B live map</span><a href="/adsb" style="pointer-events:auto;color:#4da6ff;text-decoration:none;">→ full page</a>';
+            mapWrap.appendChild(mapBar);
+            const mapEl = document.createElement('div');
+            mapEl.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;';
+            mapWrap.appendChild(mapEl);
+            wfPart.appendChild(mapWrap);
             // The dongle control card is created into this holder — waterfall
             // and controls form ONE container, collapsed together
             const cardHolder = document.createElement('div');
@@ -455,6 +469,8 @@
                 timeCtx, dbScaleCtx, overlay, hover, title, led, selHl, selLbl,
                 wfBufCtx: wfBuf.getContext('2d'), timeBufCtx: timeBuf.getContext('2d'),
                 block, collapseBtn, cardBtn, cardHolder, freqLabels,
+                wfPart, rowEl: row, labelsEl: labels, mapWrap, mapEl,
+                mapOn: false,
                 serial: meta.id, centerMHz: null,
                 zoom: 1, zoomOffKHz: 0, recHl: hl, zoomBadge, satLine, satLineLbl,
                 // dB spectrum state: ring of recent int16 dB*10 rows,
@@ -488,6 +504,114 @@
             if (wfOverlayOn) { overlay.style.display = 'block'; drawWfOverlay(); }
             return b;
         }
+
+        // ---------- mini ADS-B map (shown instead of the waterfall) ----------
+        // A dongle in the ADS-B role gets the live aircraft map from the
+        // /adsb page embedded in its waterfall block (readsb owns the
+        // dongle's IQ when it is readsb-fed, so no waterfall flows).
+        let leafletPromise = null;   // per-block state lives on b.miniMap/b.miniMarkers/b.miniFitted
+        function loadLeaflet() {
+            if (window.L) return Promise.resolve(true);
+            if (!leafletPromise) {
+                leafletPromise = new Promise(res => {
+                    const css = document.createElement('link');
+                    css.rel = 'stylesheet';
+                    css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+                    document.head.appendChild(css);
+                    const s = document.createElement('script');
+                    s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+                    s.onload = () => res(true);
+                    s.onerror = () => res(false);
+                    document.head.appendChild(s);
+                });
+            }
+            return leafletPromise;
+        }
+        function escHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        }
+        function miniPlaneIcon(a) {
+            const rot = (a.track_deg !== undefined && a.track_deg !== null) ? a.track_deg : 0;
+            const color = a.military ? '#e74c3c' : (a.onground ? '#f39c12' : '#4da6ff');
+            const shape = '<svg width="20" height="20" viewBox="0 0 24 24">'
+                + '<path d="M12 1 L14 9 L21 12 L14 14.5 L14 19 L12 23 L10 19 L10 14.5 L3 12 L10 9 Z"'
+                + ' fill="' + color + '" stroke="#10131f" stroke-width="0.8"/></svg>';
+            return L.divIcon({
+                className: '',
+                iconSize: [26, 26],
+                iconAnchor: [13, 13],
+                popupAnchor: [0, -11],
+                html: '<div style="transform:rotate(' + rot + 'deg);width:20px;height:20px;">' + shape + '</div>'
+            });
+        }
+        async function applyAdsbMapView(b, d) {
+            const on = !!d.adsb;
+            if (on === b.mapOn) return;
+            b.mapOn = on;
+            b.rowEl.style.display = on ? 'none' : '';
+            b.labelsEl.style.display = on ? 'none' : '';
+            b.mapWrap.style.display = on ? 'block' : 'none';
+            if (on) {
+                const ok = await loadLeaflet();
+                if (!ok || b.mapOn !== true) return;
+                if (!b.miniMap) {
+                    b.miniMap = L.map(b.mapEl, { zoomControl: true }).setView([48.99, 12.09], 5);
+                    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        maxZoom: 19,
+                        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    }).addTo(b.miniMap);
+                    setTimeout(() => b.miniMap && b.miniMap.invalidateSize(), 50);
+                }
+                b.miniMap.invalidateSize();
+            } else if (b.miniMap) {
+                b.miniMap.invalidateSize();
+            }
+        }
+        // refresh the mini map from /adsb.json while any block shows it
+        setInterval(async () => {
+            let any = false, blocks = [];
+            for (const idx in wfBlocks) {
+                const b = wfBlocks[idx];
+                if (b.mapOn && b.miniMap) { any = true; blocks.push(b); }
+            }
+            if (!any) return;
+            let data;
+            try { data = await (await fetch('/adsb.json')).json(); }
+            catch (e) { return; }
+            for (const b of blocks) {
+                const statsEl = document.getElementById('adsb-mini-stats-' + b.serial);
+                if (statsEl) statsEl.textContent = '✈️ ' + data.aircraft.length + ' aircraft live';
+                const now = Date.now() / 1000;
+                const seen = {};
+                for (const a of data.aircraft) {
+                    if (a.lat === undefined || a.lat === null || a.lon === undefined || a.lon === null) continue;
+                    if (now - (a.last_seen || 0) > 600) continue;
+                    seen[a.icao] = true;
+                    b.miniMarkers = b.miniMarkers || {};
+                    let m = b.miniMarkers[a.icao];
+                    if (!m) {
+                        m = L.marker([a.lat, a.lon], { icon: miniPlaneIcon(a) }).addTo(b.miniMap);
+                        m.bindPopup('<b>' + escHtml(a.callsign || a.icao) + '</b> · ' + escHtml(a.icao)
+                            + (a.military ? ' · 🪖 military' : '') + '<br>'
+                            + (a.alt_ft != null ? a.alt_ft + ' ft · ' : '')
+                            + (a.speed_kt != null ? a.speed_kt + ' kt · ' : '')
+                            + (a.track_deg != null ? a.track_deg + '°' : ''));
+                        b.miniMarkers[a.icao] = m;
+                    } else {
+                        m.setLatLng([a.lat, a.lon]);
+                        m.setIcon(miniPlaneIcon(a));
+                    }
+                }
+                for (const icao in b.miniMarkers) {
+                    if (!seen[icao]) { b.miniMap.removeLayer(b.miniMarkers[icao]); delete b.miniMarkers[icao]; }
+                }
+                if (!b.miniFitted && Object.keys(seen).length) {
+                    b.miniFitted = true;
+                    const pts = data.aircraft.filter(a => seen[a.icao]).map(a => [a.lat, a.lon]);
+                    if (pts.length) b.miniMap.fitBounds(L.latLngBounds(pts).pad(0.15));
+                }
+            }
+        }, 2000);
 
         // ---------- Per-dongle collapse (waterfall + sidebar card) ----------
         // One toggle on the waterfall head hides both the dongle's waterfall
@@ -1400,6 +1524,7 @@
                 }
                 for (const d of dongles) {
                     const b = ensureWfBlock(d);
+                    applyAdsbMapView(b, d);
                     // Frequency axis center for hover/click: the dongle's
                     // manual override if set, else the shared tune frequency
                     // The AIS dongle is parked on 162.000 MHz (both ship
