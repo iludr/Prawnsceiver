@@ -271,6 +271,28 @@ let map = null, markers = {}, fitted = false;
 let regAircraft = [];
 let mapStats = { onMap: 0, noPos: 0 };
 
+// ---------- station position + range rings ----------
+// Black dot at the station (Hochweg 50, Regensburg) with light grey
+// circles every 50 km as a range indicator.
+let stationLayer = null;
+function drawStation(st) {
+    if (!map || !st || st.lat === undefined) return;
+    if (stationLayer) { map.removeLayer(stationLayer); stationLayer = null; }
+    stationLayer = L.layerGroup();
+    for (let km = 50; km <= 400; km += 50) {
+        L.circle([st.lat, st.lon], {
+            radius: km * 1000, color: '#aaaaaa', weight: 1,
+            dashArray: '4 5', fillColor: '#aaaaaa', fillOpacity: 0.04,
+            interactive: false
+        }).addTo(stationLayer);
+    }
+    L.circleMarker([st.lat, st.lon], {
+        radius: 6, color: '#ffffff', weight: 1.5,
+        fillColor: '#000000', fillOpacity: 1
+    }).bindTooltip('Station (Hochweg 50, Regensburg)').addTo(stationLayer);
+    stationLayer.addTo(map);
+}
+
 function initMap() {
     if (typeof L === 'undefined') {
         const d = document.getElementById('map');
@@ -521,6 +543,7 @@ if (covHours && covHoursVal && covAll) {
 
 // ---------- status header + map (WS 'adsb' / /adsb.json) ----------
 function applyAdsbStatus(s) {
+    if (s.station) drawStation(s.station);
     const st = s.stats || {};
     let frames = 0;
     const statTxt = Object.keys(st).map(k => k + ' ' + st[k]).join(' · ');

@@ -596,6 +596,21 @@
             try { data = await (await fetch('/adsb.json')).json(); }
             catch (e) { return; }
             for (const b of blocks) {
+                if (data.station && !b.stationLayer) {
+                    b.stationLayer = L.layerGroup();
+                    for (let km = 50; km <= 400; km += 50) {
+                        L.circle([data.station.lat, data.station.lon], {
+                            radius: km * 1000, color: '#aaaaaa', weight: 1,
+                            dashArray: '4 5', fillColor: '#aaaaaa',
+                            fillOpacity: 0.04, interactive: false
+                        }).addTo(b.stationLayer);
+                    }
+                    L.circleMarker([data.station.lat, data.station.lon], {
+                        radius: 6, color: '#ffffff', weight: 1.5,
+                        fillColor: '#000000', fillOpacity: 1
+                    }).addTo(b.stationLayer);
+                    b.stationLayer.addTo(b.miniMap);
+                }
                 const statsEl = document.getElementById('adsb-mini-stats-' + b.serial);
                 if (statsEl) statsEl.textContent = '✈️ ' + data.aircraft.length + ' aircraft live';
                 const now = Date.now() / 1000;

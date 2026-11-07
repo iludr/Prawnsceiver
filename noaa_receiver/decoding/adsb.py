@@ -889,6 +889,7 @@ def adsb_status():
         serial = state.adsb_dongle
     return {"enabled": enabled, "dongle": serial,
             "freq_mhz": round(ADSB_CENTER_HZ / 1e6, 1),
+            "station": {"lat": LAT, "lon": LON},
             "stats": stats, "aircraft": aircraft, "raw": raw}
 
 
