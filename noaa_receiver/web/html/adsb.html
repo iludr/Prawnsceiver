@@ -27,7 +27,11 @@ tr:hover td { background: #16213e; }
 .na { color: #555; }
 .hex { color: #555; font-size: 0.75em; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 .muted { color: #666; padding: 10px; }
-#mapwrap { margin-bottom: 14px; }
+#toprow { display: flex; gap: 14px; align-items: flex-start; }
+#mapwrap { flex: 1 1 50%; min-width: 0; margin-bottom: 14px; }
+#regwrap { flex: 1 1 50%; min-width: 0; }
+#regwrap .regscroll { max-height: 460px; overflow: auto; border: 1px solid #0f3460; border-radius: 4px; }
+@media (max-width: 1100px) { #toprow { flex-direction: column; } #mapwrap, #regwrap { flex: 1 1 auto; width: 100%; } }
 #mapinfo { font-size: 0.85em; color: #888; margin: 4px 0 6px; display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
 #mapctrl { font-size: 0.85em; color: #888; margin: 0 0 6px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 #covhours { width: 140px; vertical-align: middle; }
@@ -50,7 +54,6 @@ tr:hover td { background: #16213e; }
 .planeIcon.stale .lbl { font-style: italic; }
 .milbadge { color: #e74c3c; font-weight: bold; }
 #maplegend { font-size: 0.85em; }
-#regwrap { margin: 16px 0 14px; }
 #regwrap h2 { font-size: 1.05em; color: #53d769; margin-bottom: 6px; font-weight: normal; }
 #regwrap h2 .cnt { color: #4da6ff; }
 #regwrap details { color: #4da6ff; }
@@ -84,6 +87,7 @@ tr:hover td { background: #16213e; }
     <span id="loadinfo"></span>
 </div>
 <div id="stats">Loading...</div>
+<div id="toprow">
 <div id="mapwrap">
     <div id="mapinfo">
         <span id="mapstats">map: waiting for aircraft positions…</span>
@@ -105,6 +109,7 @@ tr:hover td { background: #16213e; }
         <span id="trackmode-hint"></span>
     </div>
     <h2>📚 Aircraft registry — <span class="cnt" id="regcount">…</span> aircraft heard in the last 24 h, merged fields + their last 10 messages</h2>
+    <div class="regscroll">
     <table>
     <thead><tr id="reghead">
         <th>callsign</th><th>st</th><th>🪖</th><th>ICAO</th><th>alt</th>
@@ -113,11 +118,13 @@ tr:hover td { background: #16213e; }
     </tr></thead>
     <tbody id="regrows"><tr><td colspan="13" class="muted">Loading aircraft registry…</td></tr></tbody>
     </table>
+    </div>
     <div id="regpager" style="margin-top:6px;display:none;">
         <button id="reg-prev" class="pgbtn">&#9664; newer</button>
         <span id="reg-pageinfo" style="color:#888;margin:0 8px;"></span>
         <button id="reg-next" class="pgbtn">older &#9654;</button>
     </div>
+</div>
 </div>
 <table><thead><tr>
     <th>time</th><th>DF</th><th>type</th><th>ICAO</th><th>callsign</th>
