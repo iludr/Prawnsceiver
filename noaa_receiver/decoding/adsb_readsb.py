@@ -74,33 +74,64 @@ def is_readsb_dongle(did):
     return feed is not None and did == feed
 
 
+# The readsb system service is managed via sudo -n with a narrow
+# sudoers rule (/etc/sudoers.d/prawnsdr-readsb: only start/stop/restart/
+# is-active of readsb.service, no password). NOTE: sudo matches the
+# arguments exactly — always pass the full unit name readsb.service.
+_SYSTEMCTL = "/usr/bin/systemctl"
+_SUDO = ["sudo", "-n"] if os.path.exists("/usr/bin/sudo") else []
+
+
+def _readsb_ctl(verb):
+    """systemctl <verb> readsb.service (via sudo -n when needed)."""
+    cmd = _SUDO + [_SYSTEMCTL, verb, "readsb.service"]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=15)
+    except Exception:
+        # fall back to a direct call (works when running as root)
+        try:
+            return subprocess.run([_SYSTEMCTL, verb, "readsb.service"],
+                                  capture_output=True, text=True, timeout=15)
+        except Exception as e:
+            state.log_console(f"readsb {verb} failed: {e}", "warn")
+            return None
+
+
+def _readsb_active():
+    r = _readsb_ctl("is-active")
+    return r is not None and r.stdout.strip() == "active"
+
+
 def ensure_readsb_service():
-    """Best-effort: make sure the readsb service is up (it is enabled
-    and auto-restarts; starting it may need root, which the station
-    user may not have — then just log)."""
-    try:
-        r = subprocess.run(["systemctl", "is-active", "readsb"],
-                           capture_output=True, text=True, timeout=10)
-        if r.stdout.strip() == "active":
-            return True
-    except Exception:
-        pass
-    try:
-        subprocess.run(["systemctl", "start", "readsb"],
-                       capture_output=True, timeout=15)
-    except Exception as e:
-        state.log_console(f"readsb start attempt failed: {e}", "warn")
-    try:
-        r = subprocess.run(["systemctl", "is-active", "readsb"],
-                           capture_output=True, text=True, timeout=10)
-        ok = r.stdout.strip() == "active"
-    except Exception:
-        ok = False
-    if not ok:
+    """Make sure the readsb service is up when a readsb-backed dongle
+    is in the ADS-B role."""
+    if _readsb_active():
+        return True
+    _readsb_ctl("start")
+    if not _readsb_active():
         state.log_console("readsb service is not active — ADS-B via "
-                          "readsb unavailable (start it as root: "
-                          "systemctl start readsb)", "warn")
-    return ok
+                          "readsb unavailable (needs the sudoers rule "
+                          "for readsb.service)", "warn")
+        return False
+    state.log_console("readsb service started — feeding the ADS-B dongle")
+    return True
+
+
+def stop_readsb_service():
+    """Stop readsb when no readsb-backed dongle is in the ADS-B role:
+    its bridge holds the dongle's single rtl_tcp client slot, which
+    would block the dongle for any other role."""
+    if not _readsb_active():
+        return
+    r = _readsb_ctl("stop")
+    if _readsb_active():
+        state.log_console(f"could not stop readsb ({(r.stderr or '').strip()})"
+                          " — the dongle's rtl_tcp slot stays blocked",
+                          "warn")
+    else:
+        state.log_console("readsb service stopped — no dongle in the "
+                          "ADS-B role, rtl_tcp slot freed")
 
 
 def _recv_exact(sock, n):
@@ -297,6 +328,9 @@ def readsb_supervisor():
                         and is_readsb_dongle(state.adsb_dongle)
                 if ours:
                     _reception_off(state.adsb_dongle)
+                # no dongle needs readsb right now: stop the service so
+                # its bridge releases the dongle's rtl_tcp slot
+                stop_readsb_service()
         except Exception as e:
             state.log_console(f"readsb supervisor error: {e}", "error")
         time.sleep(2.0)
