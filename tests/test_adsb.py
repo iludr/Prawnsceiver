@@ -278,6 +278,8 @@ print("12. receiver-reference first fix (48.50, 11.50), mid-range pair"
       " corrects a seed, far pair gated: ok")
 
 # --- 13. path history from the persistent log (/adsb_tracks.json) ---
+from noaa_receiver import io as _io
+_io.flush()   # ADS-B log writes are queued on the I/O thread
 tracks = adsb.aircraft_tracks([TEST_ICAO, "40621D"], 24)
 assert len(tracks[TEST_ICAO]) == 1, tracks
 assert abs(tracks[TEST_ICAO][0]["lat"] - 48.50) < 0.01
@@ -383,7 +385,10 @@ registry = {
     "DEAD01": {"icao": "DEAD01", "lat": 67.55, "lon": -9.56, "last_seen": now},
     "DEAD02": {"icao": "DEAD02", "lat": 31.13, "lon": 31.81, "last_seen": now},
 }
+from noaa_receiver import io as _io2
+_io2.flush()   # land any queued registry save before the direct inserts
 with db.write() as cur:
+    cur.execute("DELETE FROM adsb_aircrafts")   # deterministic hull basis
     for a in registry.values():
         cur.execute("INSERT OR REPLACE INTO adsb_aircrafts VALUES (?,?,?)",
                     (a["icao"], json.dumps(a), now))

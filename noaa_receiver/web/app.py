@@ -89,6 +89,12 @@ def main():
     # (no-op on single-directory setups — see archive.py)
     threading.Thread(target=archive_thread, daemon=True).start()
 
+    # Background disk-I/O thread: all database writes from the decode
+    # paths and other operational writes are serialized here, off the
+    # WebSocket loop / capture / scheduler threads (see io.py)
+    from .. import io as _io
+    _io.start_io_thread()
+
     # Battery status: probe the TCP dongle hosts' PiSugar power managers
     # (WebSocket API on 8422, raw TCP on 8423) in the background — feeds
     # /power.json and the WS 'power' topic (see power.py)

@@ -144,11 +144,11 @@ def push_wf_row(entry, c, k, sig_bins):
         c[k * FFT_SIZE:(k + 1) * FFT_SIZE] * window)))
     center = len(magnitude) // 2
     rot = int(SDR_OFFSET_HZ / SDR_RATE * FFT_SIZE)
-    # linear magnitude row (uint16, |X|*512, rolled past the DC
+    # linear magnitude row (uint16, |X|*2, rolled past the DC
     # offset): the browser converts to dBFS + color, keeping the
     # per-bin log10 off the server (full scale |X| ~ 0.25*FFT_SIZE
     # saturates the u2)
-    lin_row = np.roll(np.minimum(magnitude * 512.0, 65535.0)
+    lin_row = np.roll(np.minimum(magnitude * 2.0, 65535.0)
                       .astype('<u2'), rot).tobytes()
     rolled = np.roll(magnitude, rot)
     with entry["lock"]:
@@ -1570,11 +1570,11 @@ def _wf_thread(did):
                             last_history_append = now_ts
                             state.signal_history.append(band)
                 # Linear magnitude row for the WebSocket feed (uint16,
-                # |X|*512): the browser converts to dBFS + color, so the
+                # |X|*2): the browser converts to dBFS + color, so the
                 # per-bin log10 stays off the server. Full scale: a
                 # +/-127.5 sine, Hann-windowed, peaks at
                 # sum(window)/2 = 0.25 * FFT_SIZE of |X| (saturates u2).
-                lin_row = np.minimum(magnitude * 512.0, 65535.0) \
+                lin_row = np.minimum(magnitude * 2.0, 65535.0) \
                     .astype('<u2').tobytes()
                 with entry['lock']:
                     entry['wf_db'].append(lin_row)

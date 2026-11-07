@@ -586,10 +586,9 @@ _log_lock = threading.Lock()
 _log_appends = 0
 
 
-def log_message(entry):
-    """Append one decoded frame to the station database; trimmed to the
-    last ADSB_LOG_KEEP_HOURS. Database failures never take the capture
-    thread down."""
+def _log_message_write(entry):
+    """The actual INSERT — runs on the I/O thread, never on the
+    decode/capture path (see io.py)."""
     global _log_appends
     with _log_lock:
         try:
@@ -604,6 +603,15 @@ def log_message(entry):
                                 (time.time() - ADSB_LOG_KEEP_HOURS * 3600,))
         except Exception as e:
             state.log_console(f"ADS-B log write failed: {e}", "warn")
+
+
+def log_message(entry):
+    """Append one decoded frame to the station database; trimmed to the
+    last ADSB_LOG_KEEP_HOURS. Enqueued to the I/O thread — a slow disk
+    must not stall the decode path or the WebSocket loop. Database
+    failures never take the caller down."""
+    from .. import io
+    io.submit(_log_message_write, entry)
 
 
 def adsb_log(count=200):
@@ -810,7 +818,8 @@ def _maybe_save_aircrafts():
     if now < _aircrafts_save_at:
         return
     _aircrafts_save_at = now + ADSB_AIRCRAFTS_SAVE_SECS
-    save_aircrafts()
+    from .. import io
+    io.submit(save_aircrafts)
 
 
 def registry_signature():

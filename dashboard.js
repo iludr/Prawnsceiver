@@ -977,14 +977,15 @@
             if (b.dbContrast !== 1) t = Math.pow(t, b.dbContrast);
             return t * 255;
         }
-        // Waterfall rows arrive as LINEAR magnitudes (uint16, |X|*512;
-        // full scale |X| = 0.25*FFT_SIZE saturates). Convert to dBFS*10
-        // here in the browser — the per-bin log10 stays off the server.
+        // Waterfall rows arrive as LINEAR magnitudes (uint16, |X|*2;
+        // clipping starts at |X| = 32767, far above any real signal).
+        // Convert to dBFS*10 here in the browser — the per-bin log10
+        // stays off the server.
         const LIN_FULLSCALE = 31.875 * 512;   // dBFS reference (0.25*FFT*2)
         function linToDb(lin) {
             const out = new Int16Array(512);
             for (let i = 0; i < 512; i++) {
-                const mag = lin[i] / 512;
+                const mag = lin[i] / 2;
                 out[i] = Math.round(20 * Math.log10(Math.max(mag, 1e-6)
                                                    / LIN_FULLSCALE) * 10);
             }
