@@ -527,6 +527,10 @@
             }
             return leafletPromise;
         }
+        function flagEmoji(code) {
+            if (!code || code.length !== 2) return '';
+            return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt(0)));
+        }
         function escHtml(s) {
             return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
@@ -602,6 +606,7 @@
                     if (!m) {
                         m = L.marker([a.lat, a.lon], { icon: miniPlaneIcon(a) }).addTo(b.miniMap);
                         m.bindPopup('<b>' + escHtml(a.callsign || a.icao) + '</b> · ' + escHtml(a.icao)
+                            + (a.country_code ? ' ' + flagEmoji(a.country_code) + ' ' + escHtml(a.country) : '')
                             + (a.military ? ' · 🪖 military' : '') + '<br>'
                             + (a.alt_ft != null ? a.alt_ft + ' ft · ' : '')
                             + (a.speed_kt != null ? a.speed_kt + ' kt · ' : '')

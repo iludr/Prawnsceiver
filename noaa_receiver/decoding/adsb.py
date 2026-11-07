@@ -110,6 +110,9 @@ MILITARY_ICAO_RANGES = (
 )
 
 
+from .adsb_countries import icao_country
+
+
 def is_military_icao(icao):
     """True when the ICAO 24-bit address (the Mode S transponder ID, 6
     hex digits) falls in a military/government block
@@ -133,6 +136,14 @@ _ADSB_DFS = (17, 18)                # extended squitter
 
 assert SDR_RATE >= 2_000_000, "ADS-B PPM demod needs >= 2 samples per us"
 SPS = SDR_RATE / 1e6                # samples per microsecond (2.4 at 2.4 Msps)
+
+
+def _add_country(a):
+    """Attach country/country_code (ICAO block heuristic) to one
+    aircraft dict, like the military flag."""
+    c, cc = icao_country(a["icao"])
+    a["country"] = c
+    a["country_code"] = cc
 
 
 def crc24(bits):
@@ -816,6 +827,7 @@ def aircrafts_registry():
                      key=lambda a: -a.get("last_seen", 0))
         for a in acs:
             a["military"] = is_military_icao(a["icao"])
+            _add_country(a)
         return acs
 
 
@@ -839,6 +851,7 @@ def adsb_status():
                           key=lambda a: -a.get("last_seen", 0))
         for a in aircraft:
             a["military"] = is_military_icao(a["icao"])
+            _add_country(a)
         raw = list(state.adsb_raw)
         stats = dict(state.adsb_stats)
         enabled = state.adsb_enabled

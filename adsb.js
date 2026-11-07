@@ -34,6 +34,12 @@ function stCell(a) {
     return cell(null);
 }
 
+// Country flag from the ISO country code (regional indicator symbols)
+function flagEmoji(code) {
+    if (!code || code.length !== 2) return '';
+    return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt(0)));
+}
+
 // Military flag in its own column (operator request 2026-10-25: the
 // icon sat inline in the ICAO cell, easy to miss).
 function milCell(a) {
@@ -127,7 +133,8 @@ function renderRegistryPage() {
             + '<td class="cs">' + esc(a.callsign || '') + '</td>'
             + stCell(a)
             + milCell(a)
-            + '<td class="icao">' + esc(a.icao)
+            + '<td class="icao">' + (a.country_code ? flagEmoji(a.country_code) + ' ' : '') + esc(a.icao)
+            + (a.country ? ' <span class="na">' + esc(a.country) + '</span>' : '')
             + '</td>'
             + cell(alt)
             + cell(spd)
@@ -261,6 +268,7 @@ function planePopup(a, age) {
         ? a.lat.toFixed(4) + ', ' + a.lon.toFixed(4) : '—';
     const seenAt = new Date(a.last_seen * 1000).toLocaleTimeString();
     return '<b>' + esc(a.callsign || a.icao) + '</b> · ' + esc(a.icao)
+        + (a.country_code ? ' ' + flagEmoji(a.country_code) + ' ' + esc(a.country) : '')
         + (a.military ? ' · <span class="milbadge">🪖 military</span>' : '') + '<br>'
         + (a.alt_ft !== undefined && a.alt_ft !== null ? a.alt_ft + ' ft' : '—')
         + ' · ' + (a.speed_kt !== undefined && a.speed_kt !== null ? a.speed_kt + ' kt' : '—')
