@@ -269,7 +269,7 @@ _WS_TOPICS = {
     'ismlog':       (10.0, lambda p: ism.ism_log(_aislog_count(p))),
     'adsb':         (5.0,  lambda p: adsb.adsb_status()),
     'adsblog':      (10.0, lambda p: adsb.adsb_log(_aislog_count(p))),
-    'adsb_aircrafts': (30.0, lambda p: adsb.aircrafts_registry()),
+    'adsb_aircrafts': (30.0, lambda p: adsb.aircrafts_registry(include_recent=False)),
     'pass_history': (8.0,  lambda p: _load_history()),
 }
 
@@ -641,10 +641,16 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             query = self._query()
             dev = (query.get('d') or [''])[0]
             self._send_json(tuner.tuner_snapshot(dev), code=200)
+        elif self.path.split('?')[0] == '/adsb_msgs.json':
+            # one aircraft's recent message history (the registry page
+            # lazy-loads it when a history row is expanded)
+            icao = (self._query().get('icao') or [''])[0].strip().upper()[:6]
+            self._send_json({'icao': icao,
+                             'recent': adsb.aircraft_messages(icao)}, code=200)
         elif self.path == '/adsb_aircrafts.json':
             # ADS-B: aircraft heard in the last 24 h (persistent
             # registry restored from the adsb_aircrafts table)
-            self._send_json(adsb.aircrafts_registry(), code=200)
+            self._send_json(adsb.aircrafts_registry(include_recent=False), code=200)  # histories lazy-load via /adsb_msgs.json
         elif self.path.startswith('/aprslog.json'):
             # Tail of the persistent decoded-frame log (?count=N, max 2000)
             query = self._query()

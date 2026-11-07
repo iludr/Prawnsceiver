@@ -59,7 +59,7 @@ tr:hover td.cs, tr:hover td.ck { background: #16213e; }
 .planeIcon .rot { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .planeIcon svg { filter: drop-shadow(0 1px 2px rgba(0,0,0,0.9)); }
 .planeIcon .lbl { position: absolute; top: 26px; left: 50%; transform: translateX(-50%); white-space: nowrap; font: 10px monospace; color: #e0e0e0; text-shadow: 0 1px 2px #000, 0 0 2px #000; pointer-events: none; }
-/* military planes blink (red) */
+/* military planes blink (in their altitude color) */
 @keyframes milblink { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
 .planeIcon.mil .rot { animation: milblink 1s infinite; }
 .milbadge { color: #e74c3c; font-weight: bold; }
@@ -101,7 +101,7 @@ tr:hover td.cs, tr:hover td.ck { background: #16213e; }
 <div id="mapwrap">
     <div id="mapinfo">
         <span id="mapstats">map: waiting for aircraft positions…</span>
-        <span id="maplegend" title="Airborne marker color is an altitude gradient: orange = low, violet = very high (up to 45k ft). Grey = on the ground. Blinking = military (ICAO 24-bit block heuristic), in its altitude color.">legend: <span style="color:#f39c12">●</span>low alt → <span style="color:#b39ddb">●</span>high alt (gradient) <span style="color:#888888">●</span> ground · blinking = military <span class="milbadge">🪖</span></span>low alt → <span style="color:#b39ddb">●</span>high alt (gradient) <span style="color:#888888">●</span> ground <span style="color:#e74c3c">●</span> blinking military <span class="milbadge">🪖</span></span>&lt;10k <span style="color:#53d769">●</span>10-20k <span style="color:#f1c40f">●</span>20-30k <span style="color:#b39ddb">●</span>&gt;30k ft <span style="color:#f39c12">●</span> ground <span style="color:#e74c3c">●</span> military <span class="milbadge">🪖</span></span>
+        <span id="maplegend" title="Airborne marker color is an altitude gradient: orange = low, violet = very high (up to 45k ft). Grey = on the ground. Blinking = military (ICAO 24-bit block heuristic), in its altitude color.">legend: <span style="color:#f39c12">●</span> low alt → <span style="color:#b39ddb">●</span> high alt <span style="color:#888888">●</span> ground · blinking = military <span class="milbadge">🪖</span></span>
         <button id="fitbtn" title="Zoom/pan the map to all aircraft">&#8690; fit aircraft</button>
     </div>
     <div id="mapctrl">

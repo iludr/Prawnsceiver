@@ -147,7 +147,8 @@ function renderRegistryPage() {
             + '<td>' + (a.msgs || 0) + '</td>'
             + '<td><details' + (regOpen.has(a.icao) ? ' open' : '')
             + ' ontoggle="regToggle(\'' + esc(a.icao) + '\', this.open)">'
-            + '<summary>' + recent.length + ' messages (last 10)</summary>'
+            + '<summary>' + (a.recent === undefined ? 'load history…'
+                : recent.length + ' messages (last 10)') + '</summary>'
             + '<table class="regmsgs"><thead><tr><th>time</th><th>DF</th>'
             + '<th>type</th><th>callsign</th><th>position</th><th>raw frame</th>'
             + '</tr></thead><tbody>' + msgs + '</tbody></table>'
@@ -172,7 +173,20 @@ async function loadRegistry() {
     }
 }
 
-function regToggle(icao, open) { if (open) regOpen.add(icao); else regOpen.delete(icao); }
+function regToggle(icao, open) {
+    if (open) {
+        regOpen.add(icao);
+        // the registry payload is slimmed (no message history) — fetch
+        // this aircraft's history on first expand
+        const a = regAircraft.find(x => x.icao === icao);
+        if (a && a.recent === undefined) {
+            fetch('/adsb_msgs.json?icao=' + encodeURIComponent(icao))
+                .then(r => r.json())
+                .then(d => { a.recent = d.recent || []; renderRegistryPage(); })
+                .catch(() => {});
+        }
+    } else regOpen.delete(icao);
+}
 
 // ---------- path history on the map (like the AIS ship tracks) ----------
 function toggleTrackMode() {

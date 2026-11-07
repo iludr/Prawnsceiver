@@ -825,22 +825,41 @@ def registry_signature():
                             <= ADSB_REGISTRY_WINDOW_SECS))
 
 
-def aircrafts_registry():
+def aircrafts_registry(include_recent=True):
     """Snapshot for /adsb_aircrafts.json: aircraft heard within
     ADSB_REGISTRY_WINDOW_SECS, newest activity first. The registry in
     memory (and the adsb_aircrafts table behind it) keeps every
     aircraft ever received — older ones just drop off the page. Every
-    entry carries the military flag (ICAO 24-bit block heuristic)."""
+    entry carries the military flag and country (ICAO 24-bit block
+    heuristics). With include_recent=False the per-aircraft message
+    history is left out (WS push / initial load slim it — the page
+    fetches it per aircraft from /adsb_msgs.json on expand); the slim
+    variant copies the dicts so the live state keeps its history."""
     now = time.time()
     with state.adsb_lock:
         acs = sorted((a for a in state.adsb_aircrafts_all.values()
                       if now - a.get("last_seen", 0)
                       <= ADSB_REGISTRY_WINDOW_SECS),
                      key=lambda a: -a.get("last_seen", 0))
+        if include_recent:
+            for a in acs:
+                a["military"] = is_military_icao(a["icao"])
+                _add_country(a)
+            return acs
+        out = []
         for a in acs:
-            a["military"] = is_military_icao(a["icao"])
-            _add_country(a)
-        return acs
+            b = {k: v for k, v in a.items() if k != "recent"}
+            b["military"] = is_military_icao(a["icao"])
+            _add_country(b)
+            out.append(b)
+        return out
+
+
+def aircraft_messages(icao):
+    """One aircraft's recent message history (for /adsb_msgs.json)."""
+    with state.adsb_lock:
+        a = state.adsb_aircrafts_all.get(icao)
+        return list(a.get("recent", [])) if a else []
 
 
 def prune_aircrafts():
