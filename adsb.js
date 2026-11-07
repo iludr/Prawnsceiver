@@ -281,8 +281,8 @@ function drawStation(st) {
     stationLayer = L.layerGroup();
     for (let km = 50; km <= 400; km += 50) {
         L.circle([st.lat, st.lon], {
-            radius: km * 1000, color: '#aaaaaa', weight: 1,
-            dashArray: '4 5', fillColor: '#aaaaaa', fillOpacity: 0.04,
+            radius: km * 1000, color: '#8a8a8a', weight: 1.5,
+            dashArray: '4 5', fillColor: '#aaaaaa', fillOpacity: 0.06,
             interactive: false
         }).addTo(stationLayer);
     }
