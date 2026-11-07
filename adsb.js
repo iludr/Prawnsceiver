@@ -124,9 +124,10 @@ function renderRegistryPage() {
         const spd = a.speed_kt !== null && a.speed_kt !== undefined ? a.speed_kt + ' kt' : null;
         const trk = a.track_deg !== null && a.track_deg !== undefined ? a.track_deg + '\u00b0' : null;
         const vs = a.vs_fpm !== null && a.vs_fpm !== undefined ? a.vs_fpm + ' fpm' : null;
-        html += '<tr>'
+        html += '<tr data-icao="' + esc(a.icao) + '"'
+            + (selectedPlane === a.icao ? ' class="sel"' : '') + '>'
             + (trackMode
-                ? '<td><input type="checkbox"'
+                ? '<td class="ck"><input type="checkbox"'
                     + (selectedAircraft.has(a.icao) ? ' checked' : '')
                     + ' onchange="trackToggle(\'' + esc(a.icao) + '\', this.checked)"></td>'
                 : '')
@@ -154,6 +155,14 @@ function renderRegistryPage() {
     }
     rows.innerHTML = html;
 }
+
+// registry row click -> highlight the plane on the map (checkbox and
+// message-details clicks must not trigger it)
+document.getElementById('regrows').addEventListener('click', ev => {
+    if (ev.target.closest('input, summary')) return;
+    const tr = ev.target.closest('tr[data-icao]');
+    if (tr) selectPlane(tr.dataset.icao, false);
+});
 
 async function loadRegistry() {
     try {
@@ -263,19 +272,6 @@ function initMap() {
     document.getElementById('fitbtn').onclick = () => { fitted = false; fitAircraft(); };
 }
 
-function planePopup(a, age) {
-    const pos = (a.lat !== undefined && a.lat !== null)
-        ? a.lat.toFixed(4) + ', ' + a.lon.toFixed(4) : '—';
-    const seenAt = new Date(a.last_seen * 1000).toLocaleTimeString();
-    return '<b>' + esc(a.callsign || a.icao) + '</b> · ' + esc(a.icao)
-        + (a.country_code ? ' ' + flagEmoji(a.country_code) + ' ' + esc(a.country) : '')
-        + (a.military ? ' · <span class="milbadge">🪖 military</span>' : '') + '<br>'
-        + (a.alt_ft !== undefined && a.alt_ft !== null ? a.alt_ft + ' ft' : '—')
-        + ' · ' + (a.speed_kt !== undefined && a.speed_kt !== null ? a.speed_kt + ' kt' : '—')
-        + ' · ' + (a.track_deg !== undefined && a.track_deg !== null ? a.track_deg + '°' : '—')
-        + '<br>' + pos + ' · last seen ' + seenAt + ' (' + age + ' s ago)';
-}
-
 // Marker color: military (ICAO 24-bit block heuristic) always red, on
 // the ground always orange, airborne colored by altitude band.
 function adsbAltColor(a) {
@@ -287,6 +283,25 @@ function adsbAltColor(a) {
     if (alt < 20000) return '#53d769';        // mid: green
     if (alt < 30000) return '#f1c40f';        // high: yellow
     return '#b39ddb';                          // very high: purple
+}
+
+// ---------- selection: registry row click <-> map marker click ----------
+let selectedPlane = null;
+
+function selectPlane(icao, scrollRow) {
+    selectedPlane = icao;
+    document.querySelectorAll('#regrows tr.sel').forEach(tr => tr.classList.remove('sel'));
+    if (icao) {
+        const tr = document.querySelector('#regrows tr[data-icao="' + icao + '"]');
+        if (tr) {
+            tr.classList.add('sel');
+            if (scrollRow) tr.scrollIntoView({ block: 'nearest' });
+        }
+    }
+    for (const k in markers) {
+        const f = lastFix[k];
+        if (f && f.ac) markers[k].setIcon(planeIcon(f.ac));
+    }
 }
 
 function planeIcon(a) {
@@ -301,7 +316,8 @@ function planeIcon(a) {
         iconSize: [28, 28],
         iconAnchor: [14, 14],
         popupAnchor: [0, -12],
-        html: '<div class="planeIcon' + (stale ? ' stale' : '') + '">'
+        html: '<div class="planeIcon' + (stale ? ' stale' : '')
+            + (selectedPlane === a.icao ? ' sel' : '') + '">'
             + '<div class="rot" style="transform: rotate(' + rot + 'deg)">' + shape + '</div>'
             + (a.callsign ? '<div class="lbl">' + esc(a.callsign) + '</div>' : '')
             + '</div>'
@@ -402,7 +418,7 @@ function updateMap(aircraft) {
         let m = markers[a.icao];
         if (!m) {
             m = markers[a.icao] = L.marker([a.lat, a.lon], { title: a.callsign || a.icao }).addTo(map);
-            m.bindPopup(planePopup(a, age));
+            m.on('click', () => selectPlane(a.icao, true));
         } else if (newFix) {
             // ONLY a genuinely new fix writes the position directly.
             // A status push that repeats the same fix must leave the
@@ -413,7 +429,6 @@ function updateMap(aircraft) {
             m.setLatLng([a.lat, a.lon]);
         }
         m.setIcon(planeIcon(a));
-        m.setPopupContent(planePopup(a, age));
     }
     for (const k of Object.keys(markers)) {
         if (!seen.has(k)) { map.removeLayer(markers[k]); delete markers[k]; delete lastFix[k]; delete heard[k]; }
@@ -454,11 +469,6 @@ function advanceMarkers() {
         if (!f) continue;
         const p = projectedLatLng(f, now);
         markers[icao].setLatLng(p);
-        if (f.ac) {   // keep the popup on the projected position too
-            const age = Math.max(0, Math.round(now - (heard[icao] || now)));
-            const pa = Object.assign({}, f.ac, { lat: p[0], lon: p[1] });
-            markers[icao].setPopupContent(planePopup(pa, age));
-        }
     }
 }
 setInterval(advanceMarkers, EXTRAP_MS);

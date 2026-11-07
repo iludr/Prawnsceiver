@@ -31,6 +31,15 @@ tr:hover td { background: #16213e; }
 #mapwrap { flex: 1 1 50%; min-width: 0; margin-bottom: 14px; }
 #regwrap { flex: 1 1 50%; min-width: 0; }
 #regwrap .regscroll { max-height: 460px; overflow: auto; border: 1px solid #0f3460; border-radius: 4px; }
+/* sticky callsign column: always visible while scrolling right */
+#regwrap .regscroll td.cs, #regwrap .regscroll th.cs { position: sticky; left: 0; z-index: 2; background: #1a1a2e; box-shadow: 1px 0 0 #0f3460; }
+#regwrap .regscroll td.ck { position: sticky; left: 0; z-index: 2; background: #1a1a2e; }
+#regwrap .regscroll td.ck + td.cs, #regwrap .regscroll th.ck + th.cs { left: 30px; }
+tr:hover td.cs, tr:hover td.ck { background: #16213e; }
+/* selected plane (registry row click <-> map marker click) */
+#regrows tr.sel td { background: #16294e; }
+#regrows tr.sel td.cs { background: #16294e; }
+.planeIcon.sel { border: 2px solid #f1c40f; border-radius: 50%; box-sizing: border-box; }
 @media (max-width: 1100px) { #toprow { flex-direction: column; } #mapwrap, #regwrap { flex: 1 1 auto; width: 100%; } }
 #mapinfo { font-size: 0.85em; color: #888; margin: 4px 0 6px; display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap; }
 #mapctrl { font-size: 0.85em; color: #888; margin: 0 0 6px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -112,7 +121,7 @@ tr:hover td { background: #16213e; }
     <div class="regscroll">
     <table>
     <thead><tr id="reghead">
-        <th>callsign</th><th>st</th><th>🪖</th><th>ICAO</th><th>alt</th>
+        <th class="cs">callsign</th><th>st</th><th>🪖</th><th>ICAO</th><th>alt</th>
         <th>speed</th><th>track</th><th>v/s</th><th>position</th><th>first seen</th>
         <th>last seen</th><th>total msgs</th><th>message history</th>
     </tr></thead>
