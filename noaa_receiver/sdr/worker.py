@@ -142,6 +142,7 @@ def main():
                 if cmd == 'shutdown':
                     os._exit(0)
                 elif cmd == 'cfg':
+                    was_paused = bool(entry.get('paused'))
                     with state.status_lock:
                         for flag in ('ais', 'orbcomm', 'aprs', 'aprs_iss',
                                      'aprs_lasar', 'pocsag', 'adsb', 'ism',
@@ -167,6 +168,14 @@ def main():
                                 state.manual_dongle_mode[did] = msg['manual_mode']
                             else:
                                 state.manual_dongle_mode.pop(did, None)
+                    if msg.get('paused') and not was_paused:
+                        # Pause landed while a capture thread is streaming:
+                        # the master cannot reach this process's rtl_tcp
+                        # socket — close it here so the blocked read ends
+                        # and the thread's paused check stops the run.
+                        # (_workers is empty in this process, so
+                        # radio._stop_capture takes the local close path.)
+                        radio._stop_capture(entry)
                 elif cmd == 'sched':
                     with state.status_lock:
                         for m, v in msg.get('mode_freq', {}).items():

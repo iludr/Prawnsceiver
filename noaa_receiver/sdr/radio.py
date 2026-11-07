@@ -1131,6 +1131,10 @@ def set_dongle_paused(did, on):
         _stop_capture(entry)
         state.log_console(f"\u23f8 Dongle {did} paused — capture stopped")
     else:
+        if DONGLE_WORKER_PROCESSES and did in _workers:
+            # the worker's supervisor only restarts its capture thread
+            # once it learns paused=False — push the new cfg
+            _push_worker(did, _worker_cfg(did) or {"cmd": "cfg"})
         state.log_console(f"\u25b6 Dongle {did} played — capture restarting")
     return True
 
@@ -1950,11 +1954,11 @@ def sdr_capture_thread(did):
             record_name = None
 
             while True:
-                # A remove/role-switch can land while this thread was
+                # A remove/role-switch/pause can land while this thread was
                 # in its reconnect backoff (the socket close missed it)
                 # — without this check the thread would reconnect as
                 # a ghost and hold the dongle forever
-                if entry.get('closed') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or \
+                if entry.get('closed') or entry.get('paused') or entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') or \
                 entry.get('pocsag') or entry.get('adsb') or entry.get('ism') or entry.get('dab'):
                     break
                 raw = reader.read_batch(CAPTURE_BATCH)
