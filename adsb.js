@@ -49,7 +49,7 @@ function milCell(a) {
 }
 
 // ---------- persistent aircraft registry (restored from the database) ------
-// One row per plane heard in the last 24 h (the station keeps every
+// One row per plane heard in the last 7 days (the station keeps every
 // aircraft ever in the adsb_aircrafts table) with everything merged
 // (latest callsign, altitude, speed, track, vertical rate and position
 // of that aircraft) plus the message history — the track-mode checkbox
@@ -97,8 +97,8 @@ function renderRegistryPage() {
         'aircraft ' + (start + 1) + '–' + (start + slice.length)
         + ' of ' + regAircraft.length;
     if (!regAircraft.length) {
-        rows.innerHTML = '<tr><td colspan="' + (trackMode ? 12 : 11)
-            + '" class="muted">No aircraft heard in the last 24 h — the registry fills as aircraft come into range.</td></tr>';
+        rows.innerHTML = '<tr><td colspan="' + (trackMode ? 14 : 13)
+            + '" class="muted">No aircraft heard in the last 7 days — the registry fills as aircraft come into range.</td></tr>';
         return;
     }
     let html = '';
@@ -148,7 +148,7 @@ function renderRegistryPage() {
             + '<td><details' + (regOpen.has(a.icao) ? ' open' : '')
             + ' ontoggle="regToggle(\'' + esc(a.icao) + '\', this.open)">'
             + '<summary>' + (a.recent === undefined ? 'load history…'
-                : recent.length + ' messages (last 10)') + '</summary>'
+                : recent.length + ' messages (last 20)') + '</summary>'
             + '<table class="regmsgs"><thead><tr><th>time</th><th>DF</th>'
             + '<th>type</th><th>callsign</th><th>position</th><th>raw frame</th>'
             + '</tr></thead><tbody>' + msgs + '</tbody></table>'

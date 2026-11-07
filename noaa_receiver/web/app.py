@@ -55,7 +55,7 @@ def main():
     _ais.load_ships()
     # Every ADS-B aircraft ever received, restored from the
     # adsb_aircrafts table (queried via /adsb_aircrafts.json and the
-    # WS 'adsb_aircrafts' topic; the page shows the last 24 h)
+    # WS 'adsb_aircrafts' topic; the page shows the last 7 days)
     from ..decoding import adsb as _adsb
     _adsb.load_aircrafts()
     # Startup summary of the persistent Orbcomm packet log (count only —
