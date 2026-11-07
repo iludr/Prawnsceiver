@@ -2551,3 +2551,29 @@ edge-of-range behavior observed earlier today (4D2507 / EZY97VL /
 DLH4J dropping position updates at ~130 km): polarization loss, not
 the moxon's directional pattern. ADS-B range should now improve in
 ALL directions, including the southeast sector.
+
+## 2026-11-07 ~11:55 — ⏸️ Dongle pause fixed in worker mode (b4e09b8)
+
+Pause/play was broken since the per-dongle worker processes went in: the
+master couldn't close the worker's rtl_tcp socket, so the stream (and
+waterfall) kept flowing, and play never reached the worker. Fixed in
+worker.py (worker closes its own socket on pause) + radio.py (master
+notifies the worker on play; stream loop breaks on paused). Verified
+against a real worker subprocess and live over /pause_dongle; service
+restarted at 11:51 with no pass ongoing. Confirmed working by operator.
+
+## 2026-11-07 ~12:10 — ✈️ ADS-B on the 1234 dongle now decoded by readsb (e8eea6b)
+
+When a dongle whose rtl_tcp endpoint matches readsb's feed
+(/etc/default/readsb: 192.168.3.245:1234) is set to ADS-B, prawnceiver
+no longer runs its own demodulator on it — rtl_tcp serves one client
+and the two were fighting over the dongle. The worker leaves the slot
+to readsb's bridge; the master consumes readsb's Beast output (30005)
+and feeds it through the same parse_frame/handle_message path, so the
+dashboard, registry, log and military flag are unchanged. Verified
+live: 38 aircraft with callsigns/altitudes via /adsb.json with
+stats.src=readsb; role-off cleans up. Other dongles keep the homegrown
+decoder. Note: the waterfall on a readsb-backed dongle is frozen while
+in ADS-B mode (readsb owns the IQ), and readsb keeps the dongle's
+rtl_tcp slot even after prawnceiver leaves the role (stop the readsb
+service to fully free 1234).
