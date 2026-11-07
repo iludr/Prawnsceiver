@@ -813,6 +813,18 @@ def _maybe_save_aircrafts():
     save_aircrafts()
 
 
+def registry_signature():
+    """Cheap change signature for the WS push of adsb_aircrafts: the
+    SET of ICAOs inside the registry window. Changes exactly when a
+    new plane is heard (enters) or one drops out of the window, so the
+    topic can be pushed immediately instead of on a fixed cadence."""
+    now = time.time()
+    with state.adsb_lock:
+        return tuple(sorted(a["icao"] for a in state.adsb_aircrafts_all.values()
+                            if now - a.get("last_seen", 0)
+                            <= ADSB_REGISTRY_WINDOW_SECS))
+
+
 def aircrafts_registry():
     """Snapshot for /adsb_aircrafts.json: aircraft heard within
     ADSB_REGISTRY_WINDOW_SECS, newest activity first. The registry in

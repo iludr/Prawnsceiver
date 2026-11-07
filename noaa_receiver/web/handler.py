@@ -342,6 +342,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
         last_seq = {}
         subs = {}            # topic -> subscription parameter (or None)
         last_topic = {}      # topic -> last push time (0 = push now)
+        topic_sig = {}       # topic -> last pushed content signature
         buf = bytearray()
         tick = 0.0
         why = 'loop exit'          # disconnect diagnosis, logged in finally
@@ -416,9 +417,25 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 # are independent of the row rate
                 for topic in list(subs):
                     interval, build = _WS_TOPICS[topic]
-                    if now - last_topic.get(topic, 0.0) < interval:
-                        continue
-                    last_topic[topic] = now
+                    if topic == 'adsb_aircrafts':
+                        # push immediately when the aircraft set changes
+                        # (new plane heard / one left the window), at most
+                        # every 2 s; otherwise the 30 s refresh cadence
+                        sig = adsb.registry_signature()
+                        if sig != topic_sig.get(topic):
+                            if now - last_topic.get(topic, 0.0) >= 2.0:
+                                topic_sig[topic] = sig
+                                last_topic[topic] = now
+                            else:
+                                continue
+                        elif now - last_topic.get(topic, 0.0) < interval:
+                            continue
+                        else:
+                            last_topic[topic] = now
+                    else:
+                        if now - last_topic.get(topic, 0.0) < interval:
+                            continue
+                        last_topic[topic] = now
                     try:
                         payload = build(subs[topic])
                     except Exception:
