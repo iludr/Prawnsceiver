@@ -18,7 +18,7 @@ from ..config import (AUDIO_RATE, LOGDIR, LAT, LON, MANUAL_TUNE_LOCKOUT_MINS,
                    METEOR_LRPT_HZ, RECORD_DIR, RECORD_LOCAL_DIR, SDR_RATE,
                    UTC_OFFSET, WEBDIR, utc_to_local)
 
-from ..decoding import adsb, ais, aprs, dab, ism, orbcomm, pocsag
+from ..decoding import adsb, adsb_readsb, ais, aprs, dab, ism, orbcomm, pocsag
 from ..sdr import scan
 from ..decoding.decode import decode_recording, forget_decode_marker
 from .history import (_load_history, get_recordings, quality_map,
@@ -77,7 +77,14 @@ def _dongle_list():
                 "gain_auto": bool(e.get("gain_auto")),
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
-                "connected": bool(e.get("connected")),
+                # A readsb-backed dongle in the ADS-B role has no capture
+                # thread of its own (readsb owns the IQ) — count it as
+                # connected while the master's Beast consumer is alive,
+                # otherwise the card shows a red dot despite live data.
+                "connected": bool(e.get("connected")) or (
+                    bool(e.get("adsb")) and not e.get("paused")
+                    and adsb_readsb.is_readsb_dongle(did)
+                    and adsb_readsb.consumer_alive(did)),
                 "recording": e["is_recording"],
                 "manual_recording": did in state.manual_recording,
                 "manual_rec_since": e.get("manual_rec_start"),

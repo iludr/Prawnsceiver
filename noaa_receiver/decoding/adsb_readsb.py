@@ -74,6 +74,16 @@ def is_readsb_dongle(did):
     return feed is not None and did == feed
 
 
+def consumer_alive(did):
+    """True while a Beast consumer thread for this readsb-backed dongle
+    is running in the master — i.e. readsb is actually feeding it, so the
+    dongle counts as connected even though no capture thread of ours
+    holds it (the worker leaves the slot to readsb)."""
+    with _consumers_lock:
+        c = _consumers.get(did)
+        return c is not None and c["thread"].is_alive()
+
+
 # The readsb system service is managed via sudo -n with a narrow
 # sudoers rule (/etc/sudoers.d/prawnsdr-readsb: only start/stop/restart/
 # is-active of readsb.service, no password). NOTE: sudo matches the
