@@ -491,6 +491,15 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
     add_dongle). The primary dongle aliases the legacy waterfall globals so
     the rest of the system (status, live audio, recording) keeps working."""
     lock = threading.Lock()
+    if usb_idx is None and host.lower() == 'usb':
+        # Local USB dongle ("usb:<index>"): every capture thread branches on
+        # usb_idx (rtl_sdr child instead of an rtl_tcp socket). add_dongle
+        # parses it before calling us, but the worker process builds its
+        # entry straight from the id — derive it here so both agree.
+        try:
+            usb_idx = int(port)
+        except (TypeError, ValueError):
+            usb_idx = None
     return {
         'id': did, 'host': host, 'port': int(port),
         'label': f'{host}:{port}', 'tuner': 'rtl_tcp', 'primary': primary,
