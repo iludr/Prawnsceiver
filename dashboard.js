@@ -1661,6 +1661,8 @@
             const free = role === 'manual' ? '' : 'none';
             c.tuneRow.style.display = free;
             c.nudgeRow.style.display = free;
+            c.nudgeRow2.style.display = free;
+            c.tuneHint.style.display = free;
             c.bwRow.style.display = free;
             c.scanRow.style.display = free;
             c.scanRow2.style.display = free;
@@ -1807,8 +1809,16 @@
                 b.style.cssText = 'flex:1;padding:2px 0;background:#0f3460;color:#53d769;border:1px solid #53d769;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
                 return b;
             };
+            // fine steps (SSB/CW signals) + Sync to rejoin the shared tune
             const dMinus = mkNudge('−1 kHz'), dPlus = mkNudge('+1 kHz'), dSync = mkNudge('Sync');
             nudgeRow.appendChild(dMinus); nudgeRow.appendChild(dPlus); nudgeRow.appendChild(dSync);
+            // coarse steps for jumping between signals across the waterfall
+            const nudgeRow2 = document.createElement('div');
+            nudgeRow2.style.cssText = 'display:flex;gap:4px;margin-top:4px;';
+            const dM100 = mkNudge('−100 kHz'), dM10 = mkNudge('−10 kHz'),
+                  dP10 = mkNudge('+10 kHz'), dP100 = mkNudge('+100 kHz');
+            nudgeRow2.appendChild(dM100); nudgeRow2.appendChild(dM10);
+            nudgeRow2.appendChild(dP10); nudgeRow2.appendChild(dP100);
             // Recorded (demod) bandwidth: the IQ low-pass cutoff ahead of
             // the FM demod — what ends up in the WAV and live audio. Auto =
             // mode default (full band on FM broadcast, 22 kHz on satellites)
@@ -1926,6 +1936,7 @@
                 i.type = 'number'; i.step = 'any'; i.min = '24'; i.max = '1766';
                 i.style.cssText = 'flex:1;min-width:0;background:#0f3460;border:1px solid #53d769;color:#e0e0e0;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:0.85em;';
                 i.addEventListener('input', () => { i._typedAt = Date.now(); });
+                i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doScanToggle(); } });
                 return i;
             };
             const scanFrom = mkScanInput(); scanFrom.title = 'scan start (MHz)';
@@ -1946,6 +1957,7 @@
             scanStep.title = 'step width in kHz (20-400)';
             scanStep.style.cssText = 'flex:0 0 40px;min-width:0;background:#0f3460;border:1px solid #53d769;color:#e0e0e0;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:0.9em;text-align:center;';
             scanStep.addEventListener('input', () => { scanStep._typedAt = Date.now(); });
+            scanStep.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doScanToggle(); } });
             const scanStepLbl = document.createElement('span');
             scanStepLbl.textContent = 'kHz step';
             scanStepLbl.style.cssText = 'color:#888;flex:0 0 auto;';
@@ -2011,6 +2023,40 @@
             dMinus.onclick = () => nudge(-0.001);
             dPlus.onclick = () => nudge(0.001);
             dSync.onclick = () => tuneD('auto');
+            dM100.onclick = () => nudge(-0.1);
+            dM10.onclick = () => nudge(-0.01);
+            dP10.onclick = () => nudge(0.01);
+            dP100.onclick = () => nudge(0.1);
+            // Peak: tune to the strongest bin of the latest waterfall row
+            // inside the current zoom view — the quickest way to jump onto
+            // a signal visible in this dongle's waterfall
+            const peakBtn = document.createElement('button');
+            peakBtn.textContent = '🎯 Peak';
+            peakBtn.title = 'Tune this dongle to the strongest signal in the current waterfall view';
+            peakBtn.style.cssText = 'flex:0 0 auto;padding:2px 8px;background:#0f3460;color:#f39c12;border:1px solid #f39c12;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.85em;';
+            peakBtn.onclick = () => {
+                const b = wfBlocks[sn_t];
+                if (!b || b.centerMHz === null || !b.dbLatest || !b.dbLatest.db) {
+                    toast('No waterfall data yet for this dongle', true);
+                    return;
+                }
+                const srcBin = wfSrcBin(b);
+                let bestX = 0, bestDb = -Infinity;
+                for (let x = 0; x < WF_WIDTH; x++) {
+                    const v = b.dbLatest.db[srcBin(x)];
+                    if (v > bestDb) { bestDb = v; bestX = x; }
+                }
+                const frac = (bestX + 0.5) / WF_WIDTH;
+                const mhz = b.centerMHz + ((b.zoomOffKHz || 0) + (frac - 0.5) * wfSpanKhz(b)) / 1000;
+                dinput.value = mhz.toFixed(4);
+                dinput._typedAt = Date.now();
+                doTune();
+            };
+            tuneRow.appendChild(peakBtn);
+            // discoverability hint for the waterfall's own tuning gestures
+            const tuneHint = document.createElement('div');
+            tuneHint.style.cssText = 'font-size:0.7em;color:#666;margin-top:3px;';
+            tuneHint.textContent = '💡 click the waterfall to tune there · drag across a signal to set frequency + recorded band';
             // Tuning/adjustments infobox (per-dongle correction from the
             // server + the shared offset/gain settings). margin-top:auto
             // pins it (with the Listen button) to the card bottom, against
@@ -2031,7 +2077,8 @@
             const secRec = mkSec('Recording');
             card.appendChild(secRec); card.appendChild(recRow);
             const secTune = mkSec('Tuning');
-            card.appendChild(secTune); card.appendChild(tuneRow); card.appendChild(nudgeRow);
+            card.appendChild(secTune); card.appendChild(tuneRow);
+            card.appendChild(nudgeRow); card.appendChild(nudgeRow2); card.appendChild(tuneHint);
             const secMode = mkSec('Demodulator');
             card.appendChild(secMode); card.appendChild(modeRow);
             const secBw = mkSec('Recorded bandwidth');
@@ -2267,7 +2314,7 @@
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
                 hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, gainBtn, autoSatRow, autoSatBox, aprsIssRow, aprsIssBox, aprsLasarRow, aprsLasarBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
-                bandTxt, bwInput, tuneRow, nudgeRow, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
+                bandTxt, bwInput, tuneRow, nudgeRow, nudgeRow2, tuneHint, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secMode, secBw, secScan, modeRow, modeSel, modeHint,
             };
             applyDongleRole(c, d);

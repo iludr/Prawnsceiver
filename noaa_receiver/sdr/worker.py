@@ -168,6 +168,11 @@ def main():
                                 state.manual_dongle_mode[did] = msg['manual_mode']
                             else:
                                 state.manual_dongle_mode.pop(did, None)
+                        if 'manual_recording' in msg:
+                            if msg['manual_recording']:
+                                state.manual_recording[did] = True
+                            else:
+                                state.manual_recording.pop(did, None)
                     if msg.get('paused') and not was_paused:
                         # Pause landed while a capture thread is streaming:
                         # the master cannot reach this process's rtl_tcp
@@ -211,6 +216,8 @@ def main():
         while True:
             time.sleep(1.0)
             try:
+                with state.status_lock:
+                    man_rec = did in state.manual_recording
                 with entry['lock']:
                     st = {
                         "t": "status",
@@ -222,6 +229,7 @@ def main():
                         "correction_src": entry.get('correction_src'),
                         "is_recording": bool(entry.get('is_recording')),
                         "wav_path": entry.get('wav_path'),
+                        "manual_recording": man_rec,
                         "manual_rec_start": entry.get('manual_rec_start'),
                         "manual_zip": entry.get('manual_zip'),
                     }

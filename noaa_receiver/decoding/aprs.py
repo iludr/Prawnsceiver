@@ -994,6 +994,20 @@ def aprs_capture_thread(did):
             while True:
                 if entry.get("closed") or not entry.get("aprs"):
                     break
+                # A channel-preset flip (aprs_lasar / aprs_iss) must break
+                # the loop too: with DONGLE_WORKER_PROCESSES the master's
+                # _stop_capture only pushes a cfg frame, it cannot close
+                # this process's socket — without this in-loop check the
+                # thread would keep streaming the OLD channel forever and
+                # the waterfall would never move (observed live: the flags
+                # flipped but the dongle stayed on 144.800 MHz).
+                want_lasar_chk = bool(entry.get("aprs_lasar"))
+                want_freq_chk = (LASAR_FREQ_HZ if want_lasar_chk
+                                 else ISS_APRS_FREQ_HZ if entry.get("aprs_iss")
+                                 else APRS_FREQ_HZ)
+                if want_freq_chk != freq_hz or want_lasar_chk != lasar:
+                    state.log_console(f"APRS channel preset flipped on dongle {did} — retuning")
+                    break
                 raw = reader.read_batch(CAPTURE_BATCH)
                 if raw is None:
                     state.log_console(f"IQ stream ended (APRS dongle {did}), reconnecting...", "warn")

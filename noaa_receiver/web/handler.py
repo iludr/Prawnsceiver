@@ -35,7 +35,8 @@ from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_adsb,
                         set_dongle_auto_sat, set_dongle_orbcomm,
                         set_dongle_ism, set_dongle_pocsag, set_dongle_paused,
                         set_dongle_dab, set_dongle_gain_auto,
-                        set_dongle_sat_mode, usb_dongles)
+                        set_dongle_sat_mode, set_manual_recording,
+                        usb_dongles)
 
 def _dongle_list():
     """Dongle descriptors for status/dongles.json: primary first, then stable
@@ -1154,15 +1155,21 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             dev = (query.get('d') or [''])[0]
             f = (query.get('f') or [''])[0].strip().lower()
             bw = (query.get('bw') or [''])[0].strip().lower()
+            mode = (query.get('mode') or [''])[0].strip().lower()
             entry = state.sdrs.get(dev)
             if entry is None:
                 self._send_json({"success": False, "error": "Unknown dongle"}, code=404)
                 return
+            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') \
+                    or entry.get('pocsag') or entry.get('adsb'):
+                # A dongle dedicated to AIS or Orbcomm reception is parked
+                # on its mode's band - retuning it would stop reception
+                self._send_json({'success': False, 'error': 'Dongle is dedicated to AIS'}, code=400)
+                return
             # Optional demod (recorded) bandwidth override in kHz — the IQ
             # low-pass cutoff ahead of the FM discriminator. bw=auto clears.
-            # A bw-only request (no f) leaves the frequency untouched.
+            bw_hz = None
             if bw:
-                bw_hz = None
                 if bw not in ('auto', 'sync'):
                     try:
                         khz = float(bw)
@@ -1178,10 +1185,9 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                         state.manual_dongle_bw.pop(dev, None)
                     else:
                         state.manual_dongle_bw[dev] = bw_hz
+                state.log_console(f"🎚 Dongle {dev} demod bandwidth: {bw_hz / 1000:g} kHz" if bw_hz else f"🎚 Dongle {dev} demod bandwidth back to auto")
             # Optional demod mode override: am/usb/lsb/cw/fm, auto clears
             # (auto = FM everywhere except the airband, which is AM).
-            # A mode-only request leaves frequency and bandwidth untouched.
-            mode = (query.get('mode') or [''])[0].strip().lower()
             if mode:
                 if mode not in ('auto', 'am', 'usb', 'lsb', 'cw', 'fm'):
                     self._send_json({'success': False, 'error': 'Unknown mode (auto/am/usb/lsb/cw/fm)'}, code=400)
@@ -1192,18 +1198,14 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                     else:
                         state.manual_dongle_mode[dev] = mode
                 state.log_console(f"Dongle {dev} demod mode: {mode}")
-                if not f:
-                    self._send_json({'success': True, 'mode': 'demod', 'demod_mode': mode}, code=200)
-                    return
-                state.log_console(f"🎚 Dongle {dev} demod bandwidth: {bw_hz / 1000:g} kHz" if bw_hz else f"🎚 Dongle {dev} demod bandwidth back to auto")
-                if not f:
-                    self._send_json({"success": True, "mode": "bw", "bandwidth_khz": bw_hz / 1000 if bw_hz else None}, code=200)
-                    return
-            if entry.get('ais') or entry.get('orbcomm') or entry.get('aprs') \
-                    or entry.get('pocsag') or entry.get('adsb'):
-                # A dongle dedicated to AIS or Orbcomm reception is parked
-                # on its mode's band - retuning it would stop reception
-                self._send_json({'success': False, 'error': 'Dongle is dedicated to AIS'}, code=400)
+            # A bw-only / mode-only request (no f) must NOT fall through to
+            # the sync below — that used to clear the frequency override,
+            # so pressing Enter in the dashboard bandwidth field silently
+            # reset the dongle's tuned frequency
+            if not f and (bw or mode):
+                self._send_json({'success': True, 'mode': 'override',
+                                 'bandwidth_khz': bw_hz / 1000 if bw_hz else None,
+                                 'demod_mode': mode or None}, code=200)
                 return
             if f in ('', 'auto', 'sync'):
                 with state.status_lock:
@@ -1305,11 +1307,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json({'success': False, 'error': 'Dongle is in a dedicated role (AIS/Orbcomm/APRS/POCSAG)'}, code=400)
                 return
             stop = (query.get('stop') or [''])[0].strip().lower() in ('1', 'true', 'on', 'yes')
-            with state.status_lock:
-                if stop:
-                    state.manual_recording.pop(dev, None)
-                else:
-                    state.manual_recording[dev] = True
+            set_manual_recording(dev, not stop)
             if stop:
                 state.log_console(f"⏹ Manual recording stop requested (dongle {dev})")
             else:

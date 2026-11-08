@@ -709,5 +709,44 @@ with state.status_lock:
     assert state.sdrs[DID]['gain_auto'] is True, "gain_auto must restore from the dongles table"
 assert radio.set_dongle_gain_auto(DID, False) is True
 print("15 AGC toggle: gain switch, capture restart, persistence OK")
+
+# 16. APRS channel preset flip retunes even when nothing closes the
+# stream: with DONGLE_WORKER_PROCESSES the master's _stop_capture only
+# pushes a cfg frame to the worker process — it cannot close the
+# worker's rtl_tcp socket, so the APRS thread must notice the flipped
+# aprs_iss / aprs_lasar flags INSIDE its read loop (regression: the
+# flags flipped but the dongle stayed on 144.800 MHz and the waterfall
+# never moved).
+from noaa_receiver.decoding import aprs as _aprs
+from noaa_receiver.config import APRS_FREQ_HZ, ISS_APRS_FREQ_HZ, LASAR_FREQ_HZ
+assert radio.set_dongle_aprs(DID, True) is True
+wait_for(lambda: not any(t.is_alive() and 'sdr' in t.name for t in threading.enumerate()),
+         what='satellite capture stopped on APRS role switch')
+_real_stop = radio._stop_capture
+radio._stop_capture = lambda e: None          # worker mode: cfg push only, stream stays open
+try:
+    t_aprs = {}
+    def _aprs_supervisor():
+        while True:
+            t = t_aprs.get('t')
+            if t is not None and not t.is_alive():
+                t = None
+            if t is None and entry.get('aprs') and not entry.get('paused'):
+                t = threading.Thread(target=_aprs.aprs_capture_thread, args=(DID,),
+                                     daemon=True, name='aprs-test'); t.start()
+                t_aprs['t'] = t
+            time.sleep(0.5)
+    threading.Thread(target=_aprs_supervisor, daemon=True).start()
+    expect_cmd(APRS_FREQ_HZ)                   # initial tune 144.800 MHz
+    assert radio.set_dongle_aprs_iss(DID, True) is True
+    expect_cmd(ISS_APRS_FREQ_HZ)               # retune 145.825 despite the open socket
+    assert radio.set_dongle_aprs_lasar(DID, True) is True
+    expect_cmd(LASAR_FREQ_HZ)                  # retune 436.925 despite the open socket
+    assert radio.set_dongle_aprs_lasar(DID, False) is True
+    expect_cmd(APRS_FREQ_HZ)                   # back to 144.800
+finally:
+    radio._stop_capture = _real_stop
+    radio.set_dongle_aprs(DID, False)
+print("16 APRS preset flip retunes with the stream still open (worker mode): OK")
 print("ALL RADIO TESTS PASSED")
 os._exit(0)

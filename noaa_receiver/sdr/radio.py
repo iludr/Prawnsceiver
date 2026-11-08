@@ -1151,6 +1151,26 @@ def set_dongle_paused(did, on):
     return True
 
 
+def set_manual_recording(did, on):
+    """Start/stop one dongle's manual raw-IQ recording (dashboard Record
+    button). The flag lives in state.manual_recording, but with
+    DONGLE_WORKER_PROCESSES the capture loop that consumes it runs in the
+    dongle's worker process — push the new cfg frame so the worker's own
+    copy of the flag is updated too (the worker mirrors the flag back in
+    its status reports, since it also clears it on stop/cap/retune).
+    Unknown id: False."""
+    if state.sdrs.get(did) is None:
+        return False
+    with state.status_lock:
+        if on:
+            state.manual_recording[did] = True
+        else:
+            state.manual_recording.pop(did, None)
+    if DONGLE_WORKER_PROCESSES and did in _workers:
+        _push_worker(did, _worker_cfg(did) or {"cmd": "cfg"})
+    return True
+
+
 # ---------- per-dongle worker processes (DONGLE_WORKER_PROCESSES) ----------
 # When enabled, each dongle's capture pipeline runs in its own subprocess
 # (noaa_receiver.sdr.worker) so one dongle's load/crash can never stall the
@@ -1200,6 +1220,8 @@ def _worker_cfg(did):
         cfg['manual_freq_hz'] = state.manual_dongle_freq.get(did)
         cfg['manual_bw_hz'] = state.manual_dongle_bw.get(did)
         cfg['manual_mode'] = state.manual_dongle_mode.get(did)
+        with state.status_lock:
+            cfg['manual_recording'] = did in state.manual_recording
         return cfg
 
 
@@ -1287,6 +1309,17 @@ def _worker_reader(did, conn):
                                     entry[k] = msg[k]
                             if entry.get('paused'):
                                 entry['connected'] = False
+                        if 'manual_recording' in msg:
+                            # the worker owns the capture loop, so it also
+                            # clears the flag on stop/cap/retune — mirror
+                            # its view back, otherwise a stale True here
+                            # would be re-pushed to the worker on the next
+                            # cfg and restart a finalized recording
+                            with state.status_lock:
+                                if msg['manual_recording']:
+                                    state.manual_recording[did] = True
+                                else:
+                                    state.manual_recording.pop(did, None)
                         # the decode-role enable flags live in the worker
                         # process; mirror them here from the role flags
                         for flag in ('ais', 'orbcomm', 'aprs', 'pocsag',
