@@ -2053,7 +2053,7 @@
                 const v = parseFloat(dinput.value);
                 const ds = !!(c && c.lastD && c.lastD.direct_sample);
                 const hf = ds || /Blog V4/.test((c && c.lastD && c.lastD.usb_name) || '');
-                if (isNaN(v)) { toast('Enter a frequency in MHz (' + (hf ? '0.5-28.8 HF' : '24-1766') + ')', true); return; }
+                if (isNaN(v)) { toast('Enter a frequency in MHz (' + (hf ? '0.5-1766 (HF + tuner)' : '24-1766') + ')', true); return; }
                 tuneD(v.toFixed(4))
                     .then(r => r.json())
                     .then(data => {
@@ -2112,18 +2112,18 @@
             tuneHint.textContent = '💡 click the waterfall to tune there · drag across a signal to set frequency + recorded band';
             // Direct sampling checkbox (manual section): bypasses the
             // R820T tuner (rtl_tcp cmd 0x09, Q-ADC) so the dongle receives
-            // HF below 24 MHz — the tune field then accepts 0.5-28.8 MHz
+            // HF below 24 MHz — the tune field then accepts 0.5-1766 MHz (HF + tuner)
             // (at 2.4 Msps the baseband spans 0-2.4 MHz, higher HF
             // aliases into it). Shown in Manual mode only; the checkbox
             // state mirrors d.direct_sample from dongles.json
             const dsRow = document.createElement('label');
             dsRow.style.cssText = 'display:none;align-items:center;width:100%;margin-top:4px;padding:3px 10px;background:#0f2233;color:#a8b8d8;border:1px solid #1a3a5c;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.82em;box-sizing:border-box;';
-            dsRow.title = 'Direct sampling (Q-ADC): the tuner is bypassed and the RTL2832U samples the antenna directly — receive HF below the R820T\'s 24 MHz floor. Tune range becomes 0.5-28.8 MHz; at 2.4 Msps the waterfall shows 0-2.4 MHz and higher HF aliases into it (mod 2.4 MHz)';
+            dsRow.title = 'Direct sampling (Q-ADC): the tuner is bypassed and the RTL2832U samples the antenna directly — receive HF below the R820T\'s 24 MHz floor. Tune range becomes 0.5-1766 MHz (below 24 MHz direct, above via the tuner); at 2.4 Msps the waterfall shows 0-2.4 MHz and higher HF aliases into it (mod 2.4 MHz)';
             const dsBox = document.createElement('input');
             dsBox.type = 'checkbox';
             dsBox.style.cssText = 'accent-color:#f39c12;margin-right:6px;';
             const dsTxt = document.createElement('span');
-            dsTxt.textContent = '⚡ Direct sampling (HF, 0.5–28.8 MHz)';
+            dsTxt.textContent = '⚡ Direct sampling (HF below 24 MHz)';
             dsRow.appendChild(dsBox); dsRow.appendChild(dsTxt);
             dsBox.onchange = () => {
                 const on = dsBox.checked;
@@ -2131,7 +2131,7 @@
                     .then(r => r.json())
                     .then(data => {
                         if (data.success) {
-                            toast(on ? '⚡ Direct sampling ON — tuner bypassed, tune range now 0.5-28.8 MHz (HF)'
+                            toast(on ? '⚡ Direct sampling ON — HF tunes below 24 MHz use Q-ADC, above 24 MHz the tuner (range 0.5-1766 MHz)'
                                      : '⚡ Direct sampling OFF — back to the R820T tuner (24-1766 MHz)');
                         } else {
                             dsBox.checked = !on;
@@ -2481,9 +2481,10 @@
                 c.dsLast = !!d.direct_sample;
                 c.hfLast = hfNative;
                 c.dsBox.checked = c.dsLast;
-                const hf = c.dsLast || hfNative;
-                c.dinput.min = hf ? '0.5' : '24';
-                c.dinput.max = hf ? '28.8' : '1766';
+                // HF-capable dongles accept the union range 0.5-1766 MHz
+                // (HF below 24, tuner above)
+                c.dinput.min = (c.dsLast || hfNative) ? '0.5' : '24';
+                c.dinput.max = '1766';
             }
             // Bias-tee checkbox mirrors the server flag (the click already
             // flipped it locally; this only follows external changes)

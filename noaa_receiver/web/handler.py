@@ -1066,7 +1066,7 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # the manual section of its dashboard card):
             # /direct_sample_dongle?d=<id>&on=1 bypasses the R820T tuner
             # (rtl_tcp control command 0x09, Q-ADC) so the dongle receives
-            # HF below 24 MHz — the manual tune then accepts 0.5-28.8 MHz.
+            # HF below 24 MHz — the manual tune then accepts 0.5-1766 MHz (HF + tuner).
             # on=0 returns to the tuner. Persists in the dongles table; the
             # capture restarts so the change takes effect at once.
             query = self._query()
@@ -1140,16 +1140,16 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 self._send_json({"success": False, "error": "Invalid frequency"}, code=400)
                 return
-            # HF range when the primary dongle can reach it: direct
-            # sampling enabled, or a Blog V4/V4L (native HF upconverter)
+            # HF-capable primary dongle (direct sampling on, or a Blog
+            # V4/V4L with native HF upconverter) accepts the UNION range
+            # 0.5-1766 MHz: below 24 MHz via direct sampling/upconverter,
+            # above via the tuner (the capture gates 0x09 on the freq)
             pe = state.sdrs.get(state.primary_dongle) or {}
             hf_ok = bool(pe.get('direct_sample')) or 'Blog V4' in (pe.get('usb_name') or '')
-            if hf_ok:
-                if not 0.5 <= mhz <= 28.8:
-                    self._send_json({"success": False, "error": "Frequency out of HF range (0.5-28.8 MHz)"}, code=400)
-                    return
-            elif not 24.0 <= mhz <= 1766.0:
-                self._send_json({"success": False, "error": "Frequency out of R820T range (24-1766 MHz)"}, code=400)
+            lo = 0.5 if hf_ok else 24.0
+            if not lo <= mhz <= 1766.0:
+                rng = "HF + tuner range (0.5-1766 MHz)" if hf_ok else "R820T range (24-1766 MHz)"
+                self._send_json({"success": False, "error": f"Frequency out of {rng}"}, code=400)
                 return
             if pass_active:
                 state.log_console("Tune rejected: satellite pass in progress", "warn")
@@ -1282,9 +1282,13 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             # the HF range without direct sampling. At the station's
             # 2.4 Msps the direct-sampled baseband spans 0-2.4 MHz and higher
             # HF aliases into it (mod 2.4 MHz).
+            # HF-capable dongle (direct sampling on, or a Blog V4/V4L with
+            # native HF upconverter) accepts the UNION range 0.5-1766 MHz:
+            # below 24 MHz via direct sampling/upconverter, above via the
+            # tuner (the capture gates 0x09 on the tuned freq)
             hf_native = 'Blog V4' in (entry.get('usb_name') or '')
             if entry.get('direct_sample') or hf_native:
-                lo, hi, rng = 0.5, 28.8, "HF range (0.5-28.8 MHz)"
+                lo, hi, rng = 0.5, 1766.0, "HF + tuner range (0.5-1766 MHz)"
             else:
                 lo, hi, rng = 24.0, 1766.0, "R820T range (24-1766 MHz)"
             if not lo <= mhz <= hi:

@@ -2675,3 +2675,14 @@ show their model in the master too (V4L card: "R828S (Blog V4L)",
 bias_tee_supported: true; /bias_dongle verified live on/off).
 Note: tests/test_waterfall.py fails on a stale fixture ("waterfall None
 when absent") — pre-existing on 2eb3e08, unrelated.
+
+## 2026-11-11 ~18:10 — 🐛 HF-capable dongles now accept the union tune range 0.5-1766 MHz
+
+The HF change had replaced the accepted range with 0.5-28.8 MHz on
+V4/V4L / direct-sampling dongles, so every VHF/UHF band preset
+(144.8, 1090, ...) was rejected with "Frequency out of HF range".
+Now 0.5-1766 MHz is accepted there: <24 MHz via direct sampling /
+native upconverter, >=24 MHz via the tuner (the 0x09 gate from the
+previous fix picks the right mode per frequency). Verified live:
+/tune_dongle 144.8 and 7.074 both accepted on the V4L, 2000 MHz
+rejected, /tune global OK, auto-restore OK. jsdom v4l-smoke 8/8.
