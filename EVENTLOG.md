@@ -2726,3 +2726,19 @@ the archival/raw source and prawntenna's Pi host has no numpy — keep
 removal per-consumer in prawnceiver. Tests: dsp/radio/ism/orbcomm/
 pocsag/adsb/aprs/ws all pass (test_ais + test_waterfall fail on stale
 fixtures, pre-existing).
+
+## 2026-11-11 ~18:50 — 🔌 V4L guide follow-up: direct sampling must never be used on V4/V4L
+
+rtl-sdr.com/v4l: "Unlike the V3, there is no need to activate direct
+sampling to receive HF... Activating direct sampling mode on a V4
+dongle will yield no results." So the ⚡ checkbox is now refused on
+Blog V4/V4L (/direct_sample_dongle -> 400, set_dongle_direct_sample ->
+False) and the capture gate never sends 0x09=2 to them even if the
+flag is set — HF tunes go through the native upconverter (0x09=0).
+Dashboard hides the DS checkbox on V4/V4L cards; HF range 0.5-1766 MHz
+unchanged. Also noted from the guide: bias tee is 4.5 V / 180 mA max
+with a red LED by the SMA (our 0x0e toggle covers it; DVB blacklist
+already prevents the legacy always-on tee), EEPROM strings must stay
+RTLSDRBlog/Blog V4L (driver + our model detection rely on them), and IF
+AGC must stay off (we never send cmd 0x08). Verified live: DS toggle
+refused, 7.074 + 144.8 tune OK. Test: test_radio.py #20.

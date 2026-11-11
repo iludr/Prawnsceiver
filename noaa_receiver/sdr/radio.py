@@ -990,6 +990,14 @@ def set_dongle_direct_sample(did, on):
     if entry is None:
         return False
     on = bool(on)
+    if on and 'Blog V4' in (entry.get('usb_name') or ''):
+        # V4/V4L have a native HF upconverter; direct sampling on them
+        # yields no results (rtl-sdr.com V4L guide) — refuse instead of
+        # breaking HF reception
+        state.log_console(f"⚡ Dongle {did}: direct sampling refused — Blog V4/V4L "
+                          f"receive HF natively (upconverter), Q-ADC mode gives no signal",
+                          "warn")
+        return False
     if bool(entry.get('direct_sample')) == on:
         return True
     entry['direct_sample'] = on
@@ -2159,8 +2167,13 @@ def sdr_capture_thread(did):
             # dongle switches to a dedicated role or a satellite pass
             # (all VHF/UHF): the reconnect then sends 0x09=0 and the
             # tuner takes over again (2026-11-11 bug report)
+            # Blog V4/V4L receive HF natively via their upconverter and
+            # yield NO results in direct sampling mode (rtl-sdr.com V4L
+            # guide) — never send 0x09=2 to them
+            v4l = 'Blog V4' in (entry.get('usb_name') or '')
             direct = (bool(entry.get('direct_sample'))
-                      and tuned_freq < 24_000_000)
+                      and tuned_freq < 24_000_000
+                      and not v4l)
             if entry.get('usb_idx') is not None and not direct:
                 # Local USB dongle: rtl_sdr streams raw u8 IQ on stdout.
                 # It cannot be retuned while running — a band switch

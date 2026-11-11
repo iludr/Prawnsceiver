@@ -1708,7 +1708,10 @@
             c.nudgeRow.style.display = free;
             c.nudgeRow2.style.display = free;
             c.tuneHint.style.display = free;
-            c.dsRow.style.display = free;
+            // the direct-sampling checkbox is pointless on Blog V4/V4L:
+            // they receive HF natively via the upconverter (and direct
+            // sampling yields no signal there) — hide it, HF range stays
+            c.dsRow.style.display = (free === '' && !/Blog V4/.test(d.usb_name || '')) ? '' : 'none';
             // the bias-tee row exists on Blog V4/V4L dongles only (they
             // have the hardware); it stays visible in every role — it
             // powers the antenna/LNA regardless of what is received

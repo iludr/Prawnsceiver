@@ -814,6 +814,7 @@ print("18 bias tee: unsupported refused, cmd 0x0e live + on reconnect while ON, 
 # pass, park — e.g. clearing the HF override), the reconnect must send
 # 0x09=0 even though the flag is still ON, otherwise the daemon stays
 # locked in Q-ADC direct mode (2026-11-11 bug report).
+entry['usb_name'] = None          # generic dongle for this test (V4L set in #18)
 assert radio.set_dongle_direct_sample(DID, True) is True
 with state.status_lock:
     state.manual_dongle_freq[DID] = 7_074_000      # 40 m HF override
@@ -832,5 +833,26 @@ commands.remove((0x09, 0))
 with state.status_lock:
     assert state.sdrs[DID]['direct_sample'] is True, "the flag itself must stay ON for the next HF tune"
 print("19 direct sampling gated on tuned freq < 24 MHz (no leak into roles/passes): OK")
+
+# 20. Blog V4/V4L never get direct sampling: the rtl-sdr.com V4L guide
+# says Q-ADC direct mode yields NO results on them (native HF
+# upconverter). The toggle must refuse on=1, and even with the flag
+# somehow set + an HF override, the connect must send 0x09=0, never 2.
+entry['usb_name'] = 'Blog V4L'
+assert radio.set_dongle_direct_sample(DID, True) is False, "V4/V4L must refuse direct sampling on"
+with state.status_lock:
+    state.sdrs[DID]['direct_sample'] = True        # flag forced on anyway
+    state.manual_dongle_freq[DID] = 7_074_000      # 40 m HF override
+radio._stop_capture(entry)
+wait_for(lambda: entry.get('sock') is None, what='capture stopped')
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: (0x09, 0) in commands, what='0x09=0 sent to the V4L despite flag ON + HF tune')
+commands.remove((0x09, 0))
+time.sleep(0.3)
+assert (0x09, 2) not in commands, f"0x09=2 must never reach a V4/V4L, got {commands}"
+with state.status_lock:
+    state.sdrs[DID]['direct_sample'] = False
+    state.manual_dongle_freq.pop(DID, None)
+print("20 V4/V4L: direct sampling refused + 0x09=0 always (native HF upconverter): OK")
 print("ALL RADIO TESTS PASSED")
 os._exit(0)

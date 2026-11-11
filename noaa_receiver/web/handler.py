@@ -1076,7 +1076,12 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             if entry is None:
                 self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
                 return
-            set_dongle_direct_sample(dev, on)
+            if not set_dongle_direct_sample(dev, on):
+                self._send_json({'success': False,
+                                 'error': 'Direct sampling not available on Blog V4/V4L — '
+                                          'they receive HF natively (upconverter); Q-ADC mode gives no signal'},
+                                code=400)
+                return
             self._send_json({'success': True, 'direct_sample': bool(entry.get('direct_sample'))}, code=200)
         elif self.path.split('?')[0] == '/bias_dongle':
             # Toggle one dongle's bias tee (RTL-SDR Blog V4/V4L only):
