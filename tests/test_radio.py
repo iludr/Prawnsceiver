@@ -807,5 +807,30 @@ time.sleep(0.3)
 assert not [c for c in commands if c[0] == 0x0e], f"no 0x0e expected while bias tee is off, got {commands}"
 assert radio.set_dongle_bias_tee(DID, False) is True   # idempotent
 print("18 bias tee: unsupported refused, cmd 0x0e live + on reconnect while ON, persistence, worker cfg: OK")
+
+# 19. The direct-sampling flag must not leak into VHF/UHF tunes: with
+# direct_sample ON and an HF override set, the connect sends 0x09=2 —
+# but once the dongle is back on a >24 MHz frequency (role switch,
+# pass, park — e.g. clearing the HF override), the reconnect must send
+# 0x09=0 even though the flag is still ON, otherwise the daemon stays
+# locked in Q-ADC direct mode (2026-11-11 bug report).
+assert radio.set_dongle_direct_sample(DID, True) is True
+with state.status_lock:
+    state.manual_dongle_freq[DID] = 7_074_000      # 40 m HF override
+wait_for(lambda: entry.get('sock') is None, what='capture stopped by the DS flip')
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: (0x09, 2) in commands, what='0x09=2 on HF tune while flag ON')
+commands.remove((0x09, 2))
+# mode switch: HF override gone, park freq (137.68 MHz) applies again
+with state.status_lock:
+    state.manual_dongle_freq.pop(DID, None)
+radio._stop_capture(entry)
+wait_for(lambda: entry.get('sock') is None, what='capture stopped')
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: (0x09, 0) in commands, what='0x09=0 on VHF park despite flag still ON')
+commands.remove((0x09, 0))
+with state.status_lock:
+    assert state.sdrs[DID]['direct_sample'] is True, "the flag itself must stay ON for the next HF tune"
+print("19 direct sampling gated on tuned freq < 24 MHz (no leak into roles/passes): OK")
 print("ALL RADIO TESTS PASSED")
 os._exit(0)

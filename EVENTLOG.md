@@ -2646,3 +2646,15 @@ it is the dongle's own 28.8 MHz reference crystal / alias fold point
 - Tests: tests/test_radio.py #18 (bias tee: refuse unsupported, 0x0e
   live + on reconnect while ON, persistence, worker cfg); jsdom
   v4l-smoke.js 8/8; full radio/manager/db/ws/scan suites pass.
+
+## 2026-11-11 ~17:50 — 🐛 direct sampling no longer leaks into role/mode switches
+
+Bug: the persisted direct_sample flag was applied on every capture
+connect regardless of the tuned band, so switching from HF (direct
+sampling, cmd 0x09=2) to a dedicated role or a satellite pass left the
+rtl_tcp daemon locked in Q-ADC direct mode — the tuner stayed bypassed
+on VHF/UHF bands. Fix: sdr_capture_thread gates direct sampling on the
+tuned frequency being below the 24 MHz tuner floor (0x09=0 otherwise),
+covering role switches, sat_mode switches and passes in both the main
+process and the worker. The flag itself stays ON, so the next manual
+HF tune resumes direct sampling. Test: tests/test_radio.py #19.

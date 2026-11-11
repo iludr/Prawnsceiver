@@ -2145,7 +2145,15 @@ def sdr_capture_thread(did):
             # protocol — the rtl_tcp CLI parses -g as an int, so fractional
             # gain steps like the R820T's 29.7 dB must go through the socket
             gain_db = dongle_gain_db(did)
-            direct = bool(entry.get('direct_sample'))
+            # Direct sampling only below the tuner's 24 MHz floor — that
+            # is the only band where it is meaningful. Gating on the
+            # tuned frequency (not just the persisted flag) keeps the
+            # daemon from staying locked in Q-ADC direct mode when the
+            # dongle switches to a dedicated role or a satellite pass
+            # (all VHF/UHF): the reconnect then sends 0x09=0 and the
+            # tuner takes over again (2026-11-11 bug report)
+            direct = (bool(entry.get('direct_sample'))
+                      and tuned_freq < 24_000_000)
             if entry.get('usb_idx') is not None and not direct:
                 # Local USB dongle: rtl_sdr streams raw u8 IQ on stdout.
                 # It cannot be retuned while running — a band switch
