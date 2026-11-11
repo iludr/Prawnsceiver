@@ -217,3 +217,35 @@ assert _ms < 150, f"SSB demod too slow: {_ms:.1f} ms per 32k batch"
 print(f"cpu: ssb batch (32768 samples) takes {_ms:.1f} ms: ok")
 
 print("all AM/SSB/CW demod tests passed")
+
+# DC blocker (gr-correctiq-style LO spike cancellation): a tone plus a
+# large static DC offset must come out with ~zero mean and the 0 Hz FFT
+# bin suppressed — and block-wise processing must equal whole-stream.
+n = 8192
+t = np.arange(n) / fs
+tone = 0.3 * np.exp(2j * np.pi * 25_000 * t)          # wanted signal at +25 kHz
+spike = (40 + 25j)                                      # LO leakage DC spike
+x = (tone + spike).astype(np.complex64)
+
+def _dc_blocks(xx, nn, st):
+    return np.concatenate([dsp.dc_remove(xx[i:i+nn], st) for i in range(0, len(xx), nn)])
+
+st = dsp.new_state()
+out = _dc_blocks(x, 512, st)
+assert abs(out.mean()) < 0.05, f"DC not removed: mean={out.mean()}"
+mag0 = np.abs(np.fft.fft(out[:4096])).max()
+bin0 = np.abs(np.fft.fft(out[:4096])[0])
+# the raw spike would put |spike|*N in bin 0 — require > 40 dB suppression
+assert bin0 < abs(spike) * 4096 * 0.01, f"0 Hz bin not suppressed: {bin0:.2f} vs spike level {abs(spike)*4096:.0f}"
+# block-wise determinism: two fresh states over the same blocks agree
+st3 = dsp.new_state()
+out3 = _dc_blocks(x, 512, st3)
+assert np.allclose(out, out3, atol=1e-5), "block-wise DC removal diverged"
+# drift tracking: after a step in the DC level the IIR estimate follows
+x2 = x + 5j
+st4 = dsp.new_state()
+y = _dc_blocks(x2, 512, st4)
+assert abs(st4['dc_est'] - (spike + 5j)) < 2.0, \
+    f"DC estimate did not track the step: {st4['dc_est']}"
+print(f"dc_remove: spike {spike} cancelled, mean {abs(out.mean()):.4f}, 0 Hz bin {bin0:.3f} vs peak {mag0:.1f}: ok")
+print("all dsp tests passed")

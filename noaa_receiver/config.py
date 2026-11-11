@@ -46,6 +46,10 @@ SDR_RATE = 2400000
 # inherent center DC spike off the satellite signal (it would otherwise sit
 # exactly on the satellite signal).
 SDR_OFFSET_HZ = 60000
+# Software DC cancellation (gr-correctiq-style) on the raw baseband before
+# the offset rotation: removes the tuner's LO leakage spike at 0 Hz from the
+# waterfall and demodulator entirely (the offset above only displaces it)
+DC_REMOVE = True
 AUDIO_RATE = 48000
 IQ_BLOCK = FFT_SIZE * 2
 DECIMATION = SDR_RATE // AUDIO_RATE

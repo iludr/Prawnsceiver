@@ -32,6 +32,7 @@ def new_state():
         "afir48_tail": None, # AM: 3.4 kHz audio low-pass at 48 kHz
         "bfo_phase": 0.0,    # CW beat oscillator NCO phase
         "agc_gain": None,    # SSB/CW AGC: current smoothed gain
+        "dc_est": None,      # DC blocker: running complex DC estimate
     }
 
 
@@ -47,6 +48,26 @@ def iq_to_complex(iq_bytes):
     f -= 127.5
     # Interleaved float32 pairs viewed as complex64 — no second copy
     return f.view(np.complex64)
+
+
+def dc_remove(c, st=None):
+    """Cancel the DC offset (the tuner LO leakage spike at 0 Hz) before the
+    offset rotation — gr-correctiq-style DC removal: a slow IIR tracks
+    drift while the instantaneous block mean kills the static spike, so the
+    spike never reaches the waterfall FFT or the demodulator. 0 Hz here is
+    SDR_OFFSET_HZ above the wanted signal, so no real signal is touched.
+
+    Block-wise safe: the estimate lives in the per-thread state dict."""
+    if st is None:
+        st = demod_state
+    m = c.mean()
+    est = st.get('dc_est')
+    if est is None or not np.isfinite(est.real) or not np.isfinite(est.imag):
+        est = m
+    else:
+        est = est + (m - est) * 0.05
+    st['dc_est'] = est
+    return c - est
 
 
 # ---------- offset rotator ----------

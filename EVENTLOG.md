@@ -2658,3 +2658,20 @@ tuned frequency being below the 24 MHz tuner floor (0x09=0 otherwise),
 covering role switches, sat_mode switches and passes in both the main
 process and the worker. The flag itself stays ON, so the next manual
 HF tune resumes direct sampling. Test: tests/test_radio.py #19.
+
+## 2026-11-11 ~18:00 — 🧹 Software DC-spike removal (gr-correctiq-style)
+
+The DC spike seen across the waterfall is the tuner LO leakage at the
+tuned center; SDR_OFFSET_HZ only displaces it to +60 kHz where narrow
+zooms still show it. Added dsp.dc_remove (config DC_REMOVE): a slow IIR
+DC estimate + instantaneous block mean, subtracted right after
+iq_to_complex and BEFORE the offset rotation — shared by waterfall FFT
+and demod, in master and worker capture threads. Recordings keep raw IQ
+(decode already notches LOCAL_CARRIER_NOTCH). Test: test_dsp.py
+(spike 40+25j cancelled, 0 Hz bin >40 dB down, block-wise deterministic,
+IIR tracks DC steps). Also: add_dongle now fetches usb_name/serial from
+the prawntenna manager at registration, so worker-delegated dongles
+show their model in the master too (V4L card: "R828S (Blog V4L)",
+bias_tee_supported: true; /bias_dongle verified live on/off).
+Note: tests/test_waterfall.py fails on a stale fixture ("waterfall None
+when absent") — pre-existing on 2eb3e08, unrelated.

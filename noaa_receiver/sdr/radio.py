@@ -39,7 +39,7 @@ from .. import db
 from .. import state
 from ..calibration import (AIRBAND, AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMARY_DONGLE,
                           SDR_DONGLE_GAIN, correction_info, tuning_correction)
-from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION,
+from ..config import (AUDIO_RATE, DC_REMOVE, DOPPLER_APPLY_RANGE_HZ, DECIMATION,
                      DONGLE_WORKER_PROCESSES, FFT_SIZE, IQ_BLOCK,
                      IQ_RECORD_FREQS, LAT, LOGDIR, LON,
                      MANUAL_REC_MAX_SECS, RECORD_LOCAL_DIR, SDR_GAIN,
@@ -47,8 +47,8 @@ from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION,
                      SDR_RATE, WATERFALL_ROWS)
 
 from ..decoding.decode import sat_short_name
-from .dsp import (am_demodulate, doppler_shift, fm_demodulate, frequency_shift,
-                  iq_to_complex, new_state, ssb_demodulate)
+from .dsp import (am_demodulate, dc_remove, doppler_shift, fm_demodulate,
+                  frequency_shift, iq_to_complex, new_state, ssb_demodulate)
 
 # Waterfall/signal FFT cadence: compute the FFT only every Nth IQ block. The
 # dashboard draws ~5 rows/s, so ~234 rows/s (960 kHz: 1875 blocks/s / 8) is still 40x
@@ -638,6 +638,13 @@ def add_dongle(host, port):
         if not host or not 1 <= port <= 65535:
             raise ValueError('host must be non-empty and port in 1-65535')
         did = _dongle_id(host, port)
+        # Remote dongle: pick up its USB identity (model, serial) from the
+        # prawntenna manager once at registration — the master process may
+        # never open the rtl_tcp socket itself (worker-delegated capture),
+        # so the connect-time fetch would never run here
+        ident = _manager_dongle_name(host, port)
+        if ident:
+            usb_name, usb_serial = ident
     if did in state.sdrs:
         return did, False
     with state.status_lock:
@@ -2279,9 +2286,15 @@ def sdr_capture_thread(did):
                     bw_hz = state.manual_dongle_bw.get(did)
                     manual_rec = did in state.manual_recording
 
-                # Offset-shift the baseband once: satellite to 0 Hz, DC spike
-                # displaced to +SDR_OFFSET_HZ. Shared by waterfall FFT and demod.
+                # Cancel the DC spike (LO leakage at 0 Hz) in software before
+                # anything else — gr-correctiq-style, so it never reaches the
+                # waterfall or the demod (the offset below only displaces it).
+                # Shared by waterfall FFT and demod.
                 c = iq_to_complex(raw)
+                if DC_REMOVE:
+                    c = dc_remove(c, dst)
+                # Offset-shift the baseband once: satellite to 0 Hz, residual
+                # DC displaced to +SDR_OFFSET_HZ. Shared by waterfall FFT and demod.
                 c = frequency_shift(c, SDR_OFFSET_HZ, SDR_RATE, dst)
 
                 # Live Doppler correction (scheduler-computed during passes):
