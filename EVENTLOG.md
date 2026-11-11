@@ -2701,3 +2701,14 @@ pages, no text); Orbcomm decode of these short captures yields no valid
 packets without ephemeris tracking. New repo tool: tools/iqband/analyze.py
 (per-emitter power track, Doppler drift, POCSAG attempt, Orbcomm raster
 match). Recordings are on the NFS share under recordings/manual/.
+
+## 2026-11-11 ~19:10 — 🛰 Orbcomm decode attempt on the manual captures: 0 packets
+
+Yes, Orbcomm is decodable — the repo has the full receiver
+(decoding/orbcomm.py, live Orbcomm role on 137.5 MHz). Added
+tools/iqband/orbcomm_decode.py to run that demodulator offline over a
+recording (per-channel rotator = tuner - channel; validated on synthetic
+packets). On the two 137.7137 MHz manual captures: 0 packets, symbol
+phase never locks — the S6/S10 emitters are only ~12 dB over the noise
+floor and bursty (edge-of-pass). To decode Orbcomm, record via the
+Orbcomm role during a higher pass instead of manual tunes.
