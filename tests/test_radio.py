@@ -217,7 +217,7 @@ print("2 pass start: retune, WAV open, Doppler applied on the retuned band OK")
 first_wav = entry['wav_path']
 set_sched(137100000, "Meteor-M 2-3", True)
 wait_for(lambda: entry['wav_path'] and 'Meteor-M_2-3_' in os.path.basename(entry['wav_path']), what='Meteor wav')
-time.sleep(0.2); assert not commands, f"no retune expected on same frequency, got {commands}"
+time.sleep(0.2); assert not [c for c in commands if c[0] != 0x09], f"no retune expected on same frequency, got {commands}"  # cmd 0x09 (direct sampling off) is sent on every connect
 with wave.open(first_wav) as w: assert w.getnframes() > 0 and w.getframerate() == 48000
 print("3 same-frequency switch: WAV split, no retune, first WAV valid OK")
 
@@ -748,5 +748,64 @@ finally:
     radio._stop_capture = _real_stop
     radio.set_dongle_aprs(DID, False)
 print("16 APRS preset flip retunes with the stream still open (worker mode): OK")
+
+# 17. Direct sampling checkbox: set_dongle_direct_sample flips the
+# rtl_tcp control command 0x09 (2 = Q-ADC) on the reconnected capture,
+# persists via the dongles table, reaches the worker cfg, and turning it
+# off clears a manual override below the R820T's 24 MHz floor.
+with state.status_lock:
+    state.manual_dongle_freq[DID] = 7_074_000      # 40 m, HF — only legal in direct mode
+assert radio.set_dongle_direct_sample(DID, True) is True
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: (0x09, 2) in commands, what='direct-sampling cmd 0x09 value 2 (Q-ADC)')
+commands.remove((0x09, 2))
+assert radio._worker_cfg(DID)['direct_sample'] is True, "cfg frame must carry direct_sample"
+radio.load_dongles()                                # persistence roundtrip
+with state.status_lock:
+    assert state.sdrs[DID]['direct_sample'] is True, "direct_sample must restore from the dongles table"
+    assert state.manual_dongle_freq.get(DID) == 7_074_000, "HF override must survive enabling"
+assert radio.set_dongle_direct_sample(DID, False) is True
+with state.status_lock:
+    assert DID not in state.manual_dongle_freq, "sub-24 MHz override must be cleared when direct sampling turns off"
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: (0x09, 0) in commands, what='direct-sampling cmd 0x09 value 0 (off)')
+commands.remove((0x09, 0))
+assert radio.set_dongle_direct_sample(DID, False) is True   # idempotent
+print("17 direct sampling: cmd 0x09 on connect, persistence, worker cfg, HF override cleared on off: OK")
+
+# 18. Bias tee (Blog V4/V4L only): unsupported dongle refuses; a V4L
+# (usb_name from the prawntenna manager) gets rtl_tcp cmd 0x0e sent live
+# on the running capture socket, persists via the dongles table, reaches
+# the worker cfg, and is re-asserted on reconnect only while ON.
+assert radio.set_dongle_bias_tee(DID, True) is False, "no bias tee without a Blog V4/V4L identity"
+entry['usb_name'] = 'Blog V4L'          # as _manager_dongle_name would set it
+assert radio.dongle_bias_tee_supported(entry) is True
+assert radio.set_dongle_bias_tee(DID, True) is True
+wait_for(lambda: (0x0e, 1) in commands, what='bias-tee cmd 0x0e value 1 on the live socket')
+commands.remove((0x0e, 1))
+assert radio._worker_cfg(DID)['bias_tee'] is True, "cfg frame must carry bias_tee"
+radio.load_dongles()                                # persistence roundtrip
+with state.status_lock:
+    assert state.sdrs[DID]['bias_tee'] is True, "bias_tee must restore from the dongles table"
+# reconnect while ON: 0x0e=1 is re-asserted on connect (stop the running
+# capture first — the fake server accepts one client at a time)
+radio._stop_capture(entry)
+wait_for(lambda: entry.get('sock') is None, what='capture stopped')
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: (0x0e, 1) in commands, what='bias-tee cmd 0x0e value 1 on reconnect')
+commands.remove((0x0e, 1))
+assert radio.set_dongle_bias_tee(DID, False) is True
+wait_for(lambda: (0x0e, 0) in commands, what='bias-tee cmd 0x0e value 0 (off) on the live socket')
+commands.remove((0x0e, 0))
+# reconnect while OFF: no 0x0e command (off is the daemon default)
+radio._stop_capture(entry)
+wait_for(lambda: entry.get('sock') is None, what='capture stopped')
+t = threading.Thread(target=radio.sdr_capture_thread, args=(DID,), daemon=True); t.start()
+wait_for(lambda: (0x09, 0) in commands, what='reconnect happened')
+commands.remove((0x09, 0))
+time.sleep(0.3)
+assert not [c for c in commands if c[0] == 0x0e], f"no 0x0e expected while bias tee is off, got {commands}"
+assert radio.set_dongle_bias_tee(DID, False) is True   # idempotent
+print("18 bias tee: unsupported refused, cmd 0x0e live + on reconnect while ON, persistence, worker cfg: OK")
 print("ALL RADIO TESTS PASSED")
 os._exit(0)

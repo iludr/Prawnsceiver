@@ -176,6 +176,8 @@ RTL_TCP_SET_FREQ = 0x01
 RTL_TCP_SET_SAMPLE_RATE = 0x02
 RTL_TCP_SET_GAIN_MODE = 0x03   # 0 = tuner AGC, 1 = manual
 RTL_TCP_SET_GAIN = 0x04        # value = gain in tenths of dB
+RTL_TCP_SET_DIRECT_SAMPLING = 0x09  # 0 = off, 1 = I-ADC, 2 = Q-ADC (HF mode)
+RTL_TCP_SET_BIAS_TEE = 0x0e         # rtlsdrblog rtl-sdr fork only: 1 = on, 0 = off
 
 # Tuner type ids from the rtl_tcp handshake (librtlsdr), for the dongle
 # cards' labels. Unknown types fall back to a numeric label.
@@ -202,12 +204,17 @@ def _recv_exact(sock, n):
         buf += chunk
     return buf
 
-def _rtl_tcp_connect(host, port, gain_db):
+def _rtl_tcp_connect(host, port, gain_db, direct=False, bias_tee=None):
     """Open one rtl_tcp connection: connect, verify the 'RTL0' handshake,
     set the sample rate (always) and a fixed manual gain (when configured)
     over the control protocol — the rtl_tcp CLI parses -g as an int, so
     fractional gain steps like the R820T's 29.7 dB must go through the
-    socket.
+    socket. With direct=True the tuner is bypassed (RTL2832U Q-ADC
+    direct sampling, HF below the R820T range) — sent explicitly both
+    ways because the daemon keeps the mode of its last client. With
+    bias_tee set (True/False) the bias tee is switched via command 0x0e,
+    which only the rtlsdrblog rtl-sdr fork understands (stock rtl_tcp
+    ignores it) — for RTL-SDR Blog V4/V4L dongles.
 
     Returns (socket, tuner_type, gain_count); the IQ stream starts flowing
     immediately (the caller reads it via _IQReader).
@@ -233,6 +240,15 @@ def _rtl_tcp_connect(host, port, gain_db):
     else:
         # explicit AGC: the tuner's own gain control follows the signal
         _rtl_tcp_set(sock, RTL_TCP_SET_GAIN_MODE, 0)
+    # Direct sampling (Q-ADC) bypasses the tuner entirely — HF reception
+    # below the R820T's 24 MHz floor. Explicit off otherwise: a previous
+    # client (SDR# etc.) may have left the daemon in direct mode.
+    _rtl_tcp_set(sock, RTL_TCP_SET_DIRECT_SAMPLING, 2 if direct else 0)
+    # Bias tee (Blog V4/V4L, fork-only command 0x0e): re-assert the
+    # persisted state on every connect — the daemon keeps the mode of its
+    # last client, and a reboot of the dongle host resets the GPIO
+    if bias_tee is not None:
+        _rtl_tcp_set(sock, RTL_TCP_SET_BIAS_TEE, 1 if bias_tee else 0)
     return sock, tuner_type, gain_count
 
 
@@ -283,6 +299,31 @@ def _manager_republish(host, port, api_port=None):
                 state.log_console(f"Prawntenna republish call failed "
                                   f"({host}:{port}): {e}", "warn")
             return
+
+
+def _manager_dongle_name(host, port, api_port=None):
+    """Ask the prawntenna manager which USB dongle serves host:port and
+    return (name, serial) — e.g. ('RTLSDRBlog, Blog V4L', '00000001').
+    Remote dongles carry no USB identity of their own; the manager's
+    /dongles.json lists name + serial per published rtl_tcp port. Best
+    effort: None when there is no manager or no match."""
+    api_port = api_port or MANAGER_API_PORT
+    try:
+        with urllib.request.urlopen(f"http://{host}:{api_port}/dongles.json",
+                                    timeout=5) as r:
+            dongles = (json.loads(r.read().decode()) or {}).get("dongles") or []
+    except Exception:
+        return None
+    for dg in dongles:
+        if dg.get("port") == port:
+            name = dg.get("name") or ''
+            serial = dg.get("serial")
+            if name:
+                # split "RTLSDRBlog, Blog V4L" into manufacturer/product
+                parts = [p.strip() for p in name.split(',', 1)]
+                return (parts[1] if len(parts) > 1 else name), serial
+    return None
+
 
 class _IQReader:
     """Block reader for the rtl_tcp IQ stream.
@@ -389,6 +430,38 @@ def _kill_rtl_sdr(proc):
         pass
 
 
+# Direct sampling needs the rtl_tcp control protocol (command 0x09) —
+# the rtl_sdr CLI has no direct-sampling flag ("Invalid option -- 'D'"
+# on stock osmocom builds). For a LOCAL USB dongle in direct-sampling
+# mode we therefore spawn a throwaway rtl_tcp on 127.0.0.1 and drive it
+# over the same socket path as the remote dongles.
+LOCAL_RTL_TCP_PORT_BASE = 35000   # port = base + usb_idx
+
+
+def _spawn_local_rtl_tcp(entry):
+    """Start a private rtl_tcp for a local USB dongle (127.0.0.1, port
+    LOCAL_RTL_TCP_PORT_BASE + usb_idx) so direct sampling can be set via
+    the control protocol. Returns (Popen, port); None when rtl_tcp is
+    not installed (warned once per dongle)."""
+    idx = entry.get('usb_idx')
+    exe = shutil.which('rtl_tcp')
+    if not exe:
+        if not entry.get('usb_warned'):
+            entry['usb_warned'] = True
+            state.log_console(f"rtl_tcp not found on this host — cannot direct-sample USB dongle {idx}", "warn")
+        return None
+    port = LOCAL_RTL_TCP_PORT_BASE + int(idx)
+    entry['local_tcp_port'] = port
+    argv = [exe, '-a', '127.0.0.1', '-p', str(port), '-d', str(idx)]
+    try:
+        return subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL), port
+    except Exception as e:
+        state.log_console(f"Cannot start local rtl_tcp for USB dongle {idx}: {e}", "warn")
+        return None
+
+
 def usb_dongles():
     """Enumerate the USB dongles on this host exactly the way rtl_sdr
     itself sees them (name + serial per device index): rtl_sdr is run
@@ -465,8 +538,8 @@ def _persist_dongles():
                     cur.execute("INSERT INTO dongles (host, port, ais, orbcomm,"
                                 " aprs, aprs_iss, aprs_lasar, pocsag, adsb,"
                                 " auto_sat, sat_mode, ism, dab, dab_channel,"
-                                " gain_auto, added_ts)"
-                                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                " gain_auto, direct_sample, bias_tee, added_ts)"
+                                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (host, port,
                                  1 if e.get('ais') else 0,
                                  1 if e.get('orbcomm') else 0,
@@ -480,7 +553,9 @@ def _persist_dongles():
                                  1 if e.get('ism') else 0,
                                  1 if e.get('dab') else 0,
                                  e.get('dab_channel') or '5C',
-                                 1 if e.get('gain_auto') else 0, time.time()))
+                                 1 if e.get('gain_auto') else 0,
+                                 1 if e.get('direct_sample') else 0,
+                                 1 if e.get('bias_tee') else 0, time.time()))
     except Exception as e:
         state.log_console(f"Cannot persist dongle list: {e}", "warn")
 
@@ -507,7 +582,7 @@ def _new_entry(did, host, port, primary, usb_idx=None, usb_name=None,
         'aprs_iss': False, 'aprs_lasar': False,
         'pocsag': False, 'adsb': False, 'ism': False, 'auto_sat': False,
         'dab': False, 'dab_channel': '5C',
-        'sat_mode': 'meteor',
+        'sat_mode': 'meteor', 'direct_sample': False, 'bias_tee': False,
         'usb_idx': usb_idx, 'proc': None,
         'usb_name': usb_name, 'usb_serial': usb_serial,
         # dBFS spectrum rows for the WebSocket feed: int16 dB*10 per
@@ -892,6 +967,94 @@ def set_dongle_gain_auto(did, on):
     return True
 
 
+def set_dongle_direct_sample(did, on):
+    """Toggle one dongle's direct sampling mode (the checkbox in the
+    manual section of its dashboard card): on = the R820T tuner is
+    bypassed and the RTL2832U Q-ADC samples the antenna directly, so
+    the dongle receives HF below the tuner's 24 MHz floor (0.5-28.8 MHz
+    tuning range; at the station's 2.4 Msps the baseband is 0-2.4 MHz
+    and higher HF aliases into it). Over rtl_tcp this is control command
+    0x09; a local USB dongle gets a private rtl_tcp on 127.0.0.1 because
+    the rtl_sdr CLI has no direct-sampling flag. Persists in the dongles
+    table; the capture is restarted so the change takes effect at once
+    (turning it off also drops a manual override below 24 MHz, which the
+    tuner could not follow). Unknown id: False; a no-op still succeeds."""
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return False
+    on = bool(on)
+    if bool(entry.get('direct_sample')) == on:
+        return True
+    entry['direct_sample'] = on
+    if not on:
+        with state.status_lock:
+            f = state.manual_dongle_freq.get(did)
+            if f is not None and f < 24_000_000:
+                state.manual_dongle_freq.pop(did, None)
+                state.log_console(f"🎛 Dongle {did} frequency override {f / 1e6:.4f} MHz cleared — below the R820T range")
+    state.log_console(f"⚡ Dongle {did}: direct sampling (Q-ADC, HF) -> "
+                      + ("ON — tuner bypassed, 0.5-28.8 MHz range" if on
+                         else "OFF — back to the R820T tuner (24-1766 MHz)"))
+    _persist_dongles()
+    # applied on the next connect — restart the capture
+    _stop_capture(entry)
+    return True
+
+
+def dongle_bias_tee_supported(entry):
+    """True when this dongle has a software-switchable bias tee: the
+    RTL-SDR Blog V4/V4L hardware (detected via the USB product string,
+    fetched from the prawntenna manager for remote dongles) and a host
+    running the rtlsdrblog rtl-sdr fork, whose rtl_tcp understands
+    control command 0x0e. Stock rtl_tcp silently ignores 0x0e, and local
+    USB dongles are driven by rtl_sdr (no control channel)."""
+    model = (entry.get('usb_name') or '')
+    return 'Blog V4' in model and entry.get('usb_idx') is None
+
+
+def set_dongle_bias_tee(did, on):
+    """Toggle one dongle's bias tee (RTL-SDR Blog V4/V4L only — powers
+    an LNA / active antenna over the coax): /bias_dongle?d=<id>&on=1.
+    Over rtl_tcp this is control command 0x0e, understood only by the
+    rtlsdrblog rtl-sdr fork's rtl_tcp. Persists in the dongles table and
+    is re-asserted on every (re)connect; applied live on the running
+    capture socket when one exists, otherwise via a short standalone
+    connection (only when no capture — and no other client like readsb —
+    holds the daemon). Unknown id or unsupported dongle: False."""
+    entry = state.sdrs.get(did)
+    if entry is None:
+        return False
+    if not dongle_bias_tee_supported(entry):
+        state.log_console(f"🔋 Dongle {did}: bias tee not supported "
+                          f"(needs a Blog V4/V4L on a fork-rtl_tcp host)", "warn")
+        return False
+    on = bool(on)
+    if bool(entry.get('bias_tee')) == on:
+        return True
+    entry['bias_tee'] = on
+    state.log_console(f"🔋 Dongle {did}: bias tee -> " + ("ON" if on else "OFF"))
+    _persist_dongles()
+    # apply live: prefer the running capture socket (single-client
+    # daemon — a second connection would steal the IQ stream)
+    sock = entry.get('sock')
+    if sock is not None:
+        try:
+            _rtl_tcp_set(sock, RTL_TCP_SET_BIAS_TEE, 1 if on else 0)
+            return True
+        except OSError:
+            pass    # dead socket — the reconnect re-asserts the flag anyway
+    if not entry.get('connected'):
+        # no client holds the daemon: a short standalone connection is safe
+        try:
+            s, _, _ = _rtl_tcp_connect(entry['host'], entry['port'], None)
+            _rtl_tcp_set(s, RTL_TCP_SET_BIAS_TEE, 1 if on else 0)
+            s.close()
+        except Exception as e:
+            state.log_console(f"🔋 Dongle {did}: bias tee command failed ({e}) — "
+                              f"applied on next connect", "warn")
+    return True
+
+
 def set_dongle_sat_mode(did, mode):
     """Set which satellite family this dongle tracks: 'meteor' (Meteor-M
     LRPT passes) or 'iss' (ISS passes). The two modes replaced the single
@@ -1016,20 +1179,22 @@ def load_dongles():
                 bool(r['pocsag']), bool(r['adsb']), bool(r['auto_sat']),
                 r['sat_mode'] or 'meteor', bool(r['ism']),
                 bool(r['gain_auto']), bool(r['dab']),
-                r['dab_channel'] or '5C')
+                r['dab_channel'] or '5C', bool(r['direct_sample']),
+                bool(r['bias_tee']))
                for r in db.query("SELECT host, port, ais, orbcomm, aprs,"
                                  " aprs_iss, aprs_lasar, pocsag, adsb,"
                                  " auto_sat, sat_mode, ism, dab, dab_channel,"
-                                 " gain_auto"
+                                 " gain_auto, direct_sample, bias_tee"
                                  " FROM dongles ORDER BY port, host")]
     from_db = bool(entries)   # persisted rows are the source of truth
     if not entries:
         entries = [(h, p, False, False, False, False, False, False, False,
-                    False, 'meteor', False, False, False, '5C')
+                    False, 'meteor', False, False, False, '5C', False, False)
                    for h, p in DEFAULT_DONGLES]
     for host, port, was_ais, was_orbcomm, was_aprs, was_iss, was_lasar, \
             was_pocsag, was_adsb, was_auto_sat, was_sat_mode, was_ism, \
-            was_gain_auto, was_dab, was_dab_channel in entries:
+            was_gain_auto, was_dab, was_dab_channel, was_direct_sample, \
+            was_bias_tee in entries:
         try:
             did, _ = add_dongle(host, port)
         except ValueError as e:
@@ -1056,6 +1221,10 @@ def load_dongles():
                 # the ISM role and the AGC flag are settings too
                 state.sdrs[did]['ism'] = was_ism
                 state.sdrs[did]['gain_auto'] = was_gain_auto
+                # direct sampling (HF) is a setting too
+                state.sdrs[did]['direct_sample'] = was_direct_sample
+                # the bias tee (Blog V4/V4L) is a setting too
+                state.sdrs[did]['bias_tee'] = was_bias_tee
                 # the DAB+ tuned channel is a setting too (the role flag
                 # itself is restored by the was_dab branch below)
                 state.sdrs[did]['dab_channel'] = was_dab_channel
@@ -1213,7 +1382,7 @@ def _worker_cfg(did):
         cfg = {"cmd": "cfg"}
         for flag in ('ais', 'orbcomm', 'aprs', 'aprs_iss', 'aprs_lasar',
                      'pocsag', 'adsb', 'ism', 'dab', 'auto_sat', 'paused',
-                     'gain_auto'):
+                     'gain_auto', 'direct_sample', 'bias_tee'):
             cfg[flag] = bool(e.get(flag))
         cfg['sat_mode'] = e.get('sat_mode') or 'meteor'
         cfg['dab_channel'] = e.get('dab_channel') or '5C'
@@ -1976,7 +2145,8 @@ def sdr_capture_thread(did):
             # protocol — the rtl_tcp CLI parses -g as an int, so fractional
             # gain steps like the R820T's 29.7 dB must go through the socket
             gain_db = dongle_gain_db(did)
-            if entry.get('usb_idx') is not None:
+            direct = bool(entry.get('direct_sample'))
+            if entry.get('usb_idx') is not None and not direct:
                 # Local USB dongle: rtl_sdr streams raw u8 IQ on stdout.
                 # It cannot be retuned while running — a band switch
                 # breaks the read loop and respawns it at the new
@@ -1991,7 +2161,25 @@ def sdr_capture_thread(did):
                 state.log_console(f"Connected to USB dongle {did} (device {entry['usb_idx']}, rtl_sdr), tuned {freq_str}Hz (offset +{SDR_OFFSET_HZ + correction}Hz, DC spike displaced), gain={gain_db or 'auto'}dB")
                 reader = _IQReader(_PipeRecv(proc.stdout), IQ_BLOCK)
             else:
-                sock, tuner_type, gain_count = _rtl_tcp_connect(entry['host'], entry['port'], gain_db)
+                if entry.get('usb_idx') is not None:
+                    # Direct sampling on a local USB dongle: the rtl_sdr
+                    # CLI has no direct-sampling flag, so run a private
+                    # rtl_tcp on 127.0.0.1 and drive it over the control
+                    # protocol (command 0x09) like the remote dongles
+                    spawned = _spawn_local_rtl_tcp(entry)
+                    if spawned is None:
+                        raise RuntimeError('rtl_tcp not available for direct sampling on this host')
+                    proc, lport = spawned
+                    entry['proc'] = proc
+                    host, port = '127.0.0.1', lport
+                else:
+                    host, port = entry['host'], entry['port']
+                sock, tuner_type, gain_count = _rtl_tcp_connect(
+                    host, port, gain_db, direct=direct,
+                    # re-assert only when ON: off is the daemon default, and
+                    # sending 0x0e=0 on every connect would needlessly add a
+                    # command to the reconnect path
+                    bias_tee=True if entry.get('bias_tee') else None)
                 # Explicit tune on connect: the rtl_tcp daemon serves
                 # whatever frequency it last held — normally this
                 # dongle's previous session (a plain reconnect), but
@@ -2000,12 +2188,30 @@ def sdr_capture_thread(did):
                 _rtl_tcp_set(sock, RTL_TCP_SET_FREQ, tuned_freq + SDR_OFFSET_HZ + correction)
                 entry['sock'] = sock
                 entry['connected'] = True
-                entry['tuner'] = TUNER_NAMES.get(tuner_type, f'rtl_tcp type {tuner_type}')
-                entry['last_data'] = time.time()
-                if primary:
-                    state.log_console(f"Connected to rtl_tcp {did} (primary, tuner {entry['tuner']}, {gain_count} gain steps), tuned {freq_str}Hz (offset +{SDR_OFFSET_HZ + correction}Hz, DC spike displaced), gain={gain_db or 'auto'}dB")
+                # Remote dongles carry no USB identity of their own — ask
+                # the prawntenna manager which model serves this port (once)
+                if not entry.get('usb_name') and entry.get('usb_idx') is None:
+                    ident = _manager_dongle_name(entry['host'], entry['port'])
+                    if ident:
+                        entry['usb_name'], entry['usb_serial'] = ident
+                # Tuner label: the rtl_tcp handshake reports the R820T id
+                # even for the Blog V4L (its R828S masquerades as R820T on
+                # I2C), so the V4/V4L models are recognized by USB product
+                # string instead
+                model = entry.get('usb_name') or ''
+                if 'V4L' in model:
+                    chip = 'R828S (Blog V4L)'
+                elif 'Blog V4' in model:
+                    chip = 'R828D (Blog V4)'
                 else:
-                    state.log_console(f"Connected to rtl_tcp {did} (dongle, tuner {entry['tuner']}), tuned {freq_str}Hz")
+                    chip = TUNER_NAMES.get(tuner_type, f'rtl_tcp type {tuner_type}')
+                entry['tuner'] = chip + (' + DIRECT Q-ADC' if direct else '')
+                entry['last_data'] = time.time()
+                src = f"USB dongle {did} via local rtl_tcp :{lport}" if entry.get('usb_idx') is not None else f"rtl_tcp {did}"
+                if primary:
+                    state.log_console(f"Connected to {src} (primary, tuner {entry['tuner']}, {gain_count} gain steps), tuned {freq_str}Hz (offset +{SDR_OFFSET_HZ + correction}Hz, DC spike displaced), gain={gain_db or 'auto'}dB")
+                else:
+                    state.log_console(f"Connected to {src} (dongle, tuner {entry['tuner']}), tuned {freq_str}Hz")
                 reader = _IQReader(sock, IQ_BLOCK)
             record_name = None
 
@@ -2119,11 +2325,13 @@ def sdr_capture_thread(did):
                             with state.status_lock:
                                 state.manual_recording.pop(did, None)
                             finalize_manual_rec()
-                        if entry.get('usb_idx') is not None:
+                        if entry.get('usb_idx') is not None and not direct:
                             # rtl_sdr cannot retune live: break to the
                             # reconnect loop, which respawns it on the
                             # new frequency (the running WAV is closed
-                            # above, exactly like the rtl_tcp path)
+                            # above, exactly like the rtl_tcp path).
+                            # In direct-sampling mode the source is a
+                            # local rtl_tcp, which retunes live below.
                             if primary:
                                 state.log_console(f"Retuning (restart): {tuned_freq} Hz -> {freq_now} Hz ({sat_now})")
                             break

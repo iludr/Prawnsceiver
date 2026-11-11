@@ -36,6 +36,7 @@ from ..sdr.radio import (add_dongle, remove_dongle, set_dongle_adsb,
                         set_dongle_ism, set_dongle_pocsag, set_dongle_paused,
                         set_dongle_dab, set_dongle_gain_auto,
                         set_dongle_sat_mode, set_manual_recording,
+                        set_dongle_direct_sample, set_dongle_bias_tee,
                         usb_dongles)
 
 def _dongle_list():
@@ -75,6 +76,10 @@ def _dongle_list():
                 "auto_sat": bool(e.get("auto_sat")),
                 "sat_mode": e.get("sat_mode") or "meteor",
                 "gain_auto": bool(e.get("gain_auto")),
+                "direct_sample": bool(e.get("direct_sample")),
+                "bias_tee": bool(e.get("bias_tee")),
+                "bias_tee_supported": ('Blog V4' in (e.get("usb_name") or '')
+                                       and e.get("usb_idx") is None),
                 "paused": bool(e.get("paused")),
                 "signal": round(e["signal"], 2),
                 # A readsb-backed dongle in the ADS-B role has no capture
@@ -1056,6 +1061,43 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
                 return
             set_dongle_gain_auto(dev, on)
             self._send_json({'success': True, 'gain_auto': bool(entry.get('gain_auto'))}, code=200)
+        elif self.path.split('?')[0] == '/direct_sample_dongle':
+            # Toggle one dongle's direct sampling mode (the checkbox in
+            # the manual section of its dashboard card):
+            # /direct_sample_dongle?d=<id>&on=1 bypasses the R820T tuner
+            # (rtl_tcp control command 0x09, Q-ADC) so the dongle receives
+            # HF below 24 MHz — the manual tune then accepts 0.5-28.8 MHz.
+            # on=0 returns to the tuner. Persists in the dongles table; the
+            # capture restarts so the change takes effect at once.
+            query = self._query()
+            dev = (query.get('d') or [''])[0].strip()
+            on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
+            entry = state.sdrs.get(dev)
+            if entry is None:
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
+                return
+            set_dongle_direct_sample(dev, on)
+            self._send_json({'success': True, 'direct_sample': bool(entry.get('direct_sample'))}, code=200)
+        elif self.path.split('?')[0] == '/bias_dongle':
+            # Toggle one dongle's bias tee (RTL-SDR Blog V4/V4L only):
+            # /bias_dongle?d=<id>&on=1 powers an LNA / active antenna
+            # over the coax — rtl_tcp control command 0x0e, understood
+            # only by the rtlsdrblog fork's rtl_tcp on the dongle host.
+            # Persists in the dongles table and is re-asserted on every
+            # connect; applied live when a capture is running.
+            query = self._query()
+            dev = (query.get('d') or [''])[0].strip()
+            on = (query.get('on') or [''])[0].strip().lower() not in ('', '0', 'false', 'off', 'no')
+            entry = state.sdrs.get(dev)
+            if entry is None:
+                self._send_json({'success': False, 'error': 'Unknown dongle'}, code=404)
+                return
+            if not set_dongle_bias_tee(dev, on):
+                self._send_json({'success': False,
+                                 'error': 'Bias tee not supported on this dongle '
+                                          '(needs a Blog V4/V4L on a fork-rtl_tcp host)'}, code=400)
+                return
+            self._send_json({'success': True, 'bias_tee': bool(entry.get('bias_tee'))}, code=200)
         elif self.path.split('?')[0] == '/sat_mode':
             # Set one dongle's satellite tracking mode (the role dropdown's
             # Meteor/ISS options on the dongle card):
@@ -1098,7 +1140,15 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 self._send_json({"success": False, "error": "Invalid frequency"}, code=400)
                 return
-            if not 24.0 <= mhz <= 1766.0:
+            # HF range when the primary dongle can reach it: direct
+            # sampling enabled, or a Blog V4/V4L (native HF upconverter)
+            pe = state.sdrs.get(state.primary_dongle) or {}
+            hf_ok = bool(pe.get('direct_sample')) or 'Blog V4' in (pe.get('usb_name') or '')
+            if hf_ok:
+                if not 0.5 <= mhz <= 28.8:
+                    self._send_json({"success": False, "error": "Frequency out of HF range (0.5-28.8 MHz)"}, code=400)
+                    return
+            elif not 24.0 <= mhz <= 1766.0:
                 self._send_json({"success": False, "error": "Frequency out of R820T range (24-1766 MHz)"}, code=400)
                 return
             if pass_active:
@@ -1225,8 +1275,20 @@ class NOAAHandler(http.server.SimpleHTTPRequestHandler):
             except ValueError:
                 self._send_json({"success": False, "error": "Invalid frequency"}, code=400)
                 return
-            if not 24.0 <= mhz <= 1766.0:
-                self._send_json({"success": False, "error": "Frequency out of R820T range (24-1766 MHz)"}, code=400)
+            # Direct sampling (Q-ADC, tuner bypassed) opens HF: 0.5-28.8 MHz;
+            # otherwise the R820T tuner range applies. Exception: the Blog
+            # V4/V4L upconvert HF natively (the fork's rtl-sdr drives them
+            # below 24 MHz through the normal tuner path), so they accept
+            # the HF range without direct sampling. At the station's
+            # 2.4 Msps the direct-sampled baseband spans 0-2.4 MHz and higher
+            # HF aliases into it (mod 2.4 MHz).
+            hf_native = 'Blog V4' in (entry.get('usb_name') or '')
+            if entry.get('direct_sample') or hf_native:
+                lo, hi, rng = 0.5, 28.8, "HF range (0.5-28.8 MHz)"
+            else:
+                lo, hi, rng = 24.0, 1766.0, "R820T range (24-1766 MHz)"
+            if not lo <= mhz <= hi:
+                self._send_json({"success": False, "error": f"Frequency out of {rng}"}, code=400)
                 return
             with state.status_lock:
                 state.manual_dongle_freq[dev] = int(round(mhz * 1e6))

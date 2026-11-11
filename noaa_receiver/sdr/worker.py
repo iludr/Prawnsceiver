@@ -72,7 +72,8 @@ def main():
     entry = radio._new_entry(did, host, int(port), primary=False)
     if row:
         for flag in ('ais', 'orbcomm', 'aprs', 'aprs_iss', 'aprs_lasar',
-                     'pocsag', 'adsb', 'ism', 'dab', 'auto_sat', 'gain_auto'):
+                     'pocsag', 'adsb', 'ism', 'dab', 'auto_sat', 'gain_auto',
+                     'direct_sample'):
             entry[flag] = bool(row.get(flag))
         if row.get('sat_mode') in state.SAT_MODES:
             entry['sat_mode'] = row['sat_mode']
@@ -143,10 +144,12 @@ def main():
                     os._exit(0)
                 elif cmd == 'cfg':
                     was_paused = bool(entry.get('paused'))
+                    was_direct = bool(entry.get('direct_sample'))
                     with state.status_lock:
                         for flag in ('ais', 'orbcomm', 'aprs', 'aprs_iss',
                                      'aprs_lasar', 'pocsag', 'adsb', 'ism',
-                                     'dab', 'auto_sat', 'paused', 'gain_auto'):
+                                     'dab', 'auto_sat', 'paused', 'gain_auto',
+                                     'direct_sample'):
                             if flag in msg:
                                 entry[flag] = bool(msg[flag])
                         if 'sat_mode' in msg and msg['sat_mode'] in state.SAT_MODES:
@@ -180,6 +183,13 @@ def main():
                         # and the thread's paused check stops the run.
                         # (_workers is empty in this process, so
                         # radio._stop_capture takes the local close path.)
+                        radio._stop_capture(entry)
+                    if 'direct_sample' in msg and bool(msg['direct_sample']) != was_direct:
+                        # Direct sampling is applied on connect (rtl_tcp
+                        # command 0x09 / a local rtl_tcp for USB dongles),
+                        # so a flip must restart the capture — same local
+                        # close path as the pause above; the supervisor
+                        # below starts a fresh thread with the new mode.
                         radio._stop_capture(entry)
                 elif cmd == 'sched':
                     with state.status_lock:

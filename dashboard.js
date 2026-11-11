@@ -42,6 +42,48 @@
         // overlap, the narrowest match wins (e.g. ADS-B inside the aviation
         // navigation band, 70 cm inside 433 ISM).
         const BANDS = [
+            // HF below 24 MHz — reachable only in direct-sampling mode
+            // (the ⚡ checkbox); at 2.4 Msps the waterfall shows 0-2.4 MHz
+            // and higher HF aliases into it (mod 2.4 MHz)
+            { lo: 0.5,     hi: 1.7,    name: 'Medium-wave broadcast (AM)', desc: '531–1602 kHz AM radio, strong at night' },
+            { lo: 1.7,     hi: 1.8,    name: 'Maritime / fixed mobile', desc: 'coastal radio, sparse' },
+            { lo: 1.8,     hi: 2.0,    name: '160 m amateur band', desc: 'ham CW/SSB, NVIS regional' },
+            { lo: 2.0,     hi: 2.3,    name: 'Fixed / maritime mobile', desc: 'utility stations' },
+            { lo: 2.3,     hi: 2.5,    name: '120 m shortwave broadcast', desc: 'tropical AM band' },
+            { lo: 2.5,     hi: 3.2,    name: 'Fixed / maritime / aero', desc: 'coast stations, VOLMET' },
+            { lo: 3.2,     hi: 3.4,    name: '90 m shortwave broadcast', desc: 'tropical AM band' },
+            { lo: 3.4,     hi: 3.9,    name: 'Fixed / maritime mobile', desc: 'utilities' },
+            { lo: 3.9,     hi: 4.0,    name: '75 m shortwave broadcast', desc: '3.9–4.0 MHz' },
+            { lo: 4.0,     hi: 4.75,   name: 'Fixed / maritime mobile', desc: 'coast stations, RTTY' },
+            { lo: 4.75,    hi: 5.06,   name: '60 m shortwave broadcast', desc: '4.75–5.06 MHz AM' },
+            { lo: 5.06,    hi: 5.9,    name: 'Fixed / maritime / aero', desc: 'utilities, VOLMET' },
+            { lo: 5.9,     hi: 6.2,    name: '49 m shortwave broadcast', desc: '5.9–6.2 MHz, strong in the evenings' },
+            { lo: 6.2,     hi: 6.4,    name: '43 m pirate radio', desc: 'unlicensed AM/USB broadcasts (~6.2–6.4, also 6.9 USB)' },
+            { lo: 6.4,     hi: 7.0,    name: 'Fixed / maritime / aero', desc: 'coast stations, VOLMET' },
+            { lo: 7.0,     hi: 7.3,    name: '40 m amateur band', desc: 'ham SSB/CW/digital, busy; pirates on 6.9 USB nearby' },
+            { lo: 7.3,     hi: 7.85,   name: '41 m shortwave broadcast', desc: '7.45–7.85 MHz AM' },
+            { lo: 7.85,    hi: 9.4,    name: 'Fixed / maritime / aero', desc: 'utilities' },
+            { lo: 9.4,     hi: 9.9,    name: '31 m shortwave broadcast', desc: '9.4–9.9 MHz' },
+            { lo: 9.9,     hi: 10.15,  name: 'Maritime + 30 m amateur', desc: '10.1–10.15 MHz ham CW/digital' },
+            { lo: 10.15,   hi: 11.6,   name: 'Fixed / maritime / aero', desc: 'utilities' },
+            { lo: 11.6,    hi: 12.1,   name: '25 m shortwave broadcast', desc: '11.6–12.1 MHz' },
+            { lo: 12.1,    hi: 13.57,  name: 'Fixed / maritime / aero', desc: 'utilities, VOLMET' },
+            { lo: 13.57,   hi: 13.87,  name: 'ISM 13.56 MHz', desc: 'industrial/scientific, RFID' },
+            { lo: 13.87,   hi: 14.0,   name: 'Fixed / maritime', desc: 'utilities' },
+            { lo: 14.0,    hi: 14.35,  name: '20 m amateur band', desc: 'the DX band — ham SSB/CW, daytime' },
+            { lo: 14.35,   hi: 15.1,   name: 'Fixed / maritime / aero', desc: 'utilities' },
+            { lo: 15.1,    hi: 15.8,   name: '19 m shortwave broadcast', desc: '15.1–15.8 MHz' },
+            { lo: 15.8,    hi: 16.4,   name: 'Fixed / maritime', desc: 'utilities' },
+            { lo: 16.4,    hi: 17.48,  name: 'Fixed / maritime / aero', desc: 'VOLMET, coast stations' },
+            { lo: 17.48,   hi: 17.9,   name: '16 m shortwave broadcast', desc: '17.48–17.9 MHz' },
+            { lo: 17.9,    hi: 18.068, name: 'Fixed / maritime', desc: 'utilities' },
+            { lo: 18.068,  hi: 18.168, name: '17 m amateur band', desc: 'ham SSB/CW' },
+            { lo: 18.168,  hi: 19.68,  name: 'Fixed / maritime / aero', desc: 'utilities; 18.9–19.02 broadcast' },
+            { lo: 19.68,   hi: 21.0,   name: 'Fixed / maritime', desc: '19.68–19.8 MHz broadcast' },
+            { lo: 21.0,    hi: 21.45,  name: '15 m amateur band', desc: 'ham SSB/CW, DX daytime' },
+            { lo: 21.45,   hi: 21.85,  name: '13 m shortwave broadcast', desc: '21.45–21.85 MHz' },
+            { lo: 21.85,   hi: 24.0,   name: 'Fixed / maritime / aero', desc: 'utilities' },
+            { lo: 24.89,   hi: 24.99,  name: '12 m amateur band', desc: 'ham, sparse' },
             { lo: 24,      hi: 26.965,  name: 'Short-range devices', desc: 'below CB, sparse use' },
             { lo: 26.965,  hi: 27.405,  name: 'CB radio (citizens band)', desc: 'AM/FM, 40 channels, truckers & hobby' },
             { lo: 27.405,  hi: 28,      name: 'Short-range devices', desc: 'ISM fringe' },
@@ -104,6 +146,9 @@
         // "Auto" hands control back to the scheduler.
         const BAND_PRESETS = [
             { label: '🛰 Auto — satellite tracking', f: 'auto' },
+            { label: '🌊 HF 40 m FT8 → 7.074 MHz', f: 7.074 },
+            { label: '🌊 HF 20 m FT8 → 14.074 MHz', f: 14.074 },
+            { label: '🌊 HF 31 m shortwave broadcast → 9.7 MHz', f: 9.7 },
             { label: '📻 FM broadcast radio → 98.0 MHz', f: 98.0 },
             { label: '🚒 BOS 4 m fire/police (analog) → 85.5 MHz', f: 85.5 },
             { label: '✈ Airband voice AM (guard) → 121.5 MHz', f: 121.5 },
@@ -1663,6 +1708,11 @@
             c.nudgeRow.style.display = free;
             c.nudgeRow2.style.display = free;
             c.tuneHint.style.display = free;
+            c.dsRow.style.display = free;
+            // the bias-tee row exists on Blog V4/V4L dongles only (they
+            // have the hardware); it stays visible in every role — it
+            // powers the antenna/LNA regardless of what is received
+            c.biasRow.style.display = d.bias_tee_supported ? '' : 'none';
             c.bwRow.style.display = free;
             c.scanRow.style.display = free;
             c.scanRow2.style.display = free;
@@ -1723,8 +1773,9 @@
             const srcLine = document.createElement('div');
             srcLine.style.cssText = 'font-size:0.75em;color:#888;margin-top:1px;';
             srcLine.textContent = d.id.startsWith('usb:')
-                ? `🔌 USB device ${d.id.slice(4)} on the receiver host · rtl_sdr`
-                : `📡 TCP ${d.label} · rtl_tcp`;
+                ? `🔌 USB device ${d.id.slice(4)} on the receiver host · ${d.tuner || 'rtl_sdr'}`
+                : `📡 TCP ${d.label} · ${d.tuner || 'rtl_tcp'}`;
+            srcLine.title = 'Tuner chip as reported by the rtl_tcp handshake (Blog V4/V4L recognized by USB product string — their R828D/R828S reports as R820T over I2C)';
             const freqLine = document.createElement('div');
             freqLine.style.cssText = 'margin-top:5px;font-size:1.05em;font-weight:bold;color:#53d769;';
             freqLine.textContent = '—';
@@ -2000,7 +2051,9 @@
             // (the tune then went nowhere and looked dead)
             const doTune = () => {
                 const v = parseFloat(dinput.value);
-                if (isNaN(v)) { toast('Enter a frequency in MHz (24-1766)', true); return; }
+                const ds = !!(c && c.lastD && c.lastD.direct_sample);
+                const hf = ds || /Blog V4/.test((c && c.lastD && c.lastD.usb_name) || '');
+                if (isNaN(v)) { toast('Enter a frequency in MHz (' + (hf ? '0.5-28.8 HF' : '24-1766') + ')', true); return; }
                 tuneD(v.toFixed(4))
                     .then(r => r.json())
                     .then(data => {
@@ -2057,6 +2110,65 @@
             const tuneHint = document.createElement('div');
             tuneHint.style.cssText = 'font-size:0.7em;color:#666;margin-top:3px;';
             tuneHint.textContent = '💡 click the waterfall to tune there · drag across a signal to set frequency + recorded band';
+            // Direct sampling checkbox (manual section): bypasses the
+            // R820T tuner (rtl_tcp cmd 0x09, Q-ADC) so the dongle receives
+            // HF below 24 MHz — the tune field then accepts 0.5-28.8 MHz
+            // (at 2.4 Msps the baseband spans 0-2.4 MHz, higher HF
+            // aliases into it). Shown in Manual mode only; the checkbox
+            // state mirrors d.direct_sample from dongles.json
+            const dsRow = document.createElement('label');
+            dsRow.style.cssText = 'display:none;align-items:center;width:100%;margin-top:4px;padding:3px 10px;background:#0f2233;color:#a8b8d8;border:1px solid #1a3a5c;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.82em;box-sizing:border-box;';
+            dsRow.title = 'Direct sampling (Q-ADC): the tuner is bypassed and the RTL2832U samples the antenna directly — receive HF below the R820T\'s 24 MHz floor. Tune range becomes 0.5-28.8 MHz; at 2.4 Msps the waterfall shows 0-2.4 MHz and higher HF aliases into it (mod 2.4 MHz)';
+            const dsBox = document.createElement('input');
+            dsBox.type = 'checkbox';
+            dsBox.style.cssText = 'accent-color:#f39c12;margin-right:6px;';
+            const dsTxt = document.createElement('span');
+            dsTxt.textContent = '⚡ Direct sampling (HF, 0.5–28.8 MHz)';
+            dsRow.appendChild(dsBox); dsRow.appendChild(dsTxt);
+            dsBox.onchange = () => {
+                const on = dsBox.checked;
+                fetch('/direct_sample_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(on ? '⚡ Direct sampling ON — tuner bypassed, tune range now 0.5-28.8 MHz (HF)'
+                                     : '⚡ Direct sampling OFF — back to the R820T tuner (24-1766 MHz)');
+                        } else {
+                            dsBox.checked = !on;
+                            toast('Direct sampling switch failed: ' + (data.error || 'unknown error'), true);
+                        }
+                    })
+                    .catch(() => { dsBox.checked = !on; toast('Direct sampling switch failed: receiver unreachable', true); });
+            };
+            // Bias-tee checkbox (manual section, Blog V4/V4L dongles
+            // only): powers an LNA / active antenna over the coax via
+            // rtl_tcp command 0x0e (rtlsdrblog fork rtl_tcp on the dongle
+            // host). State mirrors d.bias_tee from dongles.json; the row
+            // only shows for dongles that support it (d.bias_tee_supported)
+            const biasRow = document.createElement('label');
+            biasRow.style.cssText = 'display:none;align-items:center;width:100%;margin-top:4px;padding:3px 10px;background:#0f2233;color:#a8b8d8;border:1px solid #1a3a5c;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.82em;box-sizing:border-box;';
+            biasRow.title = 'Bias tee (RTL-SDR Blog V4/V4L): puts ~4.5 V on the antenna connector to power an LNA or active antenna';
+            const biasBox = document.createElement('input');
+            biasBox.type = 'checkbox';
+            biasBox.style.cssText = 'accent-color:#f39c12;margin-right:6px;';
+            const biasTxt = document.createElement('span');
+            biasTxt.textContent = '🔋 Bias tee (power antenna/LNA)';
+            biasRow.appendChild(biasBox); biasRow.appendChild(biasTxt);
+            biasBox.onchange = () => {
+                const on = biasBox.checked;
+                fetch('/bias_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.success) {
+                            toast(on ? '🔋 Bias tee ON — antenna/LNA powered over the coax'
+                                     : '🔋 Bias tee OFF');
+                        } else {
+                            biasBox.checked = !on;
+                            toast('Bias tee switch failed: ' + (data.error || 'unknown error'), true);
+                        }
+                    })
+                    .catch(() => { biasBox.checked = !on; toast('Bias tee switch failed: receiver unreachable', true); });
+            };
             // Tuning/adjustments infobox (per-dongle correction from the
             // server + the shared offset/gain settings). margin-top:auto
             // pins it (with the Listen button) to the card bottom, against
@@ -2078,7 +2190,7 @@
             card.appendChild(secRec); card.appendChild(recRow);
             const secTune = mkSec('Tuning');
             card.appendChild(secTune); card.appendChild(tuneRow);
-            card.appendChild(nudgeRow); card.appendChild(nudgeRow2); card.appendChild(tuneHint);
+            card.appendChild(nudgeRow); card.appendChild(nudgeRow2); card.appendChild(tuneHint); card.appendChild(dsRow); card.appendChild(biasRow);
             const secMode = mkSec('Demodulator');
             card.appendChild(secMode); card.appendChild(modeRow);
             const secBw = mkSec('Recorded bandwidth');
@@ -2314,7 +2426,7 @@
                 cardEl: card,
                 sigVal, sigFill, tlCtx: tl.getContext('2d'),
                 hist: [], recLed, recTxt, recBtn, info, listenBtn, roleSel, gainBtn, autoSatRow, autoSatBox, aprsIssRow, aprsIssBox, aprsLasarRow, aprsLasarBox, pauseBtn, dinput, lastD: d, lastHistTs: 0,
-                bandTxt, bwInput, tuneRow, nudgeRow, nudgeRow2, tuneHint, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
+                bandTxt, bwInput, tuneRow, nudgeRow, nudgeRow2, tuneHint, dsRow, dsBox, biasRow, biasBox, bwRow, scanRow, scanRow2, scanFrom, scanTo, scanStep, scanBtn, scanTxt,
                 idLed, freqLine, secTune, secMode, secBw, secScan, modeRow, modeSel, modeHint,
             };
             applyDongleRole(c, d);
@@ -2361,6 +2473,21 @@
             // already flipped it locally; this only follows external
             // changes, e.g. a second browser tab)
             if (c.autoSatLast !== !!d.auto_sat) { c.autoSatLast = !!d.auto_sat; c.autoSatBox.checked = c.autoSatLast; }
+            // Direct-sampling checkbox mirrors the server flag (the click
+            // already flipped it locally; this only follows external
+            // changes) — and widens the tune field's range while active
+            const hfNative = /Blog V4/.test(d.usb_name || '');   // V4/V4L upconvert HF natively
+            if (c.dsLast !== !!d.direct_sample || c.hfLast !== hfNative) {
+                c.dsLast = !!d.direct_sample;
+                c.hfLast = hfNative;
+                c.dsBox.checked = c.dsLast;
+                const hf = c.dsLast || hfNative;
+                c.dinput.min = hf ? '0.5' : '24';
+                c.dinput.max = hf ? '28.8' : '1766';
+            }
+            // Bias-tee checkbox mirrors the server flag (the click already
+            // flipped it locally; this only follows external changes)
+            if (c.biasLast !== !!d.bias_tee) { c.biasLast = !!d.bias_tee; c.biasBox.checked = c.biasLast; }
             // AGC toggle state (button label follows the server flag)
             if (c.gainLast !== !!d.gain_auto) { c.gainLast = !!d.gain_auto; c.gainBtn.textContent = c.gainLast ? '📶 Gain: AGC (auto)' : '📶 Gain: fixed (calibrated)'; }
             c.sigVal.textContent = d.signal ? d.signal.toFixed(1) : '—';
@@ -2463,6 +2590,10 @@
                     ? '📡 APRS — ' + (d.aprs_lasar ? 'LASARsat digipeater · 436.925 MHz · GFSK 9600' : (d.aprs_iss ? 'ISS (Zarya) digipeater · 145.825 MHz' : 'ham packet radio · 144.800 MHz')) + ' · <a href="/aprs" style="color:#53d769;text-decoration:none;">→ full log</a> · <a href="/aprs.json" target="_blank" rel="noopener" style="color:#53d769;text-decoration:none;">aprs.json</a>'
                     : (eff !== null
                     ? '📶 ' + bandLabel(bandFor(eff))
+                      + (eff < 24 ? ' <span style="color:#f39c12;">· 🌊 HF shortwave</span>' : '')
+                      + (d.direct_sample && eff > 2.4
+                         ? ' <span style="color:#f39c12;">· ⚡ aliases to ' + ((eff % 2.4).toFixed(3)) + ' MHz in the 0–2.4 MHz waterfall</span>'
+                         : '')
                     : '📶 <span style="color:#666;">—</span>')));
             if (c.bandTxt._last !== bandHtml) {
                 c.bandTxt._last = bandHtml;

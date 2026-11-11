@@ -2593,3 +2593,56 @@ dongle for other roles); entering the role starts it again. Managed
 passwordless via a narrow sudoers rule (/etc/sudoers.d/prawnsdr-readsb:
 only start/stop/restart/is-active of readsb.service). Verified live:
 role off -> readsb inactive, role on -> active + aircraft decoding.
+
+## 2026-11-08 ~21:26 — ⚡ Dongle card: direct-sampling (HF) checkbox in manual mode
+
+The manual section of each dongle card now has a "⚡ Direct sampling
+(HF, 0.5–28.8 MHz)" checkbox (`/direct_sample_dongle?d=<id>&on=0|1`,
+persisted in the dongles table as `direct_sample`). When on, the R820T
+tuner is bypassed via rtl_tcp control command 0x09 (Q-ADC) so the
+dongle receives below the tuner's 24 MHz floor; the per-dongle tune
+field then accepts 0.5–28.8 MHz (`/tune_dongle` range check follows the
+flag; at 2.4 Msps the baseband spans 0–2.4 MHz and higher HF aliases
+into it mod 2.4 MHz). Turning it off clears a sub-24 MHz override.
+Local USB dongles get a private rtl_tcp on 127.0.0.1:35<idx> because
+the stock rtl_sdr CLI has no direct-sampling flag. Worker processes
+learn the flag via the cfg frame and restart their capture on a flip.
+Test: tests/test_radio.py #17 (cmd 0x09 on connect, persistence,
+worker cfg, override clearing) — all radio tests pass.
+
+## 2026-11-10 ~20:30 — 📻 28.8 MHz "signal" confirmed as direct-sampling birdie
+
+A strong (~48 dB over noise), perfectly stable, unmodulated carrier at
+28.8000 MHz showed up in direct-sampling (Q-ADC) mode. 45 s raw IQ
+capture (Manual_28.7000MHz_20261110_201612) confirmed: single line,
+no sidebands > -54 dB, envelope variation 1.9 %, sub-Hz drift — no
+LSB/USB content. Disappears when direct sampling is turned off, i.e.
+it is the dongle's own 28.8 MHz reference crystal / alias fold point
+(28.8 = 12 x 2.4 MHz sample rate -> DC), not an over-the-air signal.
+
+## 2026-11-11 ~18:30 — 🔌 Blog V4L on krabstral: fork driver + bias tee + HF dongle role
+
+- krabstral now runs the **rtlsdrblog/rtl-sdr-blog fork** (not plain
+  osmocom): built from git into /usr/local (librtlsdr.so.0.6git), old
+  Debian lib removed, `dvb_usb_rtl28xxu` blacklisted, rebooted.
+  The fork's rtl_tcp adds **cmd 0x0e = bias tee** and a ring buffer;
+  V4L detected ("RTL-SDR Blog V4 Lite Detected"). prawntenna's proxy
+  relays 0x0e to the upstream fork rtl_tcp; its spawn also accepts
+  biastee=1 (-T).
+- prawnceiver: new **`/bias_dongle?d=<id>&on=0|1`** (radio.set_dongle_bias_tee)
+  — Blog V4/V4L only (USB product string via the prawntenna manager for
+  remote dongles), persisted in the dongles table (`bias_tee` column),
+  sent live over the running capture socket (single-client daemon) and
+  re-asserted on reconnect while ON. dongles.json carries `bias_tee` +
+  `bias_tee_supported`; dashboard shows a 🔋 checkbox on V4/V4L cards.
+- Tuner label now model-aware: the rtl_tcp handshake reports R820T even
+  for the V4L (R828S masquerades over I2C), so V4L/V4 are recognized by
+  USB product string → card source line shows "R828S (Blog V4L)".
+- **HF**: Blog V4/V4L upconvert HF natively (fork drives them below
+  24 MHz through the tuner path), so `/tune` and `/tune_dongle` accept
+  0.5–28.8 MHz for those dongles even without direct sampling; the tune
+  input min/max follows. New HF band-jump presets (40 m/20 m FT8,
+  31 m SW broadcast). The V4L on krabstral is the station's HF dongle.
+- Tests: tests/test_radio.py #18 (bias tee: refuse unsupported, 0x0e
+  live + on reconnect while ON, persistence, worker cfg); jsdom
+  v4l-smoke.js 8/8; full radio/manager/db/ws/scan suites pass.

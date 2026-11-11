@@ -227,6 +227,20 @@ def connect():
                 _conn.execute("ALTER TABLE dongles"
                               " ADD COLUMN dab_channel TEXT DEFAULT '5C'")
                 _conn.commit()
+            if "direct_sample" not in cols:
+                # Direct sampling (HF below the tuner range) checkbox on
+                # the dongle card's manual section — rtl_tcp control
+                # command 0x09, Q-ADC (see radio.set_dongle_direct_sample)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN direct_sample INTEGER DEFAULT 0")
+                _conn.commit()
+            if "bias_tee" not in cols:
+                # Bias-tee toggle for RTL-SDR Blog V4/V4L dongles — rtl_tcp
+                # control command 0x0e on hosts running the rtlsdrblog
+                # rtl-sdr fork (see radio.set_dongle_bias_tee)
+                _conn.execute("ALTER TABLE dongles"
+                              " ADD COLUMN bias_tee INTEGER DEFAULT 0")
+                _conn.commit()
             # One-time repair: the pre-explicit-column positional
             # INSERTs wrote the orbcomm flag into added_ts and the
             # timestamp into orbcomm (the column arrived by ALTER
