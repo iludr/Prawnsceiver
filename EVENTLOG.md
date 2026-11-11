@@ -2686,3 +2686,18 @@ native upconverter, >=24 MHz via the tuner (the 0x09 gate from the
 previous fix picks the right mode per frequency). Verified live:
 /tune_dongle 144.8 and 7.074 both accepted on the V4L, 2000 MHz
 rejected, /tune global OK, auto-restore OK. jsdom v4l-smoke 8/8.
+
+## 2026-11-11 ~18:40 — 🛰 137 MHz mystery signal identified: Orbcomm S6 + S10
+
+Two manual recordings at 137.7137 MHz (20261111_180249 120 s,
+20261111_180528 48 s, V4L on krabstral) showed two constant-frequency,
+bursty emitters (8-16 dB strength swings) at 137.6647 and 137.8028 MHz
+plus the DC/LO line at the tuner freq 137.7737. Fine tracking shows a
+shared ~+1.1 kHz Doppler offset on both -> they sit exactly on the
+Orbcomm S-channel raster S6 (137.6625) and S10 (137.8000): one Orbcomm
+LEO passing, bursty SDPSK = varying strength. The preflight's POCSAG
+"lock" on 137.803 is a false positive on the Orbcomm waveform (tone-only
+pages, no text); Orbcomm decode of these short captures yields no valid
+packets without ephemeris tracking. New repo tool: tools/iqband/analyze.py
+(per-emitter power track, Doppler drift, POCSAG attempt, Orbcomm raster
+match). Recordings are on the NFS share under recordings/manual/.
