@@ -2742,3 +2742,11 @@ already prevents the legacy always-on tee), EEPROM strings must stay
 RTLSDRBlog/Blog V4L (driver + our model detection rely on them), and IF
 AGC must stay off (we never send cmd 0x08). Verified live: DS toggle
 refused, 7.074 + 144.8 tune OK. Test: test_radio.py #20.
+
+## 2026-11-11 ~19:00 — 🔋 Double confirmation before bias tee ON
+
+The V4/V4L bias tee puts 4.5 V (max 180 mA) on the antenna port; a
+DC-short antenna without an LNA can be damaged (rtl-sdr.com V4L guide).
+The dashboard 🔋 checkbox now asks two confirm() dialogs before
+enabling (reverts the box if either is cancelled); turning OFF needs no
+confirmation. Tooltip carries the warning + red-LED note.

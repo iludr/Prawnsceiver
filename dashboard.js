@@ -2150,7 +2150,7 @@
             // only shows for dongles that support it (d.bias_tee_supported)
             const biasRow = document.createElement('label');
             biasRow.style.cssText = 'display:none;align-items:center;width:100%;margin-top:4px;padding:3px 10px;background:#0f2233;color:#a8b8d8;border:1px solid #1a3a5c;border-radius:3px;cursor:pointer;font-family:monospace;font-size:0.82em;box-sizing:border-box;';
-            biasRow.title = 'Bias tee (RTL-SDR Blog V4/V4L): puts ~4.5 V on the antenna connector to power an LNA or active antenna';
+            biasRow.title = 'Bias tee (RTL-SDR Blog V4/V4L): puts 4.5 V (max 180 mA) on the antenna connector to power an LNA or active antenna. WARNING: do not enable with a DC-short antenna — it can be damaged. A red LED by the SMA port lights when active';
             const biasBox = document.createElement('input');
             biasBox.type = 'checkbox';
             biasBox.style.cssText = 'accent-color:#f39c12;margin-right:6px;';
@@ -2159,6 +2159,20 @@
             biasRow.appendChild(biasBox); biasRow.appendChild(biasTxt);
             biasBox.onchange = () => {
                 const on = biasBox.checked;
+                if (on) {
+                    // Double confirmation before putting 4.5 V on the antenna
+                    // port (V4/V4L bias tee, max 180 mA): a DC-shorted antenna
+                    // without an LNA in line can be damaged (rtl-sdr.com V4L
+                    // guide warning)
+                    const ok1 = confirm('⚠️ Bias tee ON puts 4.5 V (max 180 mA) on the antenna connector.\n\n' +
+                        'Only enable it with an LNA / active antenna connected — a DC-short antenna can be damaged.\n\nProceed?');
+                    const ok2 = ok1 && confirm('⚠️ Really turn the bias tee ON?\n\n' +
+                        'Check again: is the antenna path DC-short safe (LNA or active antenna, not a plain short)?');
+                    if (!ok2) {
+                        biasBox.checked = false;
+                        return;
+                    }
+                }
                 fetch('/bias_dongle?d=' + encodeURIComponent(d.id) + '&on=' + (on ? 1 : 0))
                     .then(r => r.json())
                     .then(data => {
