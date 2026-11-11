@@ -2750,3 +2750,14 @@ DC-short antenna without an LNA can be damaged (rtl-sdr.com V4L guide).
 The dashboard 🔋 checkbox now asks two confirm() dialogs before
 enabling (reverts the box if either is cancelled); turning OFF needs no
 confirmation. Tooltip carries the warning + red-LED note.
+
+## 2026-11-11 ~19:20 — 🧹 DC spike removed from the decode path too (raw files stay raw)
+
+The raw .iq.u8 recordings keep the LO/DC spike (archival convention),
+but decode.py now runs dc_remove before both the offset shift
+(_centered_cf32) and the signal-offset spectrum (_measure_signal_offset),
+so the spike and its skirts can no longer sit at the +60 kHz band edge
+next to the 72 kHz LRPT signal during Meteor image decoding. Verified
+on a synthetic recording: spike 30 dB below the tone after the shift,
+raw file on disk untouched. test_lrpt OOM-kills in this 12 GB env on the
+baseline tree too (pre-existing), so the targeted check above stands in.

@@ -11,7 +11,7 @@ from .. import state
 
 from ..config import (LOCAL_CARRIER_BASEBAND_HZ, RECORD_LOCAL_DIR,
                       SDR_OFFSET_HZ, SDR_RATE, TRACKED_SATS)
-from ..sdr.dsp import frequency_shift, iq_to_complex, new_state
+from ..sdr.dsp import dc_remove, frequency_shift, iq_to_complex, new_state
 
 # Recording names are '<sat>_<YYYYMMDD>_<HHMMSS>[-<n>][_<serial>].wav', written by
 # radio.sdr_capture_thread via sat_short_name(). The satellite part is
@@ -224,6 +224,7 @@ def _centered_cf32(iq_path, shift_hz, rate=SDR_RATE):
             if not raw or len(raw) < 4096:
                 break
             c = iq_to_complex(raw)
+            c = dc_remove(c, st)   # LO/DC spike out before the shift — its skirts reach the LRPT band edge
             c = frequency_shift(c, shift_hz, rate, st)
             fout.write(c.astype(np.complex64).view(np.float32).tobytes())
     return tmp
@@ -335,12 +336,13 @@ def _measure_signal_offset(iq_path, signal_bw_hz=120_000, rate=SDR_RATE):
         # only the first quarter of the recording, so the drift test
         # saw almost no Doppler at all.
         span = max(0, size - rate * 8 * 2)
+        dst = new_state()   # dc_remove state for the spectrum slices
         for t in range(6):
             f.seek(int(span * t / 5) if span else 0)
             raw = f.read(rate * 4 * 2)
             if len(raw) < rate * 2 * 2:
                 break
-            c = iq_to_complex(raw)
+            c = dc_remove(iq_to_complex(raw), dst)
             segs = c[:len(c) // n_fft * n_fft].reshape(-1, n_fft)
             psd = np.zeros(n_fft)
             for s_ in segs:
