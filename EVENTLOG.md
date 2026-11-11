@@ -2712,3 +2712,17 @@ packets). On the two 137.7137 MHz manual captures: 0 packets, symbol
 phase never locks — the S6/S10 emitters are only ~12 dB over the noise
 floor and bursty (edge-of-pass). To decode Orbcomm, record via the
 Orbcomm role during a higher pass instead of manual tunes.
+
+## 2026-11-11 ~18:50 — 🧹 DC-spike removal now covers every dongle mode
+
+dc_remove (gated by config DC_REMOVE, no-op when False) is applied at
+every live IQ entry point, not just the satellite capture thread:
+sdr_capture_thread (radio.py), AIS, APRS, ADS-B, Orbcomm, POCSAG
+capture threads and the ISM feed. Offline decode of raw recordings
+(decode.py) is untouched — recordings stay raw (decode notches the
+carrier). Prawntenna was considered as the central place for this
+(fixes all proxy clients at once) but rejected: the proxy stream is
+the archival/raw source and prawntenna's Pi host has no numpy — keep
+removal per-consumer in prawnceiver. Tests: dsp/radio/ism/orbcomm/
+pocsag/adsb/aprs/ws all pass (test_ais + test_waterfall fail on stale
+fixtures, pre-existing).

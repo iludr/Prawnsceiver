@@ -11,7 +11,7 @@ from math import gcd
 
 import numpy as np
 
-from ..config import SDR_RATE
+from ..config import DC_REMOVE, SDR_RATE
 
 TWO_PI = 2.0 * np.pi
 
@@ -58,6 +58,8 @@ def dc_remove(c, st=None):
     SDR_OFFSET_HZ above the wanted signal, so no real signal is touched.
 
     Block-wise safe: the estimate lives in the per-thread state dict."""
+    if not DC_REMOVE:
+        return c
     if st is None:
         st = demod_state
     m = c.mean()

@@ -190,9 +190,9 @@ class OokDecoder:
         self.seen = {}          # bits -> ts of the last identical packet
 
     def feed(self, raw, now):
-        from ..sdr.dsp import (iq_to_complex, frequency_shift, lowpass,
-                               decimate_cont)
-        c = iq_to_complex(raw)
+        from ..sdr.dsp import (dc_remove, iq_to_complex, frequency_shift,
+                               lowpass, decimate_cont)
+        c = dc_remove(iq_to_complex(raw), self.st)
         # the capture tunes ISM_CENTER_HZ + SDR_OFFSET_HZ: shift the
         # sensor band to DC (same chain as the iq433 toolkit's shift_env)
         c = frequency_shift(c, SDR_OFFSET_HZ, SDR_RATE, self.st)

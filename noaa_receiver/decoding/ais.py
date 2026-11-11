@@ -768,7 +768,7 @@ def ais_capture_thread(did):
     satellites. Waterfall/signal update the same state.sdrs entry, so
     the dongle card shows the AIS spectrum like any other.
     """
-    from ..sdr.dsp import iq_to_complex, frequency_shift
+    from ..sdr.dsp import dc_remove, iq_to_complex, frequency_shift
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, _kill_rtl_sdr,
                         _rtl_tcp_connect, _spawn_rtl_sdr, push_wf_row,
                         live_audio_demod, new_state,
@@ -869,6 +869,7 @@ def ais_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
+                c = dc_remove(c, dst)   # LO/DC spike cancellation (all modes)
                 # Live audio for the 🔊 Listen button: mode-dispatched demod
                 # of the batch center (the dashboard's demod selector applies
                 # here too) — skipped unless someone is listening

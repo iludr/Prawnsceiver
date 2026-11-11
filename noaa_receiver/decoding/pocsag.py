@@ -564,7 +564,7 @@ def pocsag_capture_thread(did):
     thread's connection lifecycle (handshake, gain, reconnect with
     backoff, role handover); instead of satellite carriers it tracks
     every paging channel in the 2.4 MHz capture."""
-    from ..sdr.dsp import iq_to_complex
+    from ..sdr.dsp import dc_remove, iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
                              live_audio_demod, new_state,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
@@ -645,6 +645,7 @@ def pocsag_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
+                c = dc_remove(c, dst)   # LO/DC spike cancellation (all modes)
                 # Live audio for the 🔊 Listen button: mode-dispatched demod
                 # of the batch center (the dashboard's demod selector applies
                 # here too) — skipped unless someone is listening

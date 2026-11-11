@@ -911,7 +911,7 @@ def aprs_capture_thread(did):
     aprs_iss flag is set (dashboard checkbox), 145.825 MHz — the ISS
     (Zarya) digipeater; the flag is read once at thread start, a flip
     restarts the thread (radio.set_dongle_aprs_iss)."""
-    from ..sdr.dsp import iq_to_complex
+    from ..sdr.dsp import dc_remove, iq_to_complex, new_state
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
                              CAPTURE_BATCH, IQ_BLOCK, fft_offsets,
@@ -969,6 +969,7 @@ def aprs_capture_thread(did):
             entry["correction"], entry["correction_src"] = correction_info(freq_hz, did)
             gain_db = dongle_gain_db(did)
             wf_phase = 0
+            dst = new_state()   # dsp state (dc_remove etc.) for this capture run
             if entry.get("usb_idx") is not None:
                 proc = _spawn_rtl_sdr(entry, tune, gain_db)
                 if proc is None:
@@ -1014,6 +1015,7 @@ def aprs_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
+                c = dc_remove(c, dst)   # LO/DC spike cancellation (all modes)
                 # Waterfall + signal for the dongle card (center label
                 # reads 144.800 MHz - see push_wf_row)
                 wf_indices, wf_phase = fft_offsets(

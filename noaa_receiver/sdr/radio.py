@@ -39,7 +39,7 @@ from .. import db
 from .. import state
 from ..calibration import (AIRBAND, AIS_DONGLE, DEFAULT_DONGLES, FM_BAND, PRIMARY_DONGLE,
                           SDR_DONGLE_GAIN, correction_info, tuning_correction)
-from ..config import (AUDIO_RATE, DC_REMOVE, DOPPLER_APPLY_RANGE_HZ, DECIMATION,
+from ..config import (AUDIO_RATE, DOPPLER_APPLY_RANGE_HZ, DECIMATION,
                      DONGLE_WORKER_PROCESSES, FFT_SIZE, IQ_BLOCK,
                      IQ_RECORD_FREQS, LAT, LOGDIR, LON,
                      MANUAL_REC_MAX_SECS, RECORD_LOCAL_DIR, SDR_GAIN,
@@ -2291,8 +2291,7 @@ def sdr_capture_thread(did):
                 # waterfall or the demod (the offset below only displaces it).
                 # Shared by waterfall FFT and demod.
                 c = iq_to_complex(raw)
-                if DC_REMOVE:
-                    c = dc_remove(c, dst)
+                c = dc_remove(c, dst)   # no-op when config DC_REMOVE is False
                 # Offset-shift the baseband once: satellite to 0 Hz, residual
                 # DC displaced to +SDR_OFFSET_HZ. Shared by waterfall FFT and demod.
                 c = frequency_shift(c, SDR_OFFSET_HZ, SDR_RATE, dst)

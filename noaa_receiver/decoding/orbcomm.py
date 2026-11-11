@@ -648,7 +648,7 @@ def orbcomm_capture_thread(did):
     thread's connection lifecycle (handshake, gain, reconnect with
     backoff); instead of two fixed channels it tracks every carrier it
     finds in the 137.0-138.0 MHz downlink band."""
-    from ..sdr.dsp import iq_to_complex
+    from ..sdr.dsp import dc_remove, iq_to_complex
     from ..sdr.radio import (_IQReader, _PipeRecv, dongle_gain_db, push_wf_row,
                              live_audio_demod, new_state,
                              _kill_rtl_sdr, _rtl_tcp_connect, _spawn_rtl_sdr,
@@ -723,6 +723,7 @@ def orbcomm_capture_thread(did):
                     break
                 entry["last_data"] = time.time()
                 c = iq_to_complex(raw)
+                c = dc_remove(c, dst)   # LO/DC spike cancellation (all modes)
                 # Live audio for the 🔊 Listen button: mode-dispatched demod
                 # of the batch center (the dashboard's demod selector applies
                 # here too) — skipped unless someone is listening
